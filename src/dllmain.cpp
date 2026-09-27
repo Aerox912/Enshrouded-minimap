@@ -1143,6 +1143,12 @@ namespace
     std::size_t g_exeImageSize = 0;
     IterInitFn g_iterInit = nullptr;
     IterNextFn g_iterNext = nullptr;
+    bool g_directCameraTrackingSupported = false;
+    Mem::Detour* g_playerCameraTransformHook = nullptr;
+    const std::array<std::uint8_t, 18> g_playerCameraTransformExpected = {
+        0x40, 0x55, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xD8, 0xFE, 0xFF, 0xFF,
+        0x48, 0x81, 0xEC, 0x28, 0x02, 0x00, 0x00
+    };
     Mem::Detour* g_localPlayerUiRenderSetupHook = nullptr;
     Mem::Detour* g_playerWaypointsUiHook = nullptr;
     Mem::Detour* g_mapMarkerVisibilityHook = nullptr;
@@ -2371,6 +2377,8 @@ namespace
             return "render_context_camera";
         case 25:
             return "render_child_camera";
+        case 30:
+            return "local_player_camera_transform";
         default:
             return "unknown";
         }
@@ -2486,6 +2494,9 @@ namespace
     {
         {
             std::lock_guard<std::mutex> lock(g_playerPositionMutex);
+            // A heuristic UI/render candidate must not overwrite the local camera feed.
+            if (g_directCameraTrackingSupported && position.channel != 30)
+                return;
             g_playerPosition = position;
         }
 
@@ -2508,7 +2519,9 @@ namespace
             << " | world=("
             << FixedToWorld(position.x) << ", "
             << FixedToWorld(position.y) << ", "
-            << FixedToWorld(position.z) << ")";
+            << FixedToWorld(position.z) << ")"
+            << " | heading=" << position.headingRadians
+            << " | heading_valid=" << (position.hasHeading ? "yes" : "no");
         Log(oss.str());
     }
 
@@ -2551,6 +2564,27 @@ namespace
         return value > 0x10000 && value < 0x0000800000000000;
     }
 
+    bool IsOnMapWorldPosition(float x, float y, float z)
+    {
+        return x > 1.0f && x < REAL_MAP_WORLD_SIZE + 64.0f &&
+            z > 1.0f && z < REAL_MAP_WORLD_SIZE + 64.0f &&
+            y > -2000.0f && y < 5000.0f;
+    }
+
+    // The static ECS system registry identifies both the name and function. A short
+    // prologue alone is not unique (the old waypoint search selected another system).
+    bool IsNamedSystemAt(uintptr_t descriptorRva, const char* name, uintptr_t functionRva)
+    {
+        uintptr_t descriptor[3] = {};
+        char actual[64] = {};
+        const std::size_t length = std::strlen(name) + 1;
+        return length <= sizeof(actual) && descriptorRva + sizeof(descriptor) <= g_exeImageSize &&
+            SafeRead(g_exeBase + descriptorRva, descriptor, sizeof(descriptor)) &&
+            descriptor[0] >= g_exeBase && descriptor[0] - g_exeBase + length <= g_exeImageSize &&
+            descriptor[1] == length - 1 && descriptor[2] == g_exeBase + functionRva &&
+            SafeRead(descriptor[0], actual, length) && std::memcmp(actual, name, length) == 0;
+    }
+
     float QuaternionYawFromMemory(const float quaternion[4])
     {
         const float qx = quaternion[0];
@@ -2558,6 +2592,91 @@ namespace
         const float qz = quaternion[2];
         const float qw = quaternion[3];
         return std::atan2(2.0f * (qw * qy + qx * qz), 1.0f - 2.0f * (qy * qy + qz * qz));
+    }
+
+    bool TryPublishLocalCameraTransform(uintptr_t playerAddress, uintptr_t cameraAddress)
+    {
+        struct Transform
+        {
+            std::int64_t xyz[3];
+            float quaternion[4];
+        } player{}, camera{};
+        static_assert(sizeof(Transform) == 0x28, "Unexpected transform prefix size");
+        if (!SafeRead(playerAddress, &player, sizeof(player)) ||
+            !SafeRead(cameraAddress, &camera, sizeof(camera)))
+            return false;
+        const float* q = camera.quaternion;
+        const float normSq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+        const float dx = FixedToWorld(player.xyz[0]) - FixedToWorld(camera.xyz[0]);
+        const float dz = FixedToWorld(player.xyz[2]) - FixedToWorld(camera.xyz[2]);
+        if (!IsOnMapWorldPosition(FixedToWorld(player.xyz[0]), FixedToWorld(player.xyz[1]), FixedToWorld(player.xyz[2])) ||
+            !IsOnMapWorldPosition(FixedToWorld(camera.xyz[0]), FixedToWorld(camera.xyz[1]), FixedToWorld(camera.xyz[2])) ||
+            !std::isfinite(normSq) || normSq < 0.90f || normSq > 1.10f || dx * dx + dz * dz > 256.0f * 256.0f)
+            return false;
+        const float invNorm = 1.0f / std::sqrt(normSq);
+        const float normalized[4] = { q[0] * invNorm, q[1] * invNorm, q[2] * invNorm, q[3] * invNorm };
+        CapturedPlayerPosition position{};
+        position.x = player.xyz[0];
+        position.y = player.xyz[1];
+        position.z = player.xyz[2];
+        position.source = cameraAddress;
+        position.channel = 30;
+        position.headingRadians = QuaternionYawFromMemory(normalized);
+        position.hasHeading = true;
+        position.valid = true;
+        position.lastUpdateTick = GetTickCount();
+        PublishPlayerPosition(position);
+        return true;
+    }
+
+    bool TryReadLocalCameraRecord(void* ctx, uintptr_t (&record)[10])
+    {
+        if (g_iterInit == nullptr || g_iterNext == nullptr || ctx == nullptr)
+            return false;
+
+        // The verified iterator mutates ctx+8. Only advance our private context.
+        std::uint64_t privateContext[2] = {};
+        if (!SafeRead(reinterpret_cast<uintptr_t>(ctx), privateContext, sizeof(privateContext)))
+            return false;
+        __try
+        {
+            g_iterInit(privateContext, record, sizeof(record));
+            while (g_iterNext(privateContext, record, sizeof(record)))
+            {
+                const auto index = static_cast<std::uint32_t>(privateContext[1]);
+                if (index == 0 || index > 256 || record[3] == 0)
+                    return false;
+                const auto entities = *reinterpret_cast<uintptr_t*>(privateContext[0] + 0x7E0);
+                const auto id = *reinterpret_cast<std::uint32_t*>(entities + (index - 1) * 0x10);
+                // Same local-player filter used by player_camera_transform.
+                if (id == *reinterpret_cast<std::uint32_t*>(record[3] + 4))
+                    return true;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+        return false;
+    }
+
+    void __fastcall CapturePlayerCameraTransformHook(void* ctx, void*, void*, void*)
+    {
+        uintptr_t record[10] = {};
+        // player_camera_transform: +0x10 RenderTransform, +0x18 LocalPlayerData,
+        // +0x30 LocalPlayerCameraTransform. Both transforms have fixed xyz + quaternion.
+        const bool captured = TryReadLocalCameraRecord(ctx, record) &&
+            TryPublishLocalCameraTransform(record[2], record[6]);
+        static DWORD lastDiagnosticTick = 0;
+        const DWORD now = GetTickCount();
+        if (!captured && g_debugLoggingEnabled.load() && now - lastDiagnosticTick >= 5000)
+        {
+            lastDiagnosticTick = now;
+            std::ostringstream message;
+            message << "[Minimap] named camera awaiting valid transforms | player=" << Hex(record[2])
+                << " | camera=" << Hex(record[6]);
+            Log(message.str());
+        }
     }
 
     bool TryScoreCameraPosition(float worldX, float worldZ, std::uint32_t offset, float& outScore)
@@ -2752,6 +2871,9 @@ namespace
 
     bool TryCapturePlayerCameraFromRenderRoots()
     {
+        if (g_directCameraTrackingSupported)
+            return false;
+
         const DWORD now = GetTickCount();
         if (now - g_lastRenderCameraScanTick < RENDER_CAMERA_SCAN_INTERVAL_MS)
             return false;
@@ -2789,6 +2911,9 @@ namespace
 
     bool TryCapturePlayerCameraFromWaypointRecord(const WaypointsUiIterationRecord& record)
     {
+        if (g_directCameraTrackingSupported)
+            return false;
+
         if (TryRefreshPlayerPositionFromCachedCamera())
             return true;
 
@@ -3070,6 +3195,9 @@ namespace
 
     bool TryCaptureUiRenderSetup(void* ctx)
     {
+        if (g_directCameraTrackingSupported)
+            return false;
+
         if (g_iterInit == nullptr || ctx == nullptr)
             return false;
 
@@ -3159,8 +3287,9 @@ namespace
 
         std::uint8_t* entries = nullptr;
         std::uint64_t count = 0;
-        if (!SafeReadValue(reinterpret_cast<uintptr_t>(state + WAYPOINT_ARRAY_OFFSET), entries) ||
-            !SafeReadValue(reinterpret_cast<uintptr_t>(state + WAYPOINT_COUNT_OFFSET), count))
+        const std::size_t arrayOffset = g_directCameraTrackingSupported ? 0x305550 : WAYPOINT_ARRAY_OFFSET;
+        if (!SafeReadValue(reinterpret_cast<uintptr_t>(state + arrayOffset), entries) ||
+            !SafeReadValue(reinterpret_cast<uintptr_t>(state + arrayOffset + 8), count))
         {
             return false;
         }
@@ -7574,13 +7703,15 @@ namespace
             g_exeBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
             g_exeImageSize = GetImageSize(g_exeBase);
 
+            const bool namedClient = IsNamedSystemAt(0x1D43630, "player_camera_transform", 0x2662A0) &&
+                IsNamedSystemAt(0x1D4B0B0, "player_waypoints_ui", 0x2A8370);
             const uintptr_t uiRenderSetupRva = ResolvePatternRvaNear(
                 RVA_LOCAL_PLAYER_UI_RENDER_SETUP,
                 g_localPlayerUiRenderSetupExpected.data(),
                 g_localPlayerUiRenderSetupExpected.size(),
                 "local_player_ui_render_setup"
             );
-            const uintptr_t waypointsUiRva = ResolvePatternRvaNear(
+            const uintptr_t waypointsUiRva = namedClient ? 0x2A8370 : ResolvePatternRvaNear(
                 RVA_PLAYER_WAYPOINTS_UI,
                 g_playerWaypointsUiExpected.data(),
                 g_playerWaypointsUiExpected.size(),
@@ -7650,6 +7781,17 @@ namespace
                 modContext->Log("[Minimap] iterator next unavailable");
             }
 
+            g_directCameraTrackingSupported = false;
+            if (namedClient && iterInitRva == 0x8DA7C0 && iterNextRva == 0x8D5CA0)
+            {
+                g_playerCameraTransformHook = InstallEntryHook(0x2662A0,
+                    g_playerCameraTransformExpected, reinterpret_cast<void*>(&CapturePlayerCameraTransformHook),
+                    "player_camera_transform (named ECS registry)");
+                g_directCameraTrackingSupported = g_playerCameraTransformHook != nullptr;
+                if (g_directCameraTrackingSupported)
+                    modContext->Log("[Minimap] named local-player camera tracking enabled (client 1076226)");
+            }
+
             g_localPlayerUiRenderSetupHook = InstallEntryHook(
                 uiRenderSetupRva,
                 g_localPlayerUiRenderSetupExpected,
@@ -7702,6 +7844,13 @@ namespace
                 DestroyVulkanMinimapRendererLocked();
             }
             RestoreVulkanTableHooks();
+
+            if (g_playerCameraTransformHook != nullptr)
+            {
+                g_playerCameraTransformHook->deactivate();
+                delete g_playerCameraTransformHook;
+                g_playerCameraTransformHook = nullptr;
+            }
 
             if (g_localPlayerUiRenderSetupHook != nullptr)
             {
@@ -7781,6 +7930,7 @@ namespace
             g_vulkanFunctionOffsetsLogged = false;
             g_iterInit = nullptr;
             g_iterNext = nullptr;
+            g_directCameraTrackingSupported = false;
             g_modContext = nullptr;
             active = false;
             loaded = false;
@@ -7790,17 +7940,19 @@ namespace
         void Activate(ModContext* modContext) override
         {
             RefreshMinimapConfig(modContext, true);
+            const bool cameraOk = ActivateHook(g_playerCameraTransformHook);
             const bool uiOk = ActivateHook(g_localPlayerUiRenderSetupHook);
             const bool waypointOk = ActivateHook(g_playerWaypointsUiHook);
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
             const bool renderOk = ActivateHook(g_renderPresentFrameHook);
             const bool vulkanOk = ActivateHook(g_vulkanDeviceTableInitHook);
-            active = uiOk || waypointOk || markerVisibilityOk || renderOk || vulkanOk;
+            active = cameraOk || uiOk || waypointOk || markerVisibilityOk || renderOk || vulkanOk;
             if (active)
                 TryFindExistingVulkanDeviceTable();
 
             std::ostringstream oss;
             oss << "[Minimap] activate internal bridge"
+                << " | camera_hook=" << HookActivationState(g_playerCameraTransformHook)
                 << " | ui_hook=" << HookActivationState(g_localPlayerUiRenderSetupHook)
                 << " | waypoint_hook=" << HookActivationState(g_playerWaypointsUiHook)
                 << " | marker_visibility_hook=" << HookActivationState(g_mapMarkerVisibilityHook)
@@ -7817,6 +7969,8 @@ namespace
                 DestroyVulkanMinimapRendererLocked();
             }
 
+            if (g_playerCameraTransformHook != nullptr)
+                g_playerCameraTransformHook->deactivate();
             if (g_localPlayerUiRenderSetupHook != nullptr)
                 g_localPlayerUiRenderSetupHook->deactivate();
 
