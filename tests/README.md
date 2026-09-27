@@ -43,13 +43,20 @@ search can otherwise select.
 
 ## Runtime acceptance
 
-On Steam client data revision 1076226, a local prototype containing this camera
-reader and the broader community PR #4 changes was tested with Shroudtopia 0.1.1.
-The user confirmed that movement and rotation both updated; diagnostic samples
-also showed changing coordinates and heading over about 30 seconds.
+On 2026-09-27, the tester confirmed that the standalone PR build from commit
+`c0ed7447ca335ef9695d9fc17ed7acf2278f6e4f` passed all requested in-game checks
+on Steam client data revision 1076226 with Shroudtopia 0.1.1:
 
-This PR ports the camera reader onto upstream main and does not include PR #4's
-other changes. The exact standalone PR build still needs an in-game test. Enter a
-world, walk, turn the camera without moving, and check that the map follows both.
-Restart and reload the world to check that tracking resumes. Older client layouts
-and long sessions have not been runtime-tested with this patch.
+- Real terrain appeared correctly at the top-right.
+- Walking updated the minimap location.
+- Turning the camera while stationary updated the direction arrow.
+- Tracking continued after leaving and rejoining the world and after a full
+  game restart.
+
+Tested DLL SHA256:
+`4933E4DCA9C616DBDF6964BA5E5CB0E018F8459581150F700042B746AB52B0DD`.
+
+The build contains this focused patch on upstream main, without PR #4's other
+changes. Release x64 compilation and all 17 production-reader regression checks
+also passed. Runtime acceptance is based on the tester's report; older client
+layouts and extended sessions remain unverified.
