@@ -95,7 +95,10 @@ namespace
     constexpr double FIXED_32_32_TO_WORLD = 1.0 / 4294967296.0;
 
     constexpr std::int32_t VK_SUCCESS = 0;
+    constexpr std::int32_t VK_NOT_READY = 1;
     constexpr std::uint32_t VK_STRUCTURE_TYPE_SUBMIT_INFO = 4;
+    constexpr std::uint32_t VK_STRUCTURE_TYPE_FENCE_CREATE_INFO = 8;
+    constexpr std::uint32_t VK_FENCE_CREATE_SIGNALED_BIT = 0x1;
     constexpr std::uint32_t VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO = 9;
     constexpr std::uint32_t VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO = 15;
     constexpr std::uint32_t VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO = 37;
@@ -490,6 +493,13 @@ namespace
         std::uint32_t layerCount = 1;
     };
 
+    struct VkFenceCreateInfo
+    {
+        std::uint32_t sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        const void* pNext = nullptr;
+        std::uint32_t flags = 0;
+    };
+
     struct VkSemaphoreCreateInfo
     {
         std::uint32_t sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -875,6 +885,10 @@ namespace
     using CmdDrawFn = void(__fastcall*)(void* commandBuffer, std::uint32_t vertexCount, std::uint32_t instanceCount, std::uint32_t firstVertex, std::uint32_t firstInstance);
     using CreateSemaphoreFn = std::int32_t(__fastcall*)(void* device, const VkSemaphoreCreateInfo* createInfo, const void* allocator, void** semaphore);
     using DestroySemaphoreFn = void(__fastcall*)(void* device, void* semaphore, const void* allocator);
+    using CreateFenceFn = std::int32_t(__fastcall*)(void* device, const VkFenceCreateInfo* createInfo, const void* allocator, void** fence);
+    using DestroyFenceFn = void(__fastcall*)(void* device, void* fence, const void* allocator);
+    using GetFenceStatusFn = std::int32_t(__fastcall*)(void* device, void* fence);
+    using ResetFencesFn = std::int32_t(__fastcall*)(void* device, std::uint32_t fenceCount, void* const* fences);
     using QueueSubmitFn = std::int32_t(__fastcall*)(void* queue, std::uint32_t submitCount, const VkSubmitInfo* submits, void* fence);
     using DeviceWaitIdleFn = std::int32_t(__fastcall*)(void* device);
 
@@ -952,6 +966,10 @@ namespace
         CmdDrawFn cmdDraw = nullptr;
         CreateSemaphoreFn createSemaphore = nullptr;
         DestroySemaphoreFn destroySemaphore = nullptr;
+        CreateFenceFn createFence = nullptr;
+        DestroyFenceFn destroyFence = nullptr;
+        GetFenceStatusFn getFenceStatus = nullptr;
+        ResetFencesFn resetFences = nullptr;
         QueueSubmitFn queueSubmit = nullptr;
         DeviceWaitIdleFn deviceWaitIdle = nullptr;
 
@@ -975,6 +993,10 @@ namespace
                 cmdClearAttachments != nullptr &&
                 createSemaphore != nullptr &&
                 destroySemaphore != nullptr &&
+                createFence != nullptr &&
+                destroyFence != nullptr &&
+                getFenceStatus != nullptr &&
+                resetFences != nullptr &&
                 queueSubmit != nullptr &&
                 deviceWaitIdle != nullptr;
         }
@@ -1019,6 +1041,7 @@ namespace
     struct VulkanMinimapRenderer
     {
         bool ready = false;
+        bool submissionFailed = false;
         uintptr_t device = 0;
         uintptr_t swapchain = 0;
         std::uint32_t format = 0;
@@ -1030,6 +1053,7 @@ namespace
         std::vector<uintptr_t> framebuffers;
         std::vector<uintptr_t> commandBuffers;
         std::vector<uintptr_t> renderCompleteSemaphores;
+        std::vector<uintptr_t> submissionFences;
         uintptr_t renderPass = 0;
         uintptr_t commandPool = 0;
         uintptr_t frameTextureImage = 0;
@@ -3815,6 +3839,10 @@ namespace
         fns.cmdDraw = ResolveDeviceFunction<CmdDrawFn>(getDeviceProcAddr, device, "vkCmdDraw");
         fns.createSemaphore = ResolveDeviceFunction<CreateSemaphoreFn>(getDeviceProcAddr, device, "vkCreateSemaphore");
         fns.destroySemaphore = ResolveDeviceFunction<DestroySemaphoreFn>(getDeviceProcAddr, device, "vkDestroySemaphore");
+        fns.createFence = ResolveDeviceFunction<CreateFenceFn>(getDeviceProcAddr, device, "vkCreateFence");
+        fns.destroyFence = ResolveDeviceFunction<DestroyFenceFn>(getDeviceProcAddr, device, "vkDestroyFence");
+        fns.getFenceStatus = ResolveDeviceFunction<GetFenceStatusFn>(getDeviceProcAddr, device, "vkGetFenceStatus");
+        fns.resetFences = ResolveDeviceFunction<ResetFencesFn>(getDeviceProcAddr, device, "vkResetFences");
         fns.queueSubmit = ResolveDeviceFunction<QueueSubmitFn>(getDeviceProcAddr, device, "vkQueueSubmit");
         fns.deviceWaitIdle = ResolveDeviceFunction<DeviceWaitIdleFn>(getDeviceProcAddr, device, "vkDeviceWaitIdle");
         return fns.Ready();
@@ -4236,6 +4264,15 @@ namespace
                 }
             }
 
+            if (fns.destroyFence != nullptr)
+            {
+                for (uintptr_t fence : g_renderer.submissionFences)
+                {
+                    if (fence != 0)
+                        fns.destroyFence(device, reinterpret_cast<void*>(fence), nullptr);
+                }
+            }
+
             if (fns.destroyFramebuffer != nullptr)
             {
                 for (uintptr_t framebuffer : g_renderer.framebuffers)
@@ -4460,6 +4497,21 @@ namespace
             g_renderer.renderCompleteSemaphores[index] = reinterpret_cast<uintptr_t>(semaphore);
         }
 
+        g_renderer.submissionFences.assign(g_renderer.images.size(), 0);
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        for (std::size_t index = 0; index < g_renderer.submissionFences.size(); ++index)
+        {
+            void* fence = nullptr;
+            if (g_renderer.fns.createFence(device, &fenceInfo, nullptr, &fence) != VK_SUCCESS || fence == nullptr)
+            {
+                LogRendererThrottled("[Minimap] Vulkan minimap renderer not ready: fence creation failed");
+                DestroyVulkanMinimapRendererLocked();
+                return false;
+            }
+            g_renderer.submissionFences[index] = reinterpret_cast<uintptr_t>(fence);
+        }
+
         g_renderer.ready = true;
 
         std::ostringstream oss;
@@ -4469,6 +4521,7 @@ namespace
             << " | format=" << g_renderer.format
             << " | images=" << g_renderer.images.size()
             << " | queue_family=" << g_renderer.queueFamilyIndex
+            << " | command_sync=per-image-fence"
             << " | draw=clear-attachment-widget";
         Log(oss.str());
         return true;
@@ -7136,6 +7189,73 @@ namespace
             firstSwapchain != 0;
     }
 
+    bool StopVulkanMinimapSubmissionLocked(const char* operation, std::int32_t result, std::uint32_t imageIndex)
+    {
+        // A failed submission leaves completion/upload state uncertain. Resume
+        // only after the renderer is rebuilt for a new swapchain or device.
+        g_renderer.submissionFailed = true;
+        std::ostringstream oss;
+        oss << "[Minimap] Vulkan minimap drawing stopped: " << operation
+            << " | result=" << result
+            << " | image_index=" << imageIndex;
+        Log(oss.str());
+        return false;
+    }
+
+    bool SubmitVulkanMinimapFrameLocked(void* queue, const VkPresentInfoKHR& info, std::uint32_t imageIndex, VkPresentInfoKHR& adjustedInfo, const void** adjustedWaitSemaphore)
+    {
+        if (!g_renderer.ready || g_renderer.submissionFailed ||
+            imageIndex >= g_renderer.commandBuffers.size() || imageIndex >= g_renderer.renderCompleteSemaphores.size() ||
+            imageIndex >= g_renderer.submissionFences.size())
+            return false;
+
+        void* device = reinterpret_cast<void*>(g_renderer.device);
+        void* fence = reinterpret_cast<void*>(g_renderer.submissionFences[imageIndex]);
+        // Waiting on the game's semaphore orders GPU work, but does not make
+        // resetting a pending command buffer on the CPU safe. Skip this overlay
+        // frame while busy; the caller presents using the original semaphores.
+        const std::int32_t fenceStatus = g_renderer.fns.getFenceStatus(device, fence);
+        if (fenceStatus == VK_NOT_READY)
+            return false;
+        if (fenceStatus != VK_SUCCESS)
+            return StopVulkanMinimapSubmissionLocked("fence status failed", fenceStatus, imageIndex);
+
+        if (!RecordVulkanMinimapCommandLocked(imageIndex))
+        {
+            g_renderer.submissionFailed = true;
+            Log("[Minimap] Vulkan minimap drawing stopped: command recording failed");
+            return false;
+        }
+
+        std::vector<std::uint32_t> waitStages(info.waitSemaphoreCount, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        const void* commandBuffer = reinterpret_cast<void*>(g_renderer.commandBuffers[imageIndex]);
+        const void* signalSemaphore = reinterpret_cast<void*>(g_renderer.renderCompleteSemaphores[imageIndex]);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.waitSemaphoreCount = info.waitSemaphoreCount;
+        submitInfo.pWaitSemaphores = info.pWaitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages.empty() ? nullptr : waitStages.data();
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = &signalSemaphore;
+
+        // Leave the fence signaled until recording has succeeded.
+        const std::int32_t resetResult = g_renderer.fns.resetFences(device, 1, &fence);
+        if (resetResult != VK_SUCCESS)
+            return StopVulkanMinimapSubmissionLocked("fence reset failed", resetResult, imageIndex);
+
+        const std::int32_t submitResult = g_renderer.fns.queueSubmit(queue, 1, &submitInfo, fence);
+        if (submitResult != VK_SUCCESS)
+            return StopVulkanMinimapSubmissionLocked("queue submit failed", submitResult, imageIndex);
+
+        adjustedWaitSemaphore[0] = signalSemaphore;
+        adjustedInfo = info;
+        adjustedInfo.waitSemaphoreCount = 1;
+        adjustedInfo.pWaitSemaphores = adjustedWaitSemaphore;
+        return true;
+    }
+
     bool TrySubmitVulkanMinimap(void* queue, const VkPresentInfoKHR& info, uintptr_t firstSwapchain, std::uint32_t imageIndex, VkPresentInfoKHR& adjustedInfo, const void** adjustedWaitSemaphore)
     {
         if (queue == nullptr || firstSwapchain == 0 || info.waitSemaphoreCount > 8)
@@ -7164,44 +7284,7 @@ namespace
         if (!BuildVulkanMinimapRendererLocked(snapshot))
             return false;
 
-        if (imageIndex >= g_renderer.commandBuffers.size() || imageIndex >= g_renderer.renderCompleteSemaphores.size())
-            return false;
-
-        if (!RecordVulkanMinimapCommandLocked(imageIndex))
-        {
-            LogRendererThrottled("[Minimap] Vulkan minimap draw skipped: command recording failed");
-            return false;
-        }
-
-        std::vector<std::uint32_t> waitStages(info.waitSemaphoreCount, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        const void* commandBuffer = reinterpret_cast<void*>(g_renderer.commandBuffers[imageIndex]);
-        const void* signalSemaphore = reinterpret_cast<void*>(g_renderer.renderCompleteSemaphores[imageIndex]);
-
-        VkSubmitInfo submitInfo{};
-        submitInfo.waitSemaphoreCount = info.waitSemaphoreCount;
-        submitInfo.pWaitSemaphores = info.pWaitSemaphores;
-        submitInfo.pWaitDstStageMask = waitStages.empty() ? nullptr : waitStages.data();
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &signalSemaphore;
-
-        const std::int32_t submitResult = g_renderer.fns.queueSubmit(queue, 1, &submitInfo, nullptr);
-        if (submitResult != VK_SUCCESS)
-        {
-            std::ostringstream oss;
-            oss << "[Minimap] Vulkan minimap draw skipped: queue submit failed"
-                << " | result=" << submitResult
-                << " | image_index=" << imageIndex;
-            LogRendererThrottled(oss.str());
-            return false;
-        }
-
-        adjustedWaitSemaphore[0] = signalSemaphore;
-        adjustedInfo = info;
-        adjustedInfo.waitSemaphoreCount = 1;
-        adjustedInfo.pWaitSemaphores = adjustedWaitSemaphore;
-        return true;
+        return SubmitVulkanMinimapFrameLocked(queue, info, imageIndex, adjustedInfo, adjustedWaitSemaphore);
     }
 
     void UpdateMinimapZoomHotkeys()

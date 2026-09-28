@@ -60,3 +60,31 @@ The build contains this focused patch on upstream main, without PR #4's other
 changes. Release x64 compilation and all 17 production-reader regression checks
 also passed. Runtime acceptance is based on the tester's report; older client
 layouts and extended sessions remain unverified.
+
+## Vulkan command completion regression tests
+
+```powershell
+MSBuild tests\renderer_test.vcxproj /p:Configuration=Release /p:Platform=x64
+.\build\tests\renderer_test.exe
+```
+
+The renderer test includes the production submission code with simulated Vulkan
+callbacks. It checks delayed GPU completion across two swapchain images, unchanged
+presentation waits when a draw is skipped, 100,000 submit/skip cycles, recording
+and synchronization failures, and fence cleanup after waiting for idle. It does
+not use a real GPU or establish long-session game stability.
+
+The renderer now checks a per-image submission fence before resetting its command
+buffer and skips the overlay frame while that fence is unsignaled. The fence is
+reset only after recording succeeds and is passed to the overlay's queue submit.
+An API error stops overlay submissions until the renderer is rebuilt. Presentation
+continues using the original wait semaphores when no overlay was submitted.
+
+This protects the command-buffer lifetime required by
+[vkResetCommandBuffer](https://docs.vulkan.org/refpages/latest/refpages/source/vkResetCommandBuffer.html).
+The existing per-image presentation semaphores are retained; a submission fence
+does not itself prove that presentation has consumed a semaphore, as described in
+[the Vulkan semaphore reuse guide](https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html).
+
+Long-session stability of this synchronization change remains unverified. The
+earlier runtime acceptance above applies to camera tracking only.
