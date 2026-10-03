@@ -119,7 +119,8 @@ If the minimap is not loaded yet, start or restart the game after changing it.
 
 The `feature/multiplayer-player-markers` branch adds client-side markers for
 Steam client data revision 1076226. These changes are not in the release zip above.
-They still need multiplayer and extended-session testing in the game.
+Other-player markers, pings and waypoints were confirmed working in user
+gameplay testing on 2026-10-03.
 
 - Other players use the local player's arrow artwork tinted green, sampled up
   to ten times per second. Arrows follow their facing direction relative to the map.
@@ -140,7 +141,7 @@ These settings refresh every second. Live markers do not consume the POI
 `max_icons` allowance. No server component is added by this feature.
 
 See [live marker validation](docs/live-markers.md) for layout evidence and the
-remaining in-game checks.
+in-game regression checklist.
 
 ## EML Compatibility Notes
 

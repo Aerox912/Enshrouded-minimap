@@ -2,8 +2,9 @@
 
 This feature is on `feature/multiplayer-player-markers`, based on the tested
 camera and Vulkan fixes at `b511739`. It adds client-only capture and drawing;
-no server component or network protocol is changed. Runtime multiplayer
-acceptance is still required before release.
+no server component or network protocol is changed. Other-player markers,
+pings and waypoints were confirmed working in user gameplay testing on
+2026-10-03.
 
 ## Display and configuration
 
@@ -76,7 +77,13 @@ The waypoint regression keeps the UI active flag cleared while the component is
 enabled, reproducing the timing that the initial synthetic fixture missed.
 Camera and renderer regression tests remain separate.
 
-## In-game acceptance still required
+## In-game validation
+
+On 2026-10-03, the user confirmed that multiplayer markers, pings and waypoints
+had been tested and were working. This includes the revised waypoint reader.
+Extended-session stability has not been separately confirmed. The following
+checklist is retained for regression testing; the confirmation does not record
+individual results for every scenario below.
 
 1. Join a world with a friend. Walk and turn independently; compare their green
    arrow with their position on the full map. Check nearby, far away, after fast
