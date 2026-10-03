@@ -93,6 +93,9 @@ Example:
       "toggle_key": "F10",
       "render_camera_fallback": true,
       "debug_logging": false,
+      "show_other_players": true,
+      "show_pings": true,
+      "show_waypoints": true,
       "map_sample_step": 2,
       "max_icons": 64
     }
@@ -111,6 +114,33 @@ feed from firing before the minimap draws.
 
 The mod reads these values directly and refreshes them every second while active.
 If the minimap is not loaded yet, start or restart the game after changing it.
+
+## Experimental Live Markers
+
+The `feature/multiplayer-player-markers` branch adds client-side markers for
+Steam client data revision 1076226. These changes are not in the release zip above.
+They still need multiplayer and extended-session testing in the game.
+
+- Other players use the local player's arrow artwork tinted green, sampled up
+  to ten times per second. Arrows follow their facing direction relative to the map.
+  Only players whose transforms are available on your client can be shown;
+  full-world coverage is not guaranteed. Missing transforms remove the marker,
+  and an interrupted feed expires after two seconds.
+- Your pings and other players' pings appear as green diamonds with a bright
+  border and a dark downward arrow. A new ping replaces that sender's old ping;
+  pings expire eight seconds after their last event.
+- Active waypoints appear as hollow yellow diamonds. Their centres remain
+  transparent so the map and any POI icon underneath stay visible. Moving or
+  clearing a waypoint replaces or removes its marker.
+
+Markers rotate and zoom with the map, and positions beyond the minimap edge
+are clamped to its rim. They have separate visibility settings:
+`show_other_players`, `show_pings`, and `show_waypoints` (all default to `true`).
+These settings refresh every second. Live markers do not consume the POI
+`max_icons` allowance. No server component is added by this feature.
+
+See [live marker validation](docs/live-markers.md) for layout evidence and the
+remaining in-game checks.
 
 ## EML Compatibility Notes
 

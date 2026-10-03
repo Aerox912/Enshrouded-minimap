@@ -15,6 +15,9 @@
       "toggle_key": "F10",
       "render_camera_fallback": true,
       "debug_logging": false,
+      "show_other_players": true,
+      "show_pings": true,
+      "show_waypoints": true,
       "map_sample_step": 2,
       "max_icons": 64
     }

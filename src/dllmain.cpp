@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "live_markers.h"
 
 #include <shroudtopia.h>
 #include <memory_utils.h>
@@ -200,8 +201,8 @@ namespace
         void* unknown8 = nullptr;
         std::uint8_t* state = nullptr;
         void* lookupContext = nullptr;
-        void* waypointList = nullptr;
-        void* playerList = nullptr;
+        void* pingEvents = nullptr;
+        void* pingInputEvents = nullptr;
     };
     static_assert(sizeof(WaypointsUiIterationRecord) == 0x30, "Unexpected player_waypoints_ui iteration record size");
     static_assert(offsetof(WaypointsUiIterationRecord, state) == WAYPOINT_STATE_PTR_OFFSET, "Unexpected state offset");
@@ -1187,6 +1188,17 @@ namespace
     std::vector<CapturedMapMarkerVisibility> g_visibleMapMarkers;
     std::mutex g_playerPositionMutex;
     CapturedPlayerPosition g_playerPosition;
+    std::mutex g_liveMarkerMutex;
+    std::vector<MinimapLive::Marker> g_remotePlayers;
+    std::vector<MinimapLive::Marker> g_pings;
+    std::atomic<DWORD> g_lastWaypointTick{ 0 };
+    bool g_liveMarkerLayoutSupported = false;
+    Mem::Detour* g_playerUiDataHook = nullptr;
+    DWORD g_lastRemoteCaptureTick = 0;
+    using GetEcsWorldFn = uintptr_t(__fastcall*)(uintptr_t descriptor);
+    using LookupComponentFn = uintptr_t*(__fastcall*)(uintptr_t* result, uintptr_t world, uintptr_t lookup, std::uint32_t entity);
+    GetEcsWorldFn g_getEcsWorld = nullptr;
+    LookupComponentFn g_lookupComponent = nullptr;
     std::atomic<uintptr_t> g_playerCameraAddress{ 0 };
     DWORD g_lastPlayerCameraScanTick = 0;
     DWORD g_lastSummaryTick = 0;
@@ -1246,6 +1258,9 @@ namespace
     std::atomic<int> g_minimapToggleKey{ VK_F10 };
     std::atomic<bool> g_renderCameraFallbackEnabled{ true };
     std::atomic<bool> g_debugLoggingEnabled{ false };
+    std::atomic<bool> g_showOtherPlayers{ true };
+    std::atomic<bool> g_showPings{ true };
+    std::atomic<bool> g_showWaypoints{ true };
     std::atomic<int> g_minimapMapSampleStep{ MINIMAP_DEFAULT_MAP_SAMPLE_STEP };
     std::atomic<int> g_minimapMaxDrawnPoints{ MINIMAP_DEFAULT_MAX_DRAWN_POINTS };
     DWORD g_lastConfigPollTick = 0;
@@ -1496,6 +1511,15 @@ namespace
         }
     }
 
+    bool ReadMarkerVisibility(ModContext* modContext, const char* key)
+    {
+        std::string value = "true", source;
+        if (!TryReadMinimapConfigStringFromFile(modContext, key, value, source) &&
+            modContext != nullptr && modContext->config.GetString)
+            value = modContext->config.GetString("minimap_mod", key, value);
+        return ParseConfigBoolean(value, true);
+    }
+
     void RefreshMinimapConfig(ModContext* modContext, bool forceLog = false)
     {
         std::string configuredPosition = "bottom-right";
@@ -1564,13 +1588,20 @@ namespace
         const bool previousDebugLogging = g_debugLoggingEnabled.exchange(debugLogging);
         const int previousMapSampleStep = g_minimapMapSampleStep.exchange(mapSampleStep);
         const int previousMaxIcons = g_minimapMaxDrawnPoints.exchange(maxIcons);
+        const bool showPlayers = ReadMarkerVisibility(modContext, "show_other_players");
+        const bool showPings = ReadMarkerVisibility(modContext, "show_pings");
+        const bool showWaypoints = ReadMarkerVisibility(modContext, "show_waypoints");
+        const bool previousPlayers = g_showOtherPlayers.exchange(showPlayers);
+        const bool previousPings = g_showPings.exchange(showPings);
+        const bool previousWaypoints = g_showWaypoints.exchange(showWaypoints);
         if (!forceLog &&
             previous == static_cast<int>(placement) &&
             previousToggleKey == toggleKey &&
             previousRenderFallback == renderFallback &&
             previousDebugLogging == debugLogging &&
             previousMapSampleStep == mapSampleStep &&
-            previousMaxIcons == maxIcons)
+            previousMaxIcons == maxIcons && previousPlayers == showPlayers &&
+            previousPings == showPings && previousWaypoints == showWaypoints)
         {
             return;
         }
@@ -1590,7 +1621,10 @@ namespace
             << " | map_sample_step=" << mapSampleStep
             << " | map_sample_step_source=" << mapSampleStepSource
             << " | max_icons=" << maxIcons
-            << " | max_icons_source=" << maxIconsSource;
+            << " | max_icons_source=" << maxIconsSource
+            << " | show_other_players=" << showPlayers
+            << " | show_pings=" << showPings
+            << " | show_waypoints=" << showWaypoints;
         Log(oss.str());
     }
 
@@ -2318,6 +2352,20 @@ namespace
         return latest;
     }
 
+    void ClearLiveMarkers()
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_liveMarkerMutex);
+            g_remotePlayers.clear();
+            g_pings.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_waypointMutex);
+            g_waypoints.clear();
+            g_lastWaypointTick.store(0);
+        }
+    }
+
     void ResetWorldSessionFromLog()
     {
         const bool wasOnline = g_gameSessionOnline.exchange(false);
@@ -2326,6 +2374,7 @@ namespace
         g_playerCameraAddress.store(0);
         g_lastPlayerCameraScanTick = 0;
         g_lastRenderCameraScanTick = 0;
+        ClearLiveMarkers();
 
         {
             std::lock_guard<std::mutex> lock(g_playerPositionMutex);
@@ -2607,6 +2656,50 @@ namespace
             descriptor[0] >= g_exeBase && descriptor[0] - g_exeBase + length <= g_exeImageSize &&
             descriptor[1] == length - 1 && descriptor[2] == g_exeBase + functionRva &&
             SafeRead(descriptor[0], actual, length) && std::memcmp(actual, name, length) == 0;
+    }
+
+    const std::array<std::uint8_t, 16> g_playerUiDataExpected = {
+        0x48, 0x8B, 0xC4, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x48, 0x8D, 0xA8, 0x98, 0xFE, 0xFF, 0xFF
+    };
+
+    bool HasVerifiedLiveMarkerLayout()
+    {
+        // Pin the record size, lookup arguments/targets and BasicPlayerInfos
+        // slot layout as well as the named systems. Fail closed after updates.
+        const std::uint8_t recordSize[] = { 0x41, 0xB8, 0x98, 0x00, 0x00, 0x00 };
+        const std::uint8_t initCall[] = { 0xE8, 0xEE, 0xB0, 0x62, 0x00 };
+        const std::uint8_t lookup[] = {
+            0x49, 0x8B, 0x0C, 0x24, 0x48, 0x8B, 0x7C, 0x24, 0x50, 0xE8, 0x2F, 0x3C, 0x62, 0x00,
+            0x48, 0x8B, 0xD0, 0x48, 0x8D, 0x8D, 0xE0, 0x00, 0x00, 0x00, 0x45, 0x8B, 0xCE,
+            0x4C, 0x8B, 0xC7, 0xE8, 0x8A, 0x78, 0x61, 0x00
+        };
+        const std::uint8_t playerInfo[] = {
+            0x48, 0x8B, 0x54, 0x24, 0x30, 0x8B, 0x52, 0x04, 0x85, 0xD2, 0x74, 0x1E,
+            0x4C, 0x8B, 0x44, 0x24, 0x28, 0x48, 0x8D, 0x8D, 0x78, 0x01, 0x00, 0x00, 0xE8, 0x22, 0x41, 0x08, 0x00
+        };
+        const std::uint8_t slots[] = {
+            0x8D, 0x42, 0xFF, 0x3D, 0xFE, 0x03, 0x00, 0x00, 0x77, 0x19, 0x4C, 0x8D, 0x0C, 0x40,
+            0x49, 0xC1, 0xE1, 0x05, 0x43, 0x39, 0x14, 0x01
+        };
+        const std::uint8_t world[] = { 0x48, 0x8B, 0x41, 0x30, 0xC3 };
+        const std::uint8_t waypointLookup[] = {
+            0x49, 0x8B, 0x0E, 0x48, 0x8B, 0x7C, 0x24, 0x48, 0x8B, 0x1C, 0x1E, 0xE8, 0x68, 0xB2,
+            0x62, 0x00, 0x48, 0x8B, 0xD0, 0x48, 0x8D, 0x4C, 0x24, 0x20, 0x44, 0x8B, 0xCB,
+            0x4C, 0x8B, 0xC7, 0xE8, 0xC5, 0xEE, 0x61, 0x00
+        };
+        const std::uint8_t waypointPosition[] = {
+            0x0F, 0x10, 0x4A, 0x08, 0xF2, 0x0F, 0x10, 0x42, 0x18
+        };
+        return IsNamedSystemAt(0x1D50090, "update_ui_data", 0x2AF690) &&
+            IsNamedSystemAt(0x1D4B0B0, "player_waypoints_ui", 0x2A8370) &&
+            BytesMatchRva(0x2AF6B4, recordSize, sizeof(recordSize)) &&
+            BytesMatchRva(0x2AF6CD, initCall, sizeof(initCall)) &&
+            BytesMatchRva(0x2AF9F3, lookup, sizeof(lookup)) &&
+            BytesMatchRva(0x2AFD41, playerInfo, sizeof(playerInfo)) &&
+            BytesMatchRva(0x333E50, slots, sizeof(slots)) &&
+            BytesMatchRva(0x8D3630, world, sizeof(world)) &&
+            BytesMatchRva(0x2A83B8, waypointLookup, sizeof(waypointLookup)) &&
+            BytesMatchRva(0x2A83FB, waypointPosition, sizeof(waypointPosition));
     }
 
     float QuaternionYawFromMemory(const float quaternion[4])
@@ -2953,8 +3046,8 @@ namespace
             reinterpret_cast<uintptr_t>(record.unknown8),
             reinterpret_cast<uintptr_t>(record.state),
             reinterpret_cast<uintptr_t>(record.lookupContext),
-            reinterpret_cast<uintptr_t>(record.waypointList),
-            reinterpret_cast<uintptr_t>(record.playerList)
+            reinterpret_cast<uintptr_t>(record.pingEvents),
+            reinterpret_cast<uintptr_t>(record.pingInputEvents)
         };
 
         for (uintptr_t root : roots)
@@ -3175,7 +3268,11 @@ namespace
     {
         __try
         {
-            g_iterInit(ctx, &record, static_cast<std::uint32_t>(sizeof(record)));
+            // Iteration helpers may update the cursor in the context.
+            uintptr_t privateContext[2] = {};
+            std::memcpy(privateContext, ctx, sizeof(privateContext));
+            g_iterInit(privateContext, &record, static_cast<std::uint32_t>(sizeof(record)));
+            record.unknown0 = ctx;
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -3246,6 +3343,143 @@ namespace
         return true;
     }
 
+    // Steam client 1076226: update_ui_data's declared RenderTransform lookup.
+    // Keep all foreign calls and pointer access on the ECS callback thread.
+    // The POD output survives the SEH boundary; no foreign pointer is published.
+    bool ReadRemotePlayers(void* ctx, MinimapLive::Marker* output, std::size_t& count, DWORD now)
+    {
+        count = 0;
+        if (!g_liveMarkerLayoutSupported || !ctx || !g_iterInit || !g_getEcsWorld || !g_lookupComponent)
+            return false;
+        __try
+        {
+            uintptr_t privateContext[2] = {};
+            uintptr_t record[19] = {};
+            std::memcpy(privateContext, ctx, sizeof(privateContext));
+            g_iterInit(privateContext, record, sizeof(record));
+            if (!record[1] || !record[2] || !record[6])
+                return false;
+            const auto localId = *reinterpret_cast<const std::uint32_t*>(record[2] + 4);
+            if (localId == 0 || localId > 1023)
+                return false;
+            const uintptr_t world = g_getEcsWorld(privateContext[0]);
+            if (!world)
+                return false;
+            for (std::uint32_t id = 1; id <= 1023 && count < MinimapLive::MaxPlayers; ++id)
+            {
+                if (id == localId || *reinterpret_cast<const std::uint32_t*>(record[1] + (id - 1) * 0x60) != id)
+                    continue;
+                uintptr_t result[2] = {};
+                g_lookupComponent(result, world, record[6], id);
+                if (!result[0])
+                    continue;
+                std::int64_t xyz[3] = {};
+                float quaternion[4] = {};
+                if (!SafeRead(result[0], xyz, sizeof(xyz)) ||
+                    !SafeRead(result[0] + 0x18, quaternion, sizeof(quaternion)) ||
+                    !IsOnMapWorldPosition(FixedToWorld(xyz[0]), FixedToWorld(xyz[1]), FixedToWorld(xyz[2])))
+                    continue;
+                const float norm = quaternion[0] * quaternion[0] + quaternion[1] * quaternion[1] +
+                    quaternion[2] * quaternion[2] + quaternion[3] * quaternion[3];
+                if (!std::isfinite(norm) || norm < 0.90f || norm > 1.10f)
+                    continue;
+                const float scale = 1.0f / std::sqrt(norm);
+                for (float& value : quaternion) value *= scale;
+                output[count++] = { id, xyz[0], xyz[1], xyz[2], now, QuaternionYawFromMemory(quaternion) };
+            }
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            count = 0;
+            return false;
+        }
+    }
+
+    void __fastcall CapturePlayerUiDataHook(void* ctx, void*, void*, void*)
+    {
+        const DWORD now = GetTickCount();
+        if (now - g_lastRemoteCaptureTick < 100)
+            return;
+        g_lastRemoteCaptureTick = now;
+        MinimapLive::Marker markers[MinimapLive::MaxPlayers] = {};
+        std::size_t count = 0;
+        ReadRemotePlayers(ctx, markers, count, now);
+        std::lock_guard<std::mutex> lock(g_liveMarkerMutex);
+        g_remotePlayers.assign(markers, markers + count);
+    }
+
+    void CapturePingEvents(void* list, std::uint32_t excludedSender, DWORD now)
+    {
+        const uintptr_t address = reinterpret_cast<uintptr_t>(list);
+        uintptr_t entries = 0;
+        std::uint32_t count = 0;
+        if (!address || !SafeReadValue(address + 0x18, entries) ||
+            !SafeReadValue(address + 0x28, count) || !entries || count > 1024)
+            return;
+        std::lock_guard<std::mutex> lock(g_liveMarkerMutex);
+        MinimapLive::Prune(g_pings, now, MinimapLive::PingLifetimeMs);
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            // UiPingEvent and UiPingInputEvent share a 0x28-byte layout.
+            const uintptr_t entry = entries + i * 0x28;
+            MinimapLive::Marker ping{};
+            std::int64_t xyz[3] = {};
+            if (!SafeReadValue(entry + 8, ping.id) || ping.id == 0 || ping.id > 1023 ||
+                ping.id == excludedSender || !SafeRead(entry + 0x10, xyz, sizeof(xyz)) ||
+                !IsOnMapWorldPosition(FixedToWorld(xyz[0]), FixedToWorld(xyz[1]), FixedToWorld(xyz[2])))
+                continue;
+            ping.x = xyz[0]; ping.y = xyz[1]; ping.z = xyz[2]; ping.updated = now;
+            MinimapLive::UpsertPing(g_pings, ping);
+        }
+    }
+
+    void CopyLiveMarkers(std::vector<MinimapLive::Marker>& players, std::vector<MinimapLive::Marker>& pings, DWORD now)
+    {
+        players.clear();
+        pings.clear();
+        std::lock_guard<std::mutex> lock(g_liveMarkerMutex);
+        MinimapLive::Prune(g_remotePlayers, now, MinimapLive::PlayerStaleMs);
+        MinimapLive::Prune(g_pings, now, MinimapLive::PingLifetimeMs);
+        if (g_showOtherPlayers.load()) players = g_remotePlayers;
+        if (g_showPings.load()) pings = g_pings;
+    }
+
+    bool TryReadLocalWaypoint(void* ctx, const WaypointsUiIterationRecord& record, CapturedWaypoint& waypoint)
+    {
+        if (!g_liveMarkerLayoutSupported || !ctx || !record.unknown8 || !record.lookupContext ||
+            !g_getEcsWorld || !g_lookupComponent)
+            return false;
+        __try
+        {
+            const auto localId = *reinterpret_cast<const std::uint32_t*>(
+                reinterpret_cast<uintptr_t>(record.unknown8) + 4);
+            if (localId == 0 || localId > 1023)
+                return false;
+            const uintptr_t world = g_getEcsWorld(*static_cast<const uintptr_t*>(ctx));
+            if (!world)
+                return false;
+            uintptr_t result[2] = {};
+            g_lookupComponent(result, world, reinterpret_cast<uintptr_t>(record.lookupContext), localId);
+            // PlayerWaypoint: enabled at +0, signed 32.32 coordinates at +8.
+            // The UI player list is rebuilt before this system runs, so its
+            // +0x48 active flags are still zero at our entry hook.
+            if (!result[0] || !*reinterpret_cast<const std::uint8_t*>(result[0]))
+                return false;
+            std::int64_t xyz[3] = {};
+            if (!SafeRead(result[0] + 8, xyz, sizeof(xyz)) ||
+                !IsPlausibleWorldPosition(FixedToWorld(xyz[0]), FixedToWorld(xyz[1]), FixedToWorld(xyz[2])))
+                return false;
+            waypoint.id = localId;
+            waypoint.x = xyz[0]; waypoint.y = xyz[1]; waypoint.z = xyz[2];
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     void PublishWaypoints(std::vector<CapturedWaypoint>&& waypoints)
     {
         bool changed = false;
@@ -3254,6 +3488,7 @@ namespace
         bool hasFirstWaypoint = false;
         {
             std::lock_guard<std::mutex> lock(g_waypointMutex);
+            g_lastWaypointTick.store(GetTickCount());
             changed = !SameWaypoints(g_waypoints, waypoints);
             if (changed)
                 g_waypoints = std::move(waypoints);
@@ -3295,18 +3530,43 @@ namespace
 
         WaypointsUiIterationRecord record{};
         if (!TryInitWaypointRecord(ctx, record))
+        {
+            PublishWaypoints({});
             return false;
+        }
 
         TryCapturePlayerCameraFromWaypointRecord(record);
 
+        std::vector<CapturedNearbyMarker> nearbyMarkers;
+        if (g_liveMarkerLayoutSupported)
+        {
+            std::uint32_t localId = 0;
+            SafeReadValue(reinterpret_cast<uintptr_t>(record.unknown8) + 4, localId);
+            const DWORD now = GetTickCount();
+            CapturePingEvents(record.pingEvents, localId, now);
+            CapturePingEvents(record.pingInputEvents, 0, now);
+
+            CapturedWaypoint waypoint{};
+            std::vector<CapturedWaypoint> waypoints;
+            if (TryReadLocalWaypoint(ctx, record, waypoint))
+                waypoints.push_back(waypoint);
+            PublishWaypoints(std::move(waypoints));
+            PublishNearbyMarkers({});
+            return true;
+        }
+
         std::uint8_t* state = record.state;
         if (state == nullptr)
+        {
+            PublishWaypoints({});
             return false;
-
-        std::vector<CapturedNearbyMarker> nearbyMarkers;
-        AppendNearbyMarkersFromState(state, nearbyMarkers);
-        AppendNearbyMarkersFromInputList(record.waypointList, nearbyMarkers, 2);
-        AppendNearbyMarkersFromInputList(record.playerList, nearbyMarkers, 3);
+        }
+        if (g_showPings.load())
+        {
+            AppendNearbyMarkersFromState(state, nearbyMarkers);
+            AppendNearbyMarkersFromInputList(record.pingEvents, nearbyMarkers, 2);
+            AppendNearbyMarkersFromInputList(record.pingInputEvents, nearbyMarkers, 3);
+        }
         PublishNearbyMarkers(std::move(nearbyMarkers));
 
         std::uint8_t* entries = nullptr;
@@ -3315,6 +3575,7 @@ namespace
         if (!SafeReadValue(reinterpret_cast<uintptr_t>(state + arrayOffset), entries) ||
             !SafeReadValue(reinterpret_cast<uintptr_t>(state + arrayOffset + 8), count))
         {
+            PublishWaypoints({});
             return false;
         }
 
@@ -3374,7 +3635,15 @@ namespace
     void __fastcall CaptureWaypointsHook(void* ctx, void*, void*, void*)
     {
         if (!TryCaptureWaypointsFromPlayerWaypointsUi(ctx))
-            Log("[Minimap] failed to read internal player_waypoints_ui state");
+        {
+            static DWORD lastFailureTick = 0;
+            const DWORD now = GetTickCount();
+            if (g_debugLoggingEnabled.load() && now - lastFailureTick >= 5000)
+            {
+                lastFailureTick = now;
+                Log("[Minimap] awaiting internal player_waypoints_ui state");
+            }
+        }
     }
 
     void __fastcall CaptureRenderPresentFrameHook(void* renderContext, void*, void* swapchainState, void*)
@@ -4980,6 +5249,9 @@ namespace
     std::vector<CapturedWaypoint> CopyWaypoints()
     {
         std::lock_guard<std::mutex> lock(g_waypointMutex);
+        if (!g_showWaypoints.load() ||
+            (g_liveMarkerLayoutSupported && GetTickCount() - g_lastWaypointTick.load() >= MinimapLive::PlayerStaleMs))
+            return {};
         return g_waypoints;
     }
 
@@ -6375,10 +6647,9 @@ namespace
             visibleMarkerPoints.push_back({ FixedToWorld(marker.x), FixedToWorld(marker.z), ResolveCapturedVisibleMapMarkerKind(marker) });
         }
 
-        for (const CapturedWaypoint& waypoint : waypoints)
-        {
-            PushWorldPointUnique(points, { FixedToWorld(waypoint.x), FixedToWorld(waypoint.z), ResolveCapturedWaypointKind(waypoint) });
-        }
+        if (!g_liveMarkerLayoutSupported)
+            for (const CapturedWaypoint& waypoint : waypoints)
+                PushWorldPointUnique(points, { FixedToWorld(waypoint.x), FixedToWorld(waypoint.z), ResolveCapturedWaypointKind(waypoint) });
 
         for (const CapturedNearbyMarker& marker : nearbyMarkers)
         {
@@ -7087,6 +7358,121 @@ namespace
         }
     }
 
+    void DrawRemotePlayerArrow(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int y, float heading)
+    {
+        EnsurePlayerArrowLoaded();
+        std::lock_guard<std::mutex> lock(g_playerArrowMutex);
+        const bool textured = g_playerArrow.loaded && !g_playerArrow.rgba.empty() &&
+            g_playerArrow.width > 0 && g_playerArrow.height > 0;
+        const float c = std::cos(heading), s = std::sin(heading);
+        std::array<std::vector<VkClearRect>, 8> shades;
+        // Rotate the same arrow asset used for the local player. Quantize the
+        // green tint and batch rectangles so each arrow needs at most 8 clears.
+        for (int dy = -17; dy <= 17; ++dy)
+        {
+            int runStart = -17, previous = -1;
+            for (int dx = -17; dx <= 18; ++dx)
+            {
+                const float sx = c * dx + s * dy;
+                const float sy = -s * dx + c * dy;
+                int shade = -1;
+                if (dx < 18 && sx >= -12 && sx < 12 && sy >= -12 && sy < 12)
+                {
+                    if (textured)
+                    {
+                        const int tx = MinValue(g_playerArrow.width - 1, static_cast<int>((sx + 12) * g_playerArrow.width / 24));
+                        const int ty = MinValue(g_playerArrow.height - 1, static_cast<int>((sy + 12) * g_playerArrow.height / 24));
+                        const std::size_t offset = (static_cast<std::size_t>(ty) * g_playerArrow.width + tx) * 4;
+                        if (g_playerArrow.rgba[offset + 3] > 48)
+                            shade = MaxValue(g_playerArrow.rgba[offset], MaxValue(g_playerArrow.rgba[offset + 1], g_playerArrow.rgba[offset + 2])) / 32;
+                    }
+                    else if (sy <= 7 && std::fabs(sx) <= (sy + 12) * 0.38f)
+                        shade = std::fabs(sx) < (sy + 10) * 0.30f && sy < 5 ? 6 : 0;
+                }
+                if (shade != previous || dx == 18)
+                {
+                    if (previous >= 0)
+                        AppendClippedClearRect(renderer, shades[previous], x + runStart, y + dy, dx - runStart, 1);
+                    runStart = dx;
+                    previous = shade;
+                }
+            }
+        }
+        for (std::size_t i = 0; i < shades.size(); ++i)
+        {
+            const float brightness = static_cast<float>(i) / 7.0f;
+            CmdClearRects(renderer, commandBuffer, 0.03f + brightness * 0.32f,
+                0.08f + brightness * 0.92f, 0.025f + brightness * 0.20f, 1.0f, shades[i]);
+        }
+    }
+
+    void DrawPingDiamond(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int y)
+    {
+        // Small-scale version of the game's green ping: bright diamond rim,
+        // green fill, and a dark downward arrow. Clear attachments do not blend.
+        CmdClearSolidDiamond(renderer, commandBuffer, x, y, 13, 0.02f, 0.10f, 0.03f);
+        CmdClearSolidDiamond(renderer, commandBuffer, x, y, 11, 0.64f, 1.0f, 0.48f);
+        CmdClearSolidDiamond(renderer, commandBuffer, x, y, 8, 0.12f, 0.66f, 0.18f);
+        CmdClearRect(renderer, commandBuffer, 0.02f, 0.15f, 0.03f, 1.0f, x - 1, y - 5, 3, 7);
+        for (int row = 0; row < 5; ++row)
+            CmdClearRect(renderer, commandBuffer, 0.02f, 0.15f, 0.03f, 1.0f, x - 4 + row, y + row, 9 - 2 * row, 1);
+    }
+
+    void DrawWaypointDiamond(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int y)
+    {
+        // Draw only the yellow outline. Clearing/filling the centre would erase
+        // the map or POI icon underneath, even with a zero alpha clear value.
+        std::vector<VkClearRect> outline;
+        outline.reserve(62);
+        for (int dy = -15; dy <= 15; ++dy)
+        {
+            const int outer = 15 - std::abs(dy);
+            const int inner = 12 - std::abs(dy);
+            if (inner < 0)
+                AppendClippedClearRect(renderer, outline, x - outer, y + dy, outer * 2 + 1, 1);
+            else
+            {
+                AppendClippedClearRect(renderer, outline, x - outer, y + dy, outer - inner, 1);
+                AppendClippedClearRect(renderer, outline, x + inner + 1, y + dy, outer - inner, 1);
+            }
+        }
+        CmdClearRects(renderer, commandBuffer, 1.0f, 0.86f, 0.28f, 1.0f, outline);
+    }
+
+    void DrawLiveMarkers(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        const std::vector<CapturedWaypoint>& waypoints, float centerX, float centerZ,
+        float unitsPerPixel, float heading, int cx, int cy, int radius)
+    {
+        std::vector<MinimapLive::Marker> players, pings;
+        CopyLiveMarkers(players, pings, GetTickCount());
+        auto project = [&](std::int64_t x, std::int64_t z, int& px, int& py)
+        {
+            bool clipped = false;
+            ProjectWorldToMinimap(FixedToWorld(x), FixedToWorld(z), centerX, centerZ,
+                unitsPerPixel, heading, cx, cy, radius, px, py, clipped);
+        };
+        // Keep live markers separate from POI deduplication and the icon limit.
+        for (const auto& player : players)
+        {
+            int x, y;
+            project(player.x, player.z, x, y);
+            DrawRemotePlayerArrow(renderer, commandBuffer, x, y, player.heading - heading);
+        }
+        if (g_liveMarkerLayoutSupported)
+            for (const auto& waypoint : waypoints)
+            {
+                int x, y;
+                project(waypoint.x, waypoint.z, x, y);
+                DrawWaypointDiamond(renderer, commandBuffer, x, y);
+            }
+        for (const auto& ping : pings)
+        {
+            int x, y;
+            project(ping.x, ping.z, x, y);
+            DrawPingDiamond(renderer, commandBuffer, x, y);
+        }
+    }
+
     void DrawMinimapWidget(VulkanMinimapRenderer& renderer, void* commandBuffer)
     {
         const int shortEdge = static_cast<int>(MinValue(renderer.width, renderer.height));
@@ -7142,6 +7528,9 @@ namespace
 
             CmdClearPoiIcon(renderer, commandBuffer, cx, cy, pointClipRadius, px, py, point.kind, clipped);
         }
+
+        DrawLiveMarkers(renderer, commandBuffer, waypoints, centerX, centerZ,
+            unitsPerPixel, mapHeading, cx, cy, pointProjectionRadius);
 
         if (!TryDrawPremiumPlayerArrow(renderer, commandBuffer, cx, cy, radius))
             CmdClearPlayerArrow(renderer, commandBuffer, cx, cy, radius);
@@ -7889,6 +8278,19 @@ namespace
                 "player_waypoints_ui"
             );
 
+            g_liveMarkerLayoutSupported = namedClient && g_directCameraTrackingSupported &&
+                g_playerWaypointsUiHook != nullptr && HasVerifiedLiveMarkerLayout();
+            if (g_liveMarkerLayoutSupported)
+            {
+                g_getEcsWorld = reinterpret_cast<GetEcsWorldFn>(g_exeBase + 0x8D3630);
+                g_lookupComponent = reinterpret_cast<LookupComponentFn>(g_exeBase + 0x8C72A0);
+                g_playerUiDataHook = InstallEntryHook(0x2AF690, g_playerUiDataExpected,
+                    reinterpret_cast<void*>(&CapturePlayerUiDataHook), "update_ui_data (remote players)");
+            }
+            modContext->Log(g_liveMarkerLayoutSupported
+                ? "[Minimap] live ping and waypoint layout verified (client 1076226)"
+                : "[Minimap] live marker layout unavailable for this client");
+
             g_mapMarkerVisibilityHook = InstallMapMarkerVisibilityLoopHook(
                 mapMarkerVisibilityLoopRva,
                 reinterpret_cast<void*>(&CaptureMapMarkerVisibilityRecordHook)
@@ -7922,6 +8324,12 @@ namespace
 
         void Unload(ModContext* modContext) override
         {
+            if (g_playerUiDataHook != nullptr)
+            {
+                g_playerUiDataHook->deactivate();
+                delete g_playerUiDataHook;
+                g_playerUiDataHook = nullptr;
+            }
             {
                 std::lock_guard<std::mutex> lock(g_rendererMutex);
                 DestroyVulkanMinimapRendererLocked();
@@ -8014,6 +8422,10 @@ namespace
             g_iterInit = nullptr;
             g_iterNext = nullptr;
             g_directCameraTrackingSupported = false;
+            g_liveMarkerLayoutSupported = false;
+            g_getEcsWorld = nullptr;
+            g_lookupComponent = nullptr;
+            ClearLiveMarkers();
             g_modContext = nullptr;
             active = false;
             loaded = false;
@@ -8024,6 +8436,7 @@ namespace
         {
             RefreshMinimapConfig(modContext, true);
             const bool cameraOk = ActivateHook(g_playerCameraTransformHook);
+            ActivateHook(g_playerUiDataHook);
             const bool uiOk = ActivateHook(g_localPlayerUiRenderSetupHook);
             const bool waypointOk = ActivateHook(g_playerWaypointsUiHook);
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
@@ -8036,6 +8449,7 @@ namespace
             std::ostringstream oss;
             oss << "[Minimap] activate internal bridge"
                 << " | camera_hook=" << HookActivationState(g_playerCameraTransformHook)
+                << " | remote_player_hook=" << HookActivationState(g_playerUiDataHook)
                 << " | ui_hook=" << HookActivationState(g_localPlayerUiRenderSetupHook)
                 << " | waypoint_hook=" << HookActivationState(g_playerWaypointsUiHook)
                 << " | marker_visibility_hook=" << HookActivationState(g_mapMarkerVisibilityHook)
@@ -8047,6 +8461,8 @@ namespace
 
         void Deactivate(ModContext* modContext) override
         {
+            if (g_playerUiDataHook != nullptr)
+                g_playerUiDataHook->deactivate();
             {
                 std::lock_guard<std::mutex> lock(g_rendererMutex);
                 DestroyVulkanMinimapRendererLocked();
@@ -8085,6 +8501,7 @@ namespace
                 g_playerPosition = {};
             }
             active = false;
+            ClearLiveMarkers();
             modContext->Log("[Minimap] deactivated");
         }
 
