@@ -86,8 +86,9 @@ The existing per-image presentation semaphores are retained; a submission fence
 does not itself prove that presentation has consumed a semaphore, as described in
 [the Vulkan semaphore reuse guide](https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html).
 
-Long-session stability of this synchronization change remains unverified. The
-earlier runtime acceptance above applies to camera tracking only.
+The earlier runtime acceptance above applies to camera tracking only. The
+combined-build gameplay acceptance is recorded below; extended-session results
+have not been separately recorded.
 
 ## Swapchain recreation and driver faults
 
@@ -105,6 +106,17 @@ the narrow access-violation handler runs. Other exceptions are not swallowed.
 
 Release/x64 validation with MSVC v143 passed all 27 renderer and 17 tracking
 checks. These include handle reuse, creation generations, delayed completion,
-access-violation containment and scope unwinding. The graphics additions still
-need live scene-change, resolution-change and extended-session checks; the
-earlier gameplay confirmation does not cover this extension.
+access-violation containment and scope unwinding.
+
+On 2026-10-04, the user confirmed that the combined PR #5/#6 build from
+`0ab0ffd2a5a28a044b8cbcc5ca76c461979e429f` was working and requested that both PRs
+be marked ready for review. The confirmation followed deployment of the new
+DLL and selection of `icon_style: "original"`.
+
+Tested DLL SHA256:
+`A20012F47AE3C3D082C9760186BC78578DC40820503A21C6DD95B6A9C5C0A8CA`.
+
+This is user-reported gameplay acceptance. Individual scene-change,
+resolution-change, display-sleep and extended-session results were not
+separately recorded. Synthetic renderer checks do not prove live fault recovery
+or an FPS improvement, and other executable variants remain unverified.
