@@ -99,8 +99,8 @@ image list alone does not trigger continuous rebuilding.
 
 Access violations while recording or submitting stop overlay submissions until
 the renderer is rebuilt, preserving the game's original presentation waits.
-The code does not retry a faulting driver every frame. The production translation
-unit and tests use `/EHa` so C++ scopes, including mutex guards, unwind before
+The code does not retry a faulting driver every frame. The production code,
+precompiled header and tests use `/EHa` so C++ scopes, including mutex guards, unwind before
 the narrow access-violation handler runs. Other exceptions are not swallowed.
 
 Release/x64 validation with MSVC v143 passed all 27 renderer and 17 tracking
