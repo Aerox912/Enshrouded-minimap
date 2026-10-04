@@ -906,6 +906,7 @@ namespace
     {
         uintptr_t handle = 0;
         uintptr_t device = 0;
+        std::uint64_t generation = 0;
         std::uint32_t format = 0;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -1044,6 +1045,7 @@ namespace
         bool submissionFailed = false;
         uintptr_t device = 0;
         uintptr_t swapchain = 0;
+        std::uint64_t swapchainGeneration = 0;
         std::uint32_t format = 0;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -1225,6 +1227,7 @@ namespace
     std::mutex g_swapchainMutex;
     std::mutex g_rendererMutex;
     std::vector<SwapchainRuntimeInfo> g_swapchains;
+    std::uint64_t g_swapchainGeneration = 0; // Protected by g_swapchainMutex.
     VulkanMinimapRenderer g_renderer;
     std::mutex g_realMapMutex;
     RealMapTexture g_realMap;
@@ -3542,6 +3545,7 @@ namespace
 
         runtime->handle = handle;
         runtime->device = reinterpret_cast<uintptr_t>(device);
+        runtime->generation = ++g_swapchainGeneration;
         runtime->format = info.imageFormat;
         runtime->width = info.imageExtent.width;
         runtime->height = info.imageExtent.height;
@@ -4354,6 +4358,18 @@ namespace
         return false;
     }
 
+    bool RendererMatchesSwapchain(const VulkanMinimapRenderer& renderer,
+        const SwapchainRuntimeInfo& snapshot, std::uint32_t width, std::uint32_t height, std::uint32_t format)
+    {
+        // Handles and dimensions can be reused after scene/resolution changes.
+        // A known creation or changed image set must invalidate cached resources.
+        return renderer.ready && renderer.device == snapshot.device &&
+            renderer.swapchain == snapshot.handle && renderer.format == format &&
+            renderer.width == width && renderer.height == height &&
+            renderer.swapchainGeneration == snapshot.generation &&
+            (snapshot.images.empty() || renderer.images == snapshot.images);
+    }
+
     bool BuildVulkanMinimapRendererLocked(const SwapchainRuntimeInfo& snapshot)
     {
         const std::uint32_t fallbackWidth = static_cast<std::uint32_t>(MaxValue(1, GetSystemMetrics(SM_CXSCREEN)));
@@ -4362,12 +4378,7 @@ namespace
         const std::uint32_t height = snapshot.height != 0 ? snapshot.height : fallbackHeight;
         const std::uint32_t format = snapshot.format != 0 ? snapshot.format : 37;
 
-        if (g_renderer.ready &&
-            g_renderer.device == snapshot.device &&
-            g_renderer.swapchain == snapshot.handle &&
-            g_renderer.format == format &&
-            g_renderer.width == width &&
-            g_renderer.height == height)
+        if (RendererMatchesSwapchain(g_renderer, snapshot, width, height, format))
         {
             return true;
         }
@@ -4376,6 +4387,7 @@ namespace
 
         g_renderer.device = snapshot.device;
         g_renderer.swapchain = snapshot.handle;
+        g_renderer.swapchainGeneration = snapshot.generation;
         g_renderer.format = format;
         g_renderer.width = width;
         g_renderer.height = height;
@@ -7202,6 +7214,24 @@ namespace
         return false;
     }
 
+    bool RecordVulkanMinimapCommandGuarded(std::uint32_t imageIndex)
+    {
+        __try { return RecordVulkanMinimapCommandLocked(imageIndex); }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return false;
+        }
+    }
+
+    std::int32_t SubmitVulkanMinimapCommandGuarded(void* queue, const VkSubmitInfo* info, void* fence)
+    {
+        __try { return g_renderer.fns.queueSubmit(queue, 1, info, fence); }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return -1000; // Driver access violation, not a Vulkan result.
+        }
+    }
+
     bool SubmitVulkanMinimapFrameLocked(void* queue, const VkPresentInfoKHR& info, std::uint32_t imageIndex, VkPresentInfoKHR& adjustedInfo, const void** adjustedWaitSemaphore)
     {
         if (!g_renderer.ready || g_renderer.submissionFailed ||
@@ -7220,7 +7250,7 @@ namespace
         if (fenceStatus != VK_SUCCESS)
             return StopVulkanMinimapSubmissionLocked("fence status failed", fenceStatus, imageIndex);
 
-        if (!RecordVulkanMinimapCommandLocked(imageIndex))
+        if (!RecordVulkanMinimapCommandGuarded(imageIndex))
         {
             g_renderer.submissionFailed = true;
             Log("[Minimap] Vulkan minimap drawing stopped: command recording failed");
@@ -7245,7 +7275,7 @@ namespace
         if (resetResult != VK_SUCCESS)
             return StopVulkanMinimapSubmissionLocked("fence reset failed", resetResult, imageIndex);
 
-        const std::int32_t submitResult = g_renderer.fns.queueSubmit(queue, 1, &submitInfo, fence);
+        const std::int32_t submitResult = SubmitVulkanMinimapCommandGuarded(queue, &submitInfo, fence);
         if (submitResult != VK_SUCCESS)
             return StopVulkanMinimapSubmissionLocked("queue submit failed", submitResult, imageIndex);
 
