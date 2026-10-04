@@ -96,6 +96,8 @@ namespace
     constexpr int MINIMAP_MAX_ZOOM = 7;
     constexpr std::size_t WORLD_MAP_ARRAY_OFFSET = 0x1C100;
     constexpr std::size_t CUSTOM_MAP_ARRAY_OFFSET = 0x3C128;
+    constexpr std::size_t DEATH_MAP_ARRAY_OFFSET = 0x7C178;
+    constexpr std::size_t DEATH_MAP_MAX_ENTRIES = 1024;
     constexpr std::size_t WORLD_MAP_MARKER_STRIDE = 0x80;
     constexpr std::size_t WORLD_MAP_MAX_ENTRIES = 2048;
     constexpr std::uint32_t WORLD_MAP_FLAME_ALTAR = 0xA447CBA3;
@@ -1220,6 +1222,8 @@ namespace
     std::atomic<bool> g_worldMapLayoutSupported{ false };
     std::mutex g_worldMapMutex;
     std::vector<CapturedWorldMapMarker> g_worldMapMarkers;
+    std::vector<CapturedWorldMapMarker> g_deathMarkers;
+    std::atomic<bool> g_deathMarkerLayoutSupported{ false };
     DWORD g_worldMapTick = 0;
     bool g_worldMapValid = false;
     DWORD g_lastWorldMapCaptureTick = 0;
@@ -1297,6 +1301,7 @@ namespace
     std::atomic<int> g_headingSmoothingMs{ 55 };
     std::atomic<bool> g_worldMapIconStyle{ false };
     std::atomic<bool> g_showWorldMarkers{ true };
+    std::atomic<bool> g_showDeathMarkers{ true };
     std::atomic<int> g_minimapMaxDrawnPoints{ MINIMAP_DEFAULT_MAX_DRAWN_POINTS };
     DWORD g_lastConfigPollTick = 0;
     DWORD g_lastSessionLogPollTick = 0;
@@ -1646,6 +1651,8 @@ namespace
         const bool showPlayers = ReadMarkerVisibility(modContext, "show_other_players");
         const bool showPings = ReadMarkerVisibility(modContext, "show_pings");
         const bool showWaypoints = ReadMarkerVisibility(modContext, "show_waypoints");
+        const bool showDeaths = ReadMarkerVisibility(modContext, "show_death_markers");
+        const bool previousDeaths = g_showDeathMarkers.exchange(showDeaths);
         const bool previousPlayers = g_showOtherPlayers.exchange(showPlayers);
         const bool previousPings = g_showPings.exchange(showPings);
         const bool previousWaypoints = g_showWaypoints.exchange(showWaypoints);
@@ -1656,7 +1663,7 @@ namespace
             previousDebugLogging == debugLogging &&
             previousMapSampleStep == mapSampleStep &&
             previousMaxIcons == maxIcons && previousPlayers == showPlayers &&
-            previousPings == showPings && previousWaypoints == showWaypoints &&
+            previousPings == showPings && previousWaypoints == showWaypoints && previousDeaths == showDeaths &&
             previousLight == mapLight && previousSmoothing == smoothing &&
             previousStyle == worldMapStyle && previousWorld == showWorld)
         {
@@ -1682,6 +1689,7 @@ namespace
             << " | show_other_players=" << showPlayers
             << " | show_pings=" << showPings
             << " | show_waypoints=" << showWaypoints
+            << " | show_death_markers=" << showDeaths
             << " | show_world_markers=" << showWorld
             << " | map_light=" << mapLight
             << " | icon_style=" << (worldMapStyle ? "world-map" : "original")
@@ -2419,6 +2427,7 @@ namespace
         {
             std::lock_guard<std::mutex> lock(g_worldMapMutex);
             g_worldMapMarkers.clear();
+            g_deathMarkers.clear();
             g_worldMapValid = false;
             g_worldMapTick = 0;
         }
@@ -2750,13 +2759,28 @@ namespace
             BytesMatchRva(0x2A9FA3, position, sizeof(position)) && BytesMatchRva(0x2AA0E9, key, sizeof(key));
     }
 
+    bool HasVerifiedDeathMarkerLayout()
+    {
+        // replicate_map_markers_for_ui routes tombstones into a separate list.
+        // Its allocator uses the same 0x80-byte entries and position/key writes.
+        // Keep this gate separate so a changed death list cannot disable POIs.
+        const std::uint8_t clear[] = { 0x48, 0x89, 0x88, 0x80, 0xC1, 0x07, 0x00 };
+        const std::uint8_t select[] = { 0xB9, 0x78, 0xC1, 0x07, 0x00, 0xEB, 0x1A };
+        const std::uint8_t allocate[] = { 0x48, 0x03, 0x4D, 0x90, 0xE8, 0x07, 0x26, 0xFF, 0xFF };
+        const std::uint8_t stride[] = { 0x48, 0x8B, 0x4B, 0x08, 0x48, 0x8B, 0x03, 0x48, 0xC1, 0xE1, 0x07 };
+        return HasVerifiedWorldMapLayout() && BytesMatchRva(0x29DE49, clear, sizeof(clear)) &&
+            BytesMatchRva(0x2A9D8F, select, sizeof(select)) &&
+            BytesMatchRva(0x2A9DB0, allocate, sizeof(allocate)) &&
+            BytesMatchRva(0x29C3F3, stride, sizeof(stride));
+    }
+
     bool ReadWorldMapArray(uintptr_t state, std::size_t offset, bool custom,
-        std::vector<CapturedWorldMapMarker>& markers)
+        std::vector<CapturedWorldMapMarker>& markers, std::size_t maxEntries = WORLD_MAP_MAX_ENTRIES)
     {
         uintptr_t entries = 0;
         std::uint64_t count = 0;
         if (!IsLikelyRuntimePointer(state) || !SafeReadValue(state + offset, entries) ||
-            !SafeReadValue(state + offset + 8, count) || count > WORLD_MAP_MAX_ENTRIES)
+            !SafeReadValue(state + offset + 8, count) || count > maxEntries)
             return false;
         if (count == 0) return true; // A valid empty frame removes old markers.
         if (!IsLikelyRuntimePointer(entries)) return false;
@@ -2784,8 +2808,14 @@ namespace
             ReadWorldMapArray(state, WORLD_MAP_ARRAY_OFFSET, false, markers);
         if (!valid) markers.clear();
         const auto count = markers.size();
+        std::vector<CapturedWorldMapMarker> deaths;
+        const bool deathsValid = g_deathMarkerLayoutSupported &&
+            ReadWorldMapArray(state, DEATH_MAP_ARRAY_OFFSET, false, deaths, DEATH_MAP_MAX_ENTRIES);
+        if (!deathsValid) deaths.clear();
+        const auto deathCount = deaths.size();
         {
             std::lock_guard<std::mutex> lock(g_worldMapMutex);
+            g_deathMarkers = std::move(deaths);
             g_worldMapMarkers = std::move(markers);
             g_worldMapTick = now;
             g_worldMapValid = valid;
@@ -2795,7 +2825,8 @@ namespace
         {
             lastDebugTick = now;
             std::ostringstream message;
-            message << "[Minimap] world-map snapshot | valid=" << valid << " | markers=" << count;
+            message << "[Minimap] world-map snapshot | valid=" << valid << " | markers=" << count
+                << " | deaths_valid=" << deathsValid << " | deaths=" << deathCount;
             Log(message.str());
         }
     }
@@ -2805,6 +2836,14 @@ namespace
         std::lock_guard<std::mutex> lock(g_worldMapMutex);
         if (!g_worldMapValid || now - g_worldMapTick > MinimapLive::PlayerStaleMs) return {};
         return g_worldMapMarkers;
+    }
+
+    std::vector<CapturedWorldMapMarker> CopyDeathMarkers(DWORD now)
+    {
+        if (!g_deathMarkerLayoutSupported || !g_showDeathMarkers.load()) return {};
+        std::lock_guard<std::mutex> lock(g_worldMapMutex);
+        if (now - g_worldMapTick > MinimapLive::PlayerStaleMs) return {};
+        return g_deathMarkers;
     }
 
     bool TryInitWorldMapState(void* ctx, uintptr_t& state)
@@ -7733,6 +7772,30 @@ namespace
         CmdClearRects(renderer, commandBuffer, 1.0f, 0.86f, 0.28f, 1.0f, outline);
     }
 
+    void DrawDeathMarker(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, int radius, int x, int y, std::uint32_t key)
+    {
+        if (TryDrawMinimapRasterIcon(renderer, commandBuffer, cx, cy, radius, x, y, key, false)) return;
+        // The bundled atlas predates tombstones. A compact skull remains readable
+        // without an extra asset, including with an older installed icon atlas.
+        static constexpr const char* skull[] = {
+            "   #######   ", " ########### ", "#############", "#############",
+            "###  ###  ###", "##   ###   ##", "##   ###   ##", "#############",
+            " #### # #### ", "  #########  ", "   # # # #   ", "   #######   "
+        };
+        std::vector<VkClearRect> outline, bone;
+        outline.reserve(156); bone.reserve(156);
+        for (int row = 0; row < 12; ++row)
+            for (int col = 0; col < 13; ++col)
+                if (skull[row][col] == '#')
+                {
+                    AppendClippedClearRect(renderer, outline, x + col - 7, y + row - 7, 3, 3);
+                    AppendClippedClearRect(renderer, bone, x + col - 6, y + row - 6, 1, 1);
+                }
+        CmdClearRects(renderer, commandBuffer, 0.05f, 0.04f, 0.035f, 1.0f, outline);
+        CmdClearRects(renderer, commandBuffer, 0.98f, 0.94f, 0.80f, 1.0f, bone);
+    }
+
     void DrawLiveMarkers(VulkanMinimapRenderer& renderer, void* commandBuffer,
         const std::vector<CapturedWaypoint>& waypoints, float centerX, float centerZ,
         float unitsPerPixel, float heading, int cx, int cy, int radius)
@@ -7751,6 +7814,14 @@ namespace
             int x, y;
             project(player.x, player.z, x, y);
             DrawRemotePlayerArrow(renderer, commandBuffer, x, y, player.heading - heading);
+        }
+        // Deaths bypass ordinary POI limits/deduplication and stay at the rim
+        // when distant. Draw before the selected-waypoint outline.
+        for (const auto& death : CopyDeathMarkers(GetTickCount()))
+        {
+            int x, y;
+            project(death.x, death.z, x, y);
+            DrawDeathMarker(renderer, commandBuffer, cx, cy, radius, x, y, death.key);
         }
         if (g_liveMarkerLayoutSupported)
             for (const auto& waypoint : waypoints)
@@ -8627,12 +8698,17 @@ namespace
                 : "[Minimap] live marker layout unavailable for this client");
 
             g_worldMapLayoutSupported = namedClient && HasVerifiedWorldMapLayout();
+            g_deathMarkerLayoutSupported = g_worldMapLayoutSupported && HasVerifiedDeathMarkerLayout();
             if (g_worldMapLayoutSupported)
             {
                 g_clearMapMarkersHook = InstallEntryHook(0x29DE20, g_clearMapMarkersExpected,
                     reinterpret_cast<void*>(&CaptureWorldMapHook), "clear_map_markers_for_ui (completed map snapshot)");
                 g_worldMapLayoutSupported = g_clearMapMarkersHook != nullptr;
             }
+            g_deathMarkerLayoutSupported = g_deathMarkerLayoutSupported && g_worldMapLayoutSupported;
+            modContext->Log(g_deathMarkerLayoutSupported
+                ? "[Minimap] tombstone marker layout verified (client 1076226)"
+                : "[Minimap] tombstone marker layout unavailable for this client");
             modContext->Log(g_worldMapLayoutSupported
                 ? "[Minimap] world-map marker layout verified (client 1076226)"
                 : "[Minimap] world-map marker layout unavailable for this client");
@@ -8677,6 +8753,7 @@ namespace
                 g_clearMapMarkersHook = nullptr;
             }
             g_worldMapLayoutSupported = false;
+            g_deathMarkerLayoutSupported = false;
             if (g_playerUiDataHook != nullptr)
             {
                 g_playerUiDataHook->deactivate();

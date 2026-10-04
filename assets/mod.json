@@ -20,6 +20,7 @@
       "show_pings": true,
       "show_waypoints": true,
       "show_world_markers": true,
+      "show_death_markers": true,
       "map_light": 55,
       "icon_style": "original",
       "heading_smoothing_ms": 55,
