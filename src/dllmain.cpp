@@ -13,6 +13,7 @@
 #include <cwchar>
 #include <fstream>
 #include <mutex>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -1175,12 +1176,13 @@ namespace
         std::string path;
         std::vector<std::uint8_t> rgba;
         std::vector<MinimapFrameColorGroup> groups;
+        float visibleRadius = 1.0f; // Relative to half the texture size, including pixel edges.
     };
 
     ModMetaData g_metaData = {
         "minimap_mod",
         "Community-maintained in-game minimap with a world clock, players, pings, waypoints and death markers.",
-        "0.5.2",
+        "0.5.3",
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,
@@ -1231,11 +1233,41 @@ namespace
     };
     std::mutex g_clockMutex;
     WorldClockSnapshot g_worldClock;
+    struct WorldWeatherSnapshot
+    {
+        std::uint8_t kind = 0;
+        bool valid = false;
+        DWORD tick = 0;
+        std::uint64_t session = 0;
+    };
+    using SampleWeatherFn = float* (__fastcall*)(float*, void*, const void*, std::int64_t);
+    SampleWeatherFn g_sampleWeather = nullptr;
+    Mem::Detour* g_weatherSampleHook = nullptr;
+    std::atomic<bool> g_weatherLayoutSupported{false}, g_showWeather{true}, g_weatherSampleLogged{false};
+    std::atomic<DWORD> g_lastWeatherCaptureTick{0};
+    std::mutex g_weatherMutex;
+    WorldWeatherSnapshot g_worldWeather;
+    struct LiveFogSnapshot
+    {
+        float worldWidth = 0, worldHeight = 0;
+        std::uint32_t columns = 0, rows = 0;
+        std::vector<std::uint8_t> tiles;
+        DWORD tick = 0;
+        std::uint64_t session = 0;
+    };
+    using UpdateFogFn = void (__fastcall*)(void*, const float*, float);
+    UpdateFogFn g_updateFog = nullptr;
+    Mem::Detour* g_fogUpdateHook = nullptr;
+    std::atomic<bool> g_liveFogLayoutSupported{false}, g_showFogOfWar{true}, g_fogSampleLogged{false};
+    std::atomic<DWORD> g_lastFogCaptureTick{0};
+    std::mutex g_liveFogMutex;
+    std::shared_ptr<const LiveFogSnapshot> g_liveFog;
     DWORD g_lastClockCaptureTick = 0;
     constexpr std::int64_t CLOCK_NANOSECONDS_PER_MINUTE = 60000000000LL;
     constexpr std::int64_t CLOCK_NANOSECONDS_PER_DAY = 1440 * CLOCK_NANOSECONDS_PER_MINUTE;
     constexpr int CLOCK_PANEL_HALF_HEIGHT = 18;
-    constexpr int CLOCK_FRAME_GAP = 8;
+    // The clock plate slightly overlaps the frame's lower ornament.
+    constexpr int CLOCK_FRAME_GAP = -6;
     std::atomic<bool> g_worldMapLayoutSupported{ false };
     std::mutex g_worldMapMutex;
     std::vector<CapturedWorldMapMarker> g_worldMapMarkers;
@@ -1671,6 +1703,10 @@ namespace
         const bool showDeaths = ReadMarkerVisibility(modContext, "show_death_markers");
         const bool showClock = ReadMarkerVisibility(modContext, "show_clock");
         const bool previousClock = g_showClock.exchange(showClock);
+        const bool showWeather = ReadMarkerVisibility(modContext, "show_weather");
+        const bool previousWeather = g_showWeather.exchange(showWeather);
+        const bool showFog = ReadMarkerVisibility(modContext, "show_fog_of_war");
+        const bool previousFog = g_showFogOfWar.exchange(showFog);
         const bool previousDeaths = g_showDeathMarkers.exchange(showDeaths);
         const bool previousPlayers = g_showOtherPlayers.exchange(showPlayers);
         const bool previousPings = g_showPings.exchange(showPings);
@@ -1682,7 +1718,7 @@ namespace
             previousDebugLogging == debugLogging &&
             previousMapSampleStep == mapSampleStep &&
             previousMaxIcons == maxIcons && previousPlayers == showPlayers &&
-            previousPings == showPings && previousWaypoints == showWaypoints && previousDeaths == showDeaths && previousClock == showClock &&
+            previousPings == showPings && previousWaypoints == showWaypoints && previousDeaths == showDeaths && previousClock == showClock && previousWeather == showWeather && previousFog == showFog &&
             previousLight == mapLight && previousSmoothing == smoothing &&
             previousStyle == worldMapStyle && previousWorld == showWorld)
         {
@@ -1710,6 +1746,8 @@ namespace
             << " | show_waypoints=" << showWaypoints
             << " | show_death_markers=" << showDeaths
             << " | show_clock=" << showClock
+            << " | show_weather=" << showWeather
+            << " | show_fog_of_war=" << showFog
             << " | show_world_markers=" << showWorld
             << " | map_light=" << mapLight
             << " | icon_style=" << (worldMapStyle ? "world-map" : "original")
@@ -1717,13 +1755,16 @@ namespace
         Log(oss.str());
     }
 
-    int ComputeMinimapCenterY(std::uint32_t height, int radius, int marginY, int footerHeight = 0)
+    int ComputeMinimapCenterY(std::uint32_t height, int radius, int marginY, int footerHeight = 0, int frameExtra = 0)
     {
         const int screenHeight = static_cast<int>(height);
-        const int top = marginY + radius;
+        // Reserve the quest title and Journal prompt above the entire frame.
+        // The HUD scales with screen height; the supplied 1439p capture needs
+        // about 160 pixels clear at the top, plus a small separation.
+        const int top = MaxValue(marginY, screenHeight / 9 + 8) + radius + frameExtra;
         const int bottom = screenHeight - marginY - radius;
-        const int safeTop = radius + 8;
-        const int safeBottom = MaxValue(safeTop, screenHeight - radius - 8 - footerHeight);
+        const int safeTop = radius + frameExtra + 8;
+        const int safeBottom = MaxValue(safeTop, screenHeight - radius - 8 - MaxValue(footerHeight, frameExtra));
 
         MinimapPlacement placement = MinimapPlacement::BottomRight;
         const int rawPlacement = g_minimapPlacement.load();
@@ -2449,6 +2490,18 @@ namespace
             g_worldClock = {};
         }
         {
+            std::lock_guard<std::mutex> lock(g_weatherMutex);
+            g_worldWeather = {};
+        }
+        g_lastWeatherCaptureTick = 0;
+        g_weatherSampleLogged = false;
+        {
+            std::lock_guard<std::mutex> lock(g_liveFogMutex);
+            g_liveFog.reset();
+        }
+        g_lastFogCaptureTick = 0;
+        g_fogSampleLogged = false;
+        {
             std::lock_guard<std::mutex> lock(g_worldMapMutex);
             g_worldMapMarkers.clear();
             g_deathMarkers.clear();
@@ -2827,12 +2880,288 @@ namespace
         g_worldClock = snapshot;
     }
 
-    bool CopyWorldClock(WorldClockSnapshot& result, DWORD now)
+    bool CopyWorldClock(WorldClockSnapshot& result, DWORD now, bool requireVisible = true)
     {
         std::lock_guard<std::mutex> lock(g_clockMutex);
         result = g_worldClock;
-        return g_clockLayoutSupported && g_showClock && result.valid &&
+        return g_clockLayoutSupported && (!requireVisible || g_showClock) && result.valid &&
             result.session == g_worldSessionGeneration.load() && now - result.tick <= 2000;
+    }
+
+    enum class WeatherKind : std::uint8_t { Clear, Rain, Snow, Blizzard };
+
+    const char* WeatherName(WeatherKind kind)
+    {
+        switch (kind)
+        {
+        case WeatherKind::Clear: return "CLEAR";
+        case WeatherKind::Rain: return "RAIN";
+        case WeatherKind::Snow: return "SNOW";
+        case WeatherKind::Blizzard: return "BLIZZARD";
+        default: return "";
+        }
+    }
+
+    bool ReadWorldWeather(uintptr_t address, WorldWeatherSnapshot& result)
+    {
+        result = {};
+        float mix[4] = {};
+        if (!IsLikelyRuntimePointer(address) || !SafeRead(address, mix, sizeof(mix))) return false;
+        float sum = 0;
+        int strongest = 0;
+        for (int i = 0; i < 4; ++i)
+        {
+            if (!std::isfinite(mix[i]) || mix[i] < -0.0001f || mix[i] > 1.0001f) return false;
+            sum += mix[i];
+            if (mix[i] > mix[strongest]) strongest = i;
+        }
+        if (std::fabs(sum - 1.0f) > 0.01f) return false;
+        result.kind = static_cast<std::uint8_t>(strongest);
+        result.valid = true;
+        return true;
+    }
+
+    // Observe the result of the existing local-player ambient query. Never call
+    // the sampler on the render thread or retain any game-owned pointer.
+    float* __fastcall CaptureWeatherSample(float* output, void* weather, const void* position, std::int64_t time)
+    {
+        const auto session = g_worldSessionGeneration.load();
+        float* result = g_sampleWeather(output, weather, position, time);
+        if (!g_weatherLayoutSupported) return result;
+        const DWORD now = GetTickCount();
+        DWORD previous = g_lastWeatherCaptureTick.load();
+        if (now - previous < 100 || !g_lastWeatherCaptureTick.compare_exchange_strong(previous, now)) return result;
+        WorldWeatherSnapshot snapshot{};
+        ReadWorldWeather(reinterpret_cast<uintptr_t>(result), snapshot);
+        snapshot.tick = now;
+        snapshot.session = session;
+        {
+            std::lock_guard<std::mutex> lock(g_weatherMutex);
+            g_worldWeather = snapshot;
+        }
+        if (snapshot.valid && !g_weatherSampleLogged.exchange(true))
+            Log(std::string("[Minimap] local weather sample received: ") + WeatherName(static_cast<WeatherKind>(snapshot.kind)));
+        return result;
+    }
+
+    bool CopyWorldWeather(WorldWeatherSnapshot& result, DWORD now)
+    {
+        std::lock_guard<std::mutex> lock(g_weatherMutex);
+        result = g_worldWeather;
+        return g_weatherLayoutSupported && g_showWeather && result.valid && result.kind <= 3 &&
+            result.session == g_worldSessionGeneration.load() && now - result.tick <= 2000;
+    }
+
+    bool HasVerifiedWorldWeatherLayout()
+    {
+        const std::uint8_t localPlayer[] = {0x8B,0x7F,0x04,0x8B,0xD7,0xE8,0xA9,0x2D,0x62,0x00,
+            0x84,0xC0,0x0F,0x84,0x3E,0x07,0x00,0x00};
+        const std::uint8_t query[] = {0x4C,0x8B,0xC8,0x0F,0x29,0x44,0x24,0x60,
+            0xF2,0x0F,0x11,0x4C,0x24,0x70,0xE8,0x93,0x1B,0x71,0x00};
+        const std::uint8_t sampler[] = {0x48,0x8B,0xC4,0x48,0x89,0x58,0x18,0x48,0x89,0x48,0x08,
+            0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57};
+        const std::uint8_t weights[] = {0xF3,0x0F,0x11,0x07,0x0F,0x28,0xC2,
+            0xF3,0x0F,0x11,0x4F,0x04,0xF3,0x41,0x0F,0x59,0xC4,
+            0xF3,0x0F,0x11,0x47,0x08,0xF3,0x44,0x0F,0x11,0x6F,0x0C};
+        if (!IsNamedSystemAt(0x1D44550, "ambient_effects", 0x29C830) ||
+            !BytesMatchRva(0x29C85D, localPlayer, sizeof(localPlayer)) ||
+            !BytesMatchRva(0x29CBEA, query, sizeof(query)) ||
+            !BytesMatchRva(0x9AE790, sampler, sizeof(sampler)) ||
+            !BytesMatchRva(0x9AECE1, weights, sizeof(weights))) return false;
+        // Native WeatherState enum descriptors bind the four blend channels.
+        const char* names[] = {"Clear", "Rain", "Snow", "Blizzard"};
+        for (std::uint64_t i = 0; i < 4; ++i)
+        {
+            uintptr_t name = 0; std::uint64_t value = 99; char text[9] = {};
+            const auto entry = g_exeBase + 0x1AA54F0 + i * 0x28;
+            const auto length = std::strlen(names[i]) + 1;
+            if (!SafeReadValue(entry, name) || name < g_exeBase ||
+                name - g_exeBase + length > g_exeImageSize ||
+                !SafeReadValue(entry + 0x10, value) || value != i ||
+                !SafeRead(name, text, length) || std::memcmp(text, names[i], length) != 0) return false;
+        }
+        return true;
+    }
+
+    void DestroyCallSiteHook(Mem::Detour*& hook)
+    {
+        if (!hook) return;
+        hook->deactivate();
+        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hook->patch->data->address), 5);
+        void* allocation = reinterpret_cast<void*>(hook->shellcode->data->address);
+        delete hook->shellcode;
+        delete hook->patch;
+        delete hook;
+        hook = nullptr;
+        if (allocation) VirtualFree(allocation, 0, MEM_RELEASE);
+    }
+
+    Mem::Detour* InstallVerifiedCallHook(uintptr_t callRva, uintptr_t targetRva, uintptr_t handler)
+    {
+        std::uint8_t call[5] = {};
+        if (callRva + sizeof(call) > g_exeImageSize || targetRva >= g_exeImageSize ||
+            !SafeRead(g_exeBase + callRva, call, sizeof(call)) || call[0] != 0xE8) return nullptr;
+        std::int32_t relative = 0;
+        std::memcpy(&relative, call + 1, sizeof(relative));
+        if (static_cast<std::int64_t>(callRva) + 5 + relative != targetRva) return nullptr;
+        // Keep CALL at the original site. A leaf relay tail-jumps to the C++
+        // wrapper, retaining the original stack alignment, shadow space and
+        // return address. Only this local-player call is intercepted.
+        std::uint8_t relay[14] = {0xFF,0x25,0,0,0,0};
+        std::memcpy(relay + 6, &handler, sizeof(handler));
+        auto* hook = new Mem::Detour(g_exeBase + callRva, relay, sizeof(relay), false);
+        const auto displacement = static_cast<std::int64_t>(hook->shellcode->data->address) -
+            static_cast<std::int64_t>(g_exeBase + callRva + 5);
+        if (!hook->shellcode->data->address || displacement < INT32_MIN || displacement > INT32_MAX)
+        {
+            DestroyCallSiteHook(hook);
+            return nullptr;
+        }
+        const std::uint8_t opcode = 0xE8;
+        hook->patch->updateOpcode(0, const_cast<std::uint8_t*>(&opcode), 1);
+        return hook;
+    }
+
+
+    Mem::Detour* InstallWeatherSampleHook(uintptr_t callRva, uintptr_t targetRva)
+    {
+        auto* hook = InstallVerifiedCallHook(callRva, targetRva, reinterpret_cast<uintptr_t>(&CaptureWeatherSample));
+        if (hook) g_sampleWeather = reinterpret_cast<SampleWeatherFn>(g_exeBase + targetRva);
+        return hook;
+    }
+
+    // The native grid is tile-major: 32x32 bytes per tile, 8 world metres
+    // per pixel, north at row zero. Keep owned bytes, never game pointers.
+    struct NativeFogHeader
+    {
+        float worldWidth, worldHeight;
+        std::uint32_t columns, rows;
+        uintptr_t allocator, data;
+        std::uint64_t tileCount;
+    };
+    static_assert(sizeof(NativeFogHeader) == 0x28, "native fog header size");
+
+    bool ReadLiveFog(uintptr_t address, LiveFogSnapshot& result)
+    {
+        result = {};
+        NativeFogHeader header{}, after{};
+        if (!IsLikelyRuntimePointer(address) || !SafeRead(address, &header, sizeof(header)) ||
+            !std::isfinite(header.worldWidth) || !std::isfinite(header.worldHeight) ||
+            header.worldWidth < 256 || header.worldHeight < 256 ||
+            header.worldWidth > 32768 || header.worldHeight > 32768 ||
+            header.columns == 0 || header.rows == 0 || header.columns > 128 || header.rows > 128 ||
+            header.columns != (static_cast<unsigned>(header.worldWidth * 0.125f) + 31) / 32 ||
+            header.rows != (static_cast<unsigned>(header.worldHeight * 0.125f) + 31) / 32 ||
+            header.tileCount != static_cast<std::uint64_t>(header.columns) * header.rows ||
+            !IsLikelyRuntimePointer(header.data)) return false;
+        const auto bytes = static_cast<std::size_t>(header.tileCount) * 1024;
+        result.tiles.resize(bytes);
+        if (!SafeRead(header.data, result.tiles.data(), bytes) ||
+            !SafeRead(address, &after, sizeof(after)) || std::memcmp(&header, &after, sizeof(header)) != 0)
+        {
+            result = {};
+            return false;
+        }
+        result.worldWidth = header.worldWidth;
+        result.worldHeight = header.worldHeight;
+        result.columns = header.columns;
+        result.rows = header.rows;
+        return true;
+    }
+
+    void __fastcall CaptureFogUpdate(void* fog, const float* position, float radius)
+    {
+        const auto session = g_worldSessionGeneration.load();
+        g_updateFog(fog, position, radius); // Includes the native local-player ownership check at the call site.
+        if (!g_liveFogLayoutSupported || !g_showFogOfWar) return;
+        const DWORD now = GetTickCount();
+        DWORD previous = g_lastFogCaptureTick.load();
+        if (now - previous < 500 || !g_lastFogCaptureTick.compare_exchange_strong(previous, now)) return;
+        std::shared_ptr<LiveFogSnapshot> snapshot;
+        try
+        {
+            snapshot = std::make_shared<LiveFogSnapshot>();
+            if (!ReadLiveFog(reinterpret_cast<uintptr_t>(fog), *snapshot)) snapshot.reset();
+        }
+        catch (const std::bad_alloc&) { snapshot.reset(); }
+        if (snapshot)
+        {
+            snapshot->tick = now;
+            snapshot->session = session;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_liveFogMutex);
+            g_liveFog = snapshot;
+        }
+        if (snapshot && !g_fogSampleLogged.exchange(true))
+            Log("[Minimap] live exploration grid received: " + std::to_string(snapshot->columns * 32) +
+                "x" + std::to_string(snapshot->rows * 32));
+    }
+
+    std::shared_ptr<const LiveFogSnapshot> CopyLiveFog(DWORD now)
+    {
+        std::lock_guard<std::mutex> lock(g_liveFogMutex);
+        if (!g_liveFogLayoutSupported || !g_showFogOfWar || !g_liveFog ||
+            g_liveFog->session != g_worldSessionGeneration.load() || now - g_liveFog->tick > 2000) return {};
+        return g_liveFog;
+    }
+
+    float SampleLiveFog(const LiveFogSnapshot* fog, float worldX, float worldZ)
+    {
+        if (!fog || fog->tiles.empty() || !std::isfinite(worldX) || !std::isfinite(worldZ) ||
+            worldX < 0 || worldZ < 0 || worldX > fog->worldWidth || worldZ > fog->worldHeight) return 0;
+        // Native discovery computes coverage at pixel centres (+0.5).
+        const float fx = ClampValue(worldX * 0.125f - 0.5f, 0.0f, static_cast<float>(fog->columns * 32 - 1));
+        const float fy = ClampValue((fog->worldHeight - worldZ) * 0.125f - 0.5f, 0.0f, static_cast<float>(fog->rows * 32 - 1));
+        const auto x0 = static_cast<unsigned>(fx), y0 = static_cast<unsigned>(fy);
+        const auto x1 = MinValue(x0 + 1, fog->columns * 32 - 1), y1 = MinValue(y0 + 1, fog->rows * 32 - 1);
+        const float tx = fx - x0, ty = fy - y0;
+        const auto sample = [&](unsigned x, unsigned y) -> float {
+            const std::size_t index = (static_cast<std::size_t>(y / 32) * fog->columns + x / 32) * 1024 +
+                (y % 32) * 32 + x % 32;
+            return index < fog->tiles.size() ? fog->tiles[index] / 255.0f : 0.0f;
+        };
+        return (sample(x0, y0) * (1 - tx) + sample(x1, y0) * tx) * (1 - ty) +
+            (sample(x0, y1) * (1 - tx) + sample(x1, y1) * tx) * ty;
+    }
+
+    struct MinimapFogFrame
+    {
+        bool enabled = false;
+        std::shared_ptr<const LiveFogSnapshot> snapshot;
+    };
+
+    MinimapFogFrame CaptureMinimapFogFrame()
+    {
+        const bool enabled = g_showFogOfWar.load();
+        return { enabled, enabled ? CopyLiveFog(GetTickCount()) : nullptr };
+    }
+
+    void ApplyExplorationFog(float& red, float& green, float& blue, float revealed)
+    {
+        // Opaque parchment hides terrain entirely in unexplored cells. The
+        // native byte coverage supplies the soft edge of discovered terrain.
+        red = 0.30f + (red - 0.30f) * revealed;
+        green = 0.31f + (green - 0.31f) * revealed;
+        blue = 0.28f + (blue - 0.28f) * revealed;
+    }
+
+    bool HasVerifiedLiveFogLayout()
+    {
+        const std::uint8_t owner[] = {0x48,0x8B,0xD3,0x8B,0x08,0xE8,0x24,0x2E,0x09,0x00,
+            0x84,0xC0,0x74,0x59};
+        const std::uint8_t object[] = {0x48,0x8B,0x4C,0x24,0x48};
+        const std::uint8_t call[] = {0xF3,0x0F,0x10,0x10,0xE8,0xD7,0xCE,0x07,0};
+        const std::uint8_t header[] = {0x48,0x8B,0x42,0x08,0x48,0x89,0x01,0x48,0x8B,0x42,0x18,
+            0x48,0x89,0x41,0x08,0x48,0x8B,0x42,0x20};
+        const std::uint8_t origin[] = {0xF3,0x44,0x0F,0x10,0x41,0x04,0xF3,0x44,0x0F,0x5C,0x42,0x04};
+        const std::uint8_t tile[] = {0x48,0xC1,0xE1,0x0A,0x49,0x03,0x4E,0x18};
+        const float scale = 0.125f;
+        return IsNamedSystemAt(0x1D48D00, "fog_of_war", 0x2A3EC0) &&
+            BytesMatchRva(0x2A3F22, owner, sizeof(owner)) && BytesMatchRva(0x2A3F4B, object, sizeof(object)) &&
+            BytesMatchRva(0x2A3F80, call, sizeof(call)) && BytesMatchRva(0x320440, header, sizeof(header)) &&
+            BytesMatchRva(0x320EA4, origin, sizeof(origin)) && BytesMatchRva(0x321000, tile, sizeof(tile)) &&
+            BytesMatchRva(0x12B0CF4, reinterpret_cast<const std::uint8_t*>(&scale), sizeof(scale));
     }
 
     const std::array<std::uint8_t, 15> g_clearMapMarkersExpected = {
@@ -6222,6 +6551,7 @@ namespace
         std::vector<int> colorToGroup(kColorMapSize, -1);
         std::vector<MinimapFrameColorGroup> groups;
         groups.reserve(96);
+        float visibleRadiusSquared = 0.0f;
 
         const auto quantize = [](std::uint8_t value) -> std::uint8_t
         {
@@ -6273,6 +6603,12 @@ namespace
                     (static_cast<std::size_t>(y) * static_cast<std::size_t>(textureSize) + static_cast<std::size_t>(x)) *
                     4u;
                 const std::uint8_t alpha = rgba[offset + 3];
+                if (alpha != 0)
+                {
+                    const float dx = static_cast<float>(x) + 0.5f - textureSize * 0.5f;
+                    const float dy = static_cast<float>(y) + 0.5f - textureSize * 0.5f;
+                    visibleRadiusSquared = MaxValue(visibleRadiusSquared, dx * dx + dy * dy);
+                }
                 if (alpha <= 40)
                 {
                     appendRun(y, runStart, x, runKey);
@@ -6305,6 +6641,9 @@ namespace
         asset.path = path;
         asset.rgba = std::move(rgba);
         asset.groups = std::move(groups);
+        // A rotation-independent bound keeps the clock still while the compass
+        // turns. Include pixel corners rather than counting transparent padding.
+        asset.visibleRadius = (std::sqrt(visibleRadiusSquared) + 0.707107f) / (textureSize * 0.5f);
         return true;
     }
 
@@ -6528,6 +6867,8 @@ namespace
         float x = 0.0f;
         float z = 0.0f;
         std::uint32_t kind = 0;
+        bool navigation = false;
+        bool customPin = false;
     };
 
     bool TryResolveKnownMarkerIconKey(std::uint32_t candidate, std::uint32_t& outKey)
@@ -7010,12 +7351,21 @@ namespace
 
     void PushWorldPointUnique(std::vector<MinimapWorldPoint>& points, const MinimapWorldPoint& point)
     {
-        for (const MinimapWorldPoint& existing : points)
+        for (MinimapWorldPoint& existing : points)
         {
             const float dx = existing.x - point.x;
             const float dz = existing.z - point.z;
             if (dx * dx + dz * dz < 16.0f)
+            {
+                // A pin on an existing location decorates its original icon.
+                // Work in either insertion order, preserving quest identity.
+                const bool pinned = existing.customPin || point.customPin || existing.kind == 11 || point.kind == 11;
+                const bool navigation = existing.navigation || point.navigation;
+                if ((existing.kind == 11 && point.kind != 11) || IsSpecialMapMarkerKind(point.kind)) existing = point;
+                existing.navigation = navigation;
+                existing.customPin = pinned && existing.kind != 11;
                 return;
+            }
         }
 
         points.push_back(point);
@@ -7043,13 +7393,16 @@ namespace
                 std::uint32_t known = 0;
                 const std::uint32_t kind = marker.custom ? 11 :
                     marker.key == WORLD_MAP_FLAME_ALTAR ? 31 : marker.key == WORLD_MAP_PING ? 13 :
-                    marker.key == 0 ? 12 : TryResolveKnownMarkerIconKey(marker.key, known) ? known : 55;
+                    marker.key == 0 ? 12 : IsSpecialMapMarkerKind(marker.key) ? marker.key :
+                    TryResolveKnownMarkerIconKey(marker.key, known) ? known : 55;
                 if (debugKeys && kind == 55 && unknownCount < 6)
                 {
                     if (unknownCount++) unknownKeys << ',';
                     unknownKeys << Hex(marker.key);
                 }
-                PushWorldPointUnique(points, { FixedToWorld(marker.x), FixedToWorld(marker.z), kind });
+                // Placed Flame Altars are navigation landmarks, unlike original world POIs.
+                PushWorldPointUnique(points, { FixedToWorld(marker.x), FixedToWorld(marker.z), kind,
+                    marker.key == WORLD_MAP_FLAME_ALTAR });
             }
             if (debugKeys)
             {
@@ -7070,7 +7423,7 @@ namespace
 
         if (!g_liveMarkerLayoutSupported)
             for (const CapturedWaypoint& waypoint : waypoints)
-                PushWorldPointUnique(points, { FixedToWorld(waypoint.x), FixedToWorld(waypoint.z), ResolveCapturedWaypointKind(waypoint) });
+                PushWorldPointUnique(points, { FixedToWorld(waypoint.x), FixedToWorld(waypoint.z), ResolveCapturedWaypointKind(waypoint), true });
 
         for (const CapturedNearbyMarker& marker : nearbyMarkers)
         {
@@ -7275,6 +7628,20 @@ namespace
         return true;
     }
 
+    void FilterFoggedWorldPoints(std::vector<MinimapWorldPoint>& points, const MinimapFogFrame& fog)
+    {
+        if (!fog.enabled) return;
+        points.erase(std::remove_if(points.begin(), points.end(), [&](const MinimapWorldPoint& point) {
+            // Live navigation has a separate draw layer. Retain its legacy
+            // waypoint/ping representations, custom pins and native quests.
+            if (point.navigation || point.customPin || point.kind == 10 || point.kind == 11 || point.kind == 13 || IsSpecialMapMarkerKind(point.kind))
+                return false;
+            // Test the real world location, before clamping icons to the rim.
+            // Reveal icons only on the explored side of the soft fog edge.
+            return SampleLiveFog(fog.snapshot.get(), point.x, point.z) < 0.5f;
+        }), points.end());
+    }
+
     void LimitMinimapWorldPoints(std::vector<MinimapWorldPoint>& points, float centerX, float centerZ)
     {
         const int maxPoints = ClampValue(g_minimapMaxDrawnPoints.load(), 8, 128);
@@ -7330,7 +7697,8 @@ namespace
         blue = ClampValue(blue * vignette + 0.004f, 0.0f, 1.0f);
     }
 
-    void DrawRealMap(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, float centerX, float centerZ, float unitsPerPixel, float headingRadians)
+    void DrawRealMap(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, float centerX, float centerZ, float unitsPerPixel, float headingRadians,
+        const MinimapFogFrame& fog = CaptureMinimapFogFrame())
     {
         EnsureRealMapLoaded();
 
@@ -7420,6 +7788,8 @@ namespace
 
                     const float distance = std::sqrt(static_cast<float>(distanceSq)) / static_cast<float>(innerRadius);
                     ApplyMapLighting(red, green, blue, distance, mapLight);
+                    if (fog.enabled)
+                        ApplyExplorationFog(red, green, blue, SampleLiveFog(fog.snapshot.get(), worldX, worldZ));
                 }
 
                 red = quantizeColor(red);
@@ -7499,6 +7869,16 @@ namespace
     int MinimapRasterFrameExtra(int radius)
     {
         return ClampValue((radius * 45) / 100, 46, 64);
+    }
+
+    int MinimapRasterVisibleHalfHeight(int radius, int frameExtra)
+    {
+        const int half = radius + frameExtra;
+        std::lock_guard<std::mutex> lock(g_minimapFrameMutex);
+        if (!g_minimapFrame.loaded)
+            return half;
+        // One pixel covers texture filtering and outward raster rounding.
+        return MinValue(half, static_cast<int>(std::ceil(half * g_minimapFrame.visibleRadius)) + 1);
     }
 
     int MinimapRasterMapRadius(int radius, int frameExtra)
@@ -7851,16 +8231,16 @@ namespace
             CmdClearRect(renderer, commandBuffer, 0.02f, 0.15f, 0.03f, 1.0f, x - 4 + row, y + row, 9 - 2 * row, 1);
     }
 
-    void DrawWaypointDiamond(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int y)
+    void DrawMarkerDiamondOutline(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int y,
+        int extent, float red, float green, float blue)
     {
-        // Draw only the yellow outline. Clearing/filling the centre would erase
-        // the map or POI icon underneath, even with a zero alpha clear value.
+        // Leave the centre untouched so the original icon remains visible.
         std::vector<VkClearRect> outline;
-        outline.reserve(62);
-        for (int dy = -15; dy <= 15; ++dy)
+        outline.reserve(4 * extent + 2);
+        for (int dy = -extent; dy <= extent; ++dy)
         {
-            const int outer = 15 - std::abs(dy);
-            const int inner = 12 - std::abs(dy);
+            const int outer = extent - std::abs(dy);
+            const int inner = extent - 3 - std::abs(dy);
             if (inner < 0)
                 AppendClippedClearRect(renderer, outline, x - outer, y + dy, outer * 2 + 1, 1);
             else
@@ -7869,7 +8249,36 @@ namespace
                 AppendClippedClearRect(renderer, outline, x + inner + 1, y + dy, outer - inner, 1);
             }
         }
-        CmdClearRects(renderer, commandBuffer, 1.0f, 0.86f, 0.28f, 1.0f, outline);
+        CmdClearRects(renderer, commandBuffer, red, green, blue, 1.0f, outline);
+    }
+
+    void DrawWaypointDiamond(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int y)
+    {
+        DrawMarkerDiamondOutline(renderer, commandBuffer, x, y, 15, 1.0f, 0.86f, 0.28f);
+    }
+
+    void DrawCustomPinOutline(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int y)
+    {
+        // The red edge stays visible outside a selected waypoint's yellow edge.
+        DrawMarkerDiamondOutline(renderer, commandBuffer, x, y, 18, 1.0f, 0.20f, 0.16f);
+    }
+
+    void DrawWorldPointIcons(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        const std::vector<MinimapWorldPoint>& points, float centerX, float centerZ,
+        float unitsPerPixel, float mapHeading, int cx, int cy, int pointProjectionRadius, int pointClipRadius)
+    {
+        for (const MinimapWorldPoint& point : points)
+        {
+            int px = cx;
+            int py = cy;
+            bool clipped = false;
+            ProjectWorldToMinimap(point.x, point.z, centerX, centerZ, unitsPerPixel, mapHeading, cx, cy, pointProjectionRadius, px, py, clipped);
+
+            if (clipped && !point.customPin && point.kind != 11 && point.kind != 12 && point.kind != 13)
+                continue;
+            CmdClearPoiIcon(renderer, commandBuffer, cx, cy, pointClipRadius, px, py, point.kind, clipped);
+            if (point.customPin) DrawCustomPinOutline(renderer, commandBuffer, px, py);
+        }
     }
 
     void DrawDeathMarker(VulkanMinimapRenderer& renderer, void* commandBuffer,
@@ -7958,13 +8367,96 @@ namespace
         return renderer.mapHeading;
     }
 
-    void DrawWorldClockPanel(VulkanMinimapRenderer& renderer, void* commandBuffer,
-        int cx, int cy, const WorldClockSnapshot& clock)
+    void DrawWeatherLabel(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int x, int cy, WeatherKind kind)
     {
-        if (!clock.valid || clock.minuteOfDay < 0 || clock.minuteOfDay >= 1440) return;
+        // Only letters used by the four game-defined weather labels.
+        static constexpr char letters[] = "ABCDEILNORSWZ";
+        static constexpr std::uint8_t glyphs[][7] = {
+            {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
+            {14,17,16,16,16,17,14}, {30,17,17,17,17,17,30},
+            {31,16,16,30,16,16,31}, {14,4,4,4,4,4,14},
+            {16,16,16,16,16,16,31}, {17,25,25,21,19,19,17},
+            {14,17,17,17,17,17,14}, {30,17,17,30,20,18,17},
+            {15,16,16,14,1,1,30}, {17,17,17,21,21,21,10},
+            {31,1,2,4,8,16,31}
+        };
+        std::vector<VkClearRect> ink;
+        const char* name = WeatherName(kind);
+        for (int i=0; name[i]; ++i)
+        {
+            const char* letter = std::strchr(letters, name[i]);
+            if (!letter) continue;
+            for (int y=0; y<7; ++y) for (int bit=0; bit<5; ++bit)
+                if (glyphs[letter-letters][y] & (1 << (4-bit)))
+                    AppendClippedClearRect(renderer, ink, x+i*12+bit*2, cy-7+y*2, 2, 2);
+        }
+        CmdClearRects(renderer, commandBuffer, 0.96f, 0.89f, 0.69f, 1, ink);
+    }
+
+    void DrawWeatherSymbol(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, WeatherKind kind, bool daytime, bool daylightKnown = true)
+    {
+        const bool clear = kind == WeatherKind::Clear;
+        std::vector<VkClearRect> celestial, cloud, precipitation;
+        for (int y=-12; y<=12; ++y) for (int x=-14; x<=14; ++x)
+        {
+            // Put a smaller sun/moon behind precipitation clouds. Clear skies
+            // use the full symbol in the centre of the same icon slot.
+            const int sx = clear ? x : x + 5;
+            const int sy = clear ? y : y + 4;
+            const int d = sx*sx + sy*sy;
+            const bool sun = d<=16 || (d>=36 && d<=72 &&
+                (std::abs(sx)<=1 || std::abs(sy)<=1 || std::abs(std::abs(sx)-std::abs(sy))<=1));
+            const bool moon = d<=49 && (sx-3)*(sx-3)+(sy+2)*(sy+2)>36;
+            if (daylightKnown && (daytime ? sun : moon))
+                AppendClippedClearRect(renderer, celestial, cx+x, cy+y, 1, 1);
+            if (clear) continue;
+
+            const bool body = (y>=-1 && y<=3 && x>=-7 && x<=12) ||
+                (x+2)*(x+2)+(y+2)*(y+2)<=16 || (x-5)*(x-5)+(y+2)*(y+2)<=25;
+            if (body) AppendClippedClearRect(renderer, cloud, cx+x, cy+y, 1, 1);
+            bool detail = false;
+            if (kind == WeatherKind::Rain)
+                detail = y>=6 && y<=11 && x>=-6 && x<=11 && ((x+y/2)%6==0 || (x+y/2)%6==1);
+            else if (kind == WeatherKind::Snow)
+            {
+                for (int flakeX : {-4,7})
+                {
+                    const int dx=x-flakeX, dy=y-8;
+                    detail |= std::abs(dx)<=3 && std::abs(dy)<=3 &&
+                        (dx==0 || dy==0 || std::abs(dx)==std::abs(dy));
+                }
+            }
+            else if (kind == WeatherKind::Blizzard)
+            {
+                const int dx=x-8, dy=y-8;
+                detail = (x>=-10 && x<=1 && (y==7 || y==10)) ||
+                    (std::abs(dx)<=3 && std::abs(dy)<=3 &&
+                     (dx==0 || dy==0 || std::abs(dx)==std::abs(dy)));
+            }
+            if (detail) AppendClippedClearRect(renderer, precipitation, cx+x, cy+y, 1, 1);
+        }
+        // Opaque cloud pixels intentionally cover the lower sun/moon, leaving
+        // its upper arc visible. When this icon is shown, the time has no extra icon.
+        CmdClearRects(renderer, commandBuffer, daytime ? 1.0f : 0.74f,
+            daytime ? 0.78f : 0.88f, daytime ? 0.30f : 0.98f, 1, celestial);
+        CmdClearRects(renderer, commandBuffer, 0.75f, 0.82f, 0.87f, 1, cloud);
+        CmdClearRects(renderer, commandBuffer, 0.60f, 0.85f, 1.0f, 1, precipitation);
+    }
+
+    void DrawWorldClockPanel(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, const WorldClockSnapshot& clock, const WorldWeatherSnapshot& weather = {}, bool showTime = true)
+    {
+        const bool hasTime = showTime && clock.valid && clock.minuteOfDay >= 0 && clock.minuteOfDay < 1440;
+        const bool hasWeather = weather.valid && weather.kind <= 3;
+        if (!hasTime && !hasWeather) return;
+        const int extraWidth = hasTime && hasWeather ? 50 : hasWeather ? 12 : 0;
+        const int timeX = hasWeather ? cx - 72 : cx + 7;
         // A small bronze nameplate, with the compass frame's dark inset and cyan
         // jewels. Batch scanlines by colour, just like the existing map glyphs.
         auto plate = [&](int halfWidth, int halfHeight, float r, float g, float b) {
+            halfWidth += extraWidth;
             std::vector<VkClearRect> rows;
             rows.reserve(halfHeight * 2 + 1);
             for (int y = -halfHeight; y <= halfHeight; ++y)
@@ -7980,46 +8472,50 @@ namespace
         plate(71, 15, 0.23f, 0.17f, 0.09f);
         plate(69, 13, 0.76f, 0.59f, 0.32f);
         plate(68, 12, 0.032f, 0.042f, 0.043f);
-        CmdClearRimJewel(renderer, commandBuffer, cx - 72, cy);
-        CmdClearRimJewel(renderer, commandBuffer, cx + 72, cy);
+        CmdClearRimJewel(renderer, commandBuffer, cx - 72 - extraWidth, cy);
+        CmdClearRimJewel(renderer, commandBuffer, cx + 72 + extraWidth, cy);
 
-        static constexpr std::uint8_t digits[10][7] = {
-            {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14},
-            {14,17,1,2,4,8,31}, {30,1,1,14,1,1,30},
-            {2,6,10,18,31,2,2}, {31,16,16,30,1,1,30},
-            {14,16,16,30,17,17,14}, {31,1,2,4,8,8,8},
-            {14,17,17,14,17,17,14}, {14,17,17,15,1,1,14}
-        };
-        const int hours = clock.minuteOfDay / 60, minutes = clock.minuteOfDay % 60;
-        const int values[5] = {hours / 10, hours % 10, -1, minutes / 10, minutes % 10};
-        std::vector<VkClearRect> ink;
-        ink.reserve(150);
-        for (int i = 0; i < 5; ++i)
-            for (int y = 0; y < 7; ++y)
-                for (int x = 0; x < 5; ++x)
-                {
-                    const bool lit = values[i] < 0 ? (x == 2 && (y == 2 || y == 5)) :
-                        (digits[values[i]][y] & (1 << (4 - x))) != 0;
-                    if (lit) AppendClippedClearRect(renderer, ink, cx - 22 + i * 12 + x * 2,
-                        cy - 7 + y * 2, 2, 2);
-                }
-        CmdClearRects(renderer, commandBuffer, 0.96f, 0.89f, 0.69f, 1.0f, ink);
-
-        std::vector<VkClearRect> symbol;
-        for (int y = -9; y <= 9; ++y)
-            for (int x = -9; x <= 9; ++x)
+        if (hasTime)
+        {
+            static constexpr std::uint8_t digits[10][7] = {
+                {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14},
+                {14,17,1,2,4,8,31}, {30,1,1,14,1,1,30},
+                {2,6,10,18,31,2,2}, {31,16,16,30,1,1,30},
+                {14,16,16,30,17,17,14}, {31,1,2,4,8,8,8},
+                {14,17,17,14,17,17,14}, {14,17,17,15,1,1,14}
+            };
+            const int hours = clock.minuteOfDay / 60, minutes = clock.minuteOfDay % 60;
+            const int values[5] = {hours / 10, hours % 10, -1, minutes / 10, minutes % 10};
+            std::vector<VkClearRect> ink;
+            ink.reserve(150);
+            for (int i = 0; i < 5; ++i)
+                for (int y = 0; y < 7; ++y)
+                    for (int x = 0; x < 5; ++x)
+                    {
+                        const bool lit = values[i] < 0 ? (x == 2 && (y == 2 || y == 5)) :
+                            (digits[values[i]][y] & (1 << (4 - x))) != 0;
+                        if (lit) AppendClippedClearRect(renderer, ink, timeX - 29 + i * 12 + x * 2,
+                            cy - 7 + y * 2, 2, 2);
+                    }
+            CmdClearRects(renderer, commandBuffer, 0.96f, 0.89f, 0.69f, 1.0f, ink);
+            // Keep the day/night indicator when weather is hidden or unavailable.
+            // A visible weather icon already carries it, so never draw two.
+            if (!hasWeather)
+                DrawWeatherSymbol(renderer, commandBuffer, cx - 44, cy, WeatherKind::Clear, clock.daytime);
+        }
+        if (hasWeather)
+        {
+            const auto kind = static_cast<WeatherKind>(weather.kind);
+            if (hasTime)
             {
-                const int d = x * x + y * y;
-                // Eight rays around the sun; the moon is a crescent with a dark
-                // cutout, not a filled circle that obscures the panel inset.
-                const bool lit = clock.daytime
-                    ? d <= 20 || (d >= 45 && d <= 85 &&
-                        (std::abs(x) <= 1 || std::abs(y) <= 1 || std::abs(std::abs(x) - std::abs(y)) <= 1))
-                    : d <= 64 && (x - 4) * (x - 4) + (y + 3) * (y + 3) > 49;
-                if (lit) AppendClippedClearRect(renderer, symbol, cx - 44 + x, cy + y, 1, 1);
+                std::vector<VkClearRect> divider;
+                AppendClippedClearRect(renderer, divider, cx - 32, cy - 7, 1, 14);
+                CmdClearRects(renderer, commandBuffer, 0.38f, 0.30f, 0.17f, 1, divider);
             }
-        CmdClearRects(renderer, commandBuffer, clock.daytime ? 1.0f : 0.74f,
-            clock.daytime ? 0.78f : 0.88f, clock.daytime ? 0.30f : 0.98f, 1.0f, symbol);
+            const int weatherX = hasTime ? cx - 10 : cx - 58;
+            DrawWeatherSymbol(renderer, commandBuffer, weatherX, cy, kind, clock.daytime, clock.valid);
+            DrawWeatherLabel(renderer, commandBuffer, weatherX + 26, cy, kind);
+        }
     }
 
     void DrawMinimapWidget(VulkanMinimapRenderer& renderer, void* commandBuffer)
@@ -8032,11 +8528,19 @@ namespace
         const bool hasRasterFrame = HasLoadedMinimapFrame();
         const int frameExtra = MinimapRasterFrameExtra(radius);
         WorldClockSnapshot clock{};
-        const bool showClock = CopyWorldClock(clock, GetTickCount());
-        const int frameExtent = hasRasterFrame ? frameExtra : 26;
-        // Keep the whole footer on screen at bottom-right as well as top-right.
-        const int clockFooter = frameExtent + CLOCK_FRAME_GAP + 2 * CLOCK_PANEL_HALF_HEIGHT;
-        const int cy = ComputeMinimapCenterY(renderer.height, radius, marginY, showClock ? clockFooter : 0);
+        if (!CopyWorldClock(clock, GetTickCount(), false)) clock = {};
+        const bool showClock = g_showClock && clock.valid;
+        WorldWeatherSnapshot weather{};
+        if (!CopyWorldWeather(weather, GetTickCount())) weather = {};
+        const bool showPanel = showClock || weather.valid;
+        const int frameHalf = hasRasterFrame ? MinimapRasterVisibleHalfHeight(radius, frameExtra) : radius + 26;
+        const int frameYOffset = hasRasterFrame ? -MaxValue(1, (2 * (radius + frameExtra) + 128) / 256) : 0;
+        const int frameTopExtra = frameHalf - frameYOffset - radius;
+        const int frameBottomExtra = frameHalf + frameYOffset - radius;
+        // Use the visible ornament, not the padded texture, for clock spacing.
+        const int clockFooter = frameBottomExtra + CLOCK_FRAME_GAP + 2 * CLOCK_PANEL_HALF_HEIGHT;
+        const int cy = ComputeMinimapCenterY(renderer.height, radius, marginY,
+            showPanel ? clockFooter : frameBottomExtra, frameTopExtra);
         const int zoomStep = ClampValue(g_minimapZoomStep.load(), MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
         const float zoom = std::pow(1.32f, static_cast<float>(zoomStep));
         const float unitsPerPixel = MINIMAP_BASE_UNITS_PER_PIXEL / zoom;
@@ -8056,13 +8560,16 @@ namespace
         const float mapHeading = SmoothMapHeading(renderer, playerPosition.headingRadians, playerPosition.hasHeading, GetTickCount());
         if (!g_worldMapLayoutSupported || !g_showWorldMarkers.load())
             AppendVisibleStaticPoiPoints(points, nearbyMarkers, visibleMapMarkers, centerX, centerZ, unitsPerPixel * static_cast<float>(radius) * STATIC_POI_DRAW_RADIUS_FACTOR);
+        // Terrain and icons must use the same exploration snapshot this frame.
+        const auto fog = CaptureMinimapFogFrame();
+        FilterFoggedWorldPoints(points, fog);
         LimitMinimapWorldPoints(points, centerX, centerZ);
 
         const int frameMapRadius = hasRasterFrame ? MinimapRasterMapRadius(radius, frameExtra) : radius - 6;
         if (!hasRasterFrame)
             CmdClearCompassFrameBase(renderer, commandBuffer, cx, cy, radius);
 
-        DrawRealMap(renderer, commandBuffer, cx, cy, frameMapRadius, centerX, centerZ, unitsPerPixel, mapHeading);
+        DrawRealMap(renderer, commandBuffer, cx, cy, frameMapRadius, centerX, centerZ, unitsPerPixel, mapHeading, fog);
 
         if (hasRasterFrame)
         {
@@ -8074,26 +8581,17 @@ namespace
 
         const int pointProjectionRadius = hasRasterFrame ? frameMapRadius : radius;
         const int pointClipRadius = hasRasterFrame ? frameMapRadius : radius - 14;
-        for (const MinimapWorldPoint& point : points)
-        {
-            int px = cx;
-            int py = cy;
-            bool clipped = false;
-            ProjectWorldToMinimap(point.x, point.z, centerX, centerZ, unitsPerPixel, mapHeading, cx, cy, pointProjectionRadius, px, py, clipped);
-
-            if (clipped && point.kind != 11 && point.kind != 12 && point.kind != 13)
-                continue;
-            CmdClearPoiIcon(renderer, commandBuffer, cx, cy, pointClipRadius, px, py, point.kind, clipped);
-        }
+        DrawWorldPointIcons(renderer, commandBuffer, points, centerX, centerZ,
+            unitsPerPixel, mapHeading, cx, cy, pointProjectionRadius, pointClipRadius);
 
         DrawLiveMarkers(renderer, commandBuffer, waypoints, centerX, centerZ,
             unitsPerPixel, mapHeading, cx, cy, pointProjectionRadius);
 
         if (!TryDrawPremiumPlayerArrow(renderer, commandBuffer, cx, cy, radius))
             CmdClearPlayerArrow(renderer, commandBuffer, cx, cy, radius);
-        if (showClock)
+        if (showPanel)
             DrawWorldClockPanel(renderer, commandBuffer, cx,
-                cy + radius + frameExtent + CLOCK_FRAME_GAP + CLOCK_PANEL_HALF_HEIGHT, clock);
+                cy + radius + frameBottomExtra + CLOCK_FRAME_GAP + CLOCK_PANEL_HALF_HEIGHT, clock, weather, showClock);
     }
 
     bool RecordVulkanMinimapCommandLocked(std::uint32_t imageIndex)
@@ -8880,6 +9378,27 @@ namespace
                 ? "[Minimap] world clock layout verified (client 1076226)"
                 : "[Minimap] world clock unavailable for this client");
 
+            g_weatherLayoutSupported = namedClient && HasVerifiedWorldWeatherLayout();
+            if (g_weatherLayoutSupported)
+            {
+                g_weatherSampleHook = InstallWeatherSampleHook(0x29CBF8, 0x9AE790);
+                g_weatherLayoutSupported = g_weatherSampleHook != nullptr;
+            }
+            modContext->Log(g_weatherLayoutSupported
+                ? "[Minimap] local weather layout verified (client 1076226)"
+                : "[Minimap] weather unavailable for this client; time-only clock retained");
+
+            g_liveFogLayoutSupported = namedClient && HasVerifiedLiveFogLayout();
+            if (g_liveFogLayoutSupported)
+            {
+                g_fogUpdateHook = InstallVerifiedCallHook(0x2A3F84, 0x320E60, reinterpret_cast<uintptr_t>(&CaptureFogUpdate));
+                g_liveFogLayoutSupported = g_fogUpdateHook != nullptr;
+                if (g_fogUpdateHook) g_updateFog = reinterpret_cast<UpdateFogFn>(g_exeBase + 0x320E60);
+            }
+            modContext->Log(g_liveFogLayoutSupported
+                ? "[Minimap] live fog-of-war layout verified (client 1076226)"
+                : "[Minimap] exploration unavailable; fog stays opaque while show_fog_of_war is enabled");
+
             g_worldMapLayoutSupported = namedClient && HasVerifiedWorldMapLayout();
             g_deathMarkerLayoutSupported = g_worldMapLayoutSupported && HasVerifiedDeathMarkerLayout();
             if (g_worldMapLayoutSupported)
@@ -8929,6 +9448,12 @@ namespace
 
         void Unload(ModContext* modContext) override
         {
+            g_liveFogLayoutSupported = false;
+            DestroyCallSiteHook(g_fogUpdateHook);
+            g_updateFog = nullptr;
+            g_weatherLayoutSupported = false;
+            DestroyCallSiteHook(g_weatherSampleHook);
+            g_sampleWeather = nullptr;
             g_clockLayoutSupported = false;
             if (g_daytimeUiHook != nullptr)
             {
@@ -9059,6 +9584,10 @@ namespace
             ActivateHook(g_playerUiDataHook);
             ActivateHook(g_clearMapMarkersHook);
             ActivateHook(g_daytimeUiHook);
+            ActivateHook(g_weatherSampleHook);
+            ActivateHook(g_fogUpdateHook);
+            if (g_weatherSampleHook || g_fogUpdateHook)
+                FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
             const bool uiOk = ActivateHook(g_localPlayerUiRenderSetupHook);
             const bool waypointOk = ActivateHook(g_playerWaypointsUiHook);
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
@@ -9074,6 +9603,8 @@ namespace
                 << " | remote_player_hook=" << HookActivationState(g_playerUiDataHook)
                 << " | world_map_hook=" << HookActivationState(g_clearMapMarkersHook)
                 << " | world_clock_hook=" << HookActivationState(g_daytimeUiHook)
+                << " | weather_hook=" << HookActivationState(g_weatherSampleHook)
+                << " | fog_hook=" << HookActivationState(g_fogUpdateHook)
                 << " | ui_hook=" << HookActivationState(g_localPlayerUiRenderSetupHook)
                 << " | waypoint_hook=" << HookActivationState(g_playerWaypointsUiHook)
                 << " | marker_visibility_hook=" << HookActivationState(g_mapMarkerVisibilityHook)
@@ -9085,6 +9616,16 @@ namespace
 
         void Deactivate(ModContext* modContext) override
         {
+            if (g_fogUpdateHook != nullptr)
+            {
+                g_fogUpdateHook->deactivate();
+                FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+            }
+            if (g_weatherSampleHook != nullptr)
+            {
+                g_weatherSampleHook->deactivate();
+                FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+            }
             if (g_daytimeUiHook != nullptr)
                 g_daytimeUiHook->deactivate();
             if (g_clearMapMarkersHook != nullptr)

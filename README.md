@@ -1,7 +1,7 @@
 # Enshrouded Minimap - Community Edition
 
 Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
-Version **0.5.2** includes the camera/graphics fixes from upstream
+Version **0.5.3** includes the camera/graphics fixes from upstream
 [PR #5](https://github.com/elxokker/Enshrouded-minimap/pull/5) and the player,
 ping, waypoint, death-marker and world-map additions from
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
@@ -18,7 +18,9 @@ draws the minimap directly inside the Enshrouded frame.
 ## What It Does
 
 - Shows a circular minimap on the right side of the screen.
-- Displays world time below the map, with sun and moon icons.
+- Displays world time and local weather in a matching frame below the map.
+- Covers unexplored terrain and original location icons with live fog of war, enabled by default.
+- Keeps navigation markers visible through fog, including custom pins and placed Flame Altars.
 - Defaults to the bottom-right corner and supports top-right, middle-right,
   and bottom-right placement.
 - Uses a premium compass-style frame asset.
@@ -49,11 +51,11 @@ The numpad `+`, `-`, and `*` keys also work.
 
 Download the latest zip from the release page:
 
-[Community Edition v0.5.2](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.2)
+[Community Edition v0.5.3](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.3)
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.2.zip`
+`enshrouded-minimap-community-v0.5.3.zip`
 
 Requires Windows x64 Enshrouded,
 [Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
@@ -64,7 +66,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.2.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.3.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
@@ -110,6 +112,9 @@ Set `mods.minimap_mod.position` to one of these values:
 - `middle-right`
 - `bottom-right`
 
+Top-right placement leaves room above the frame for the quest title and Journal
+prompt. The clock overlaps the lower ornament slightly and stays fixed as the map rotates.
+
 Example:
 
 ```json
@@ -127,6 +132,8 @@ Example:
       "show_world_markers": true,
       "show_death_markers": true,
       "show_clock": true,
+      "show_weather": true,
+      "show_fog_of_war": true,
       "map_light": 55,
       "icon_style": "original",
       "heading_smoothing_ms": 55,
@@ -152,12 +159,40 @@ If the minimap is not loaded yet, start or restart the game after changing it.
 ## World clock
 
 The clock appears below the minimap in a bronze frame with matching cyan jewels.
-It displays the world's time in 24-hour `HH:MM` format, with a sun during daylight
-and a crescent moon at night. It follows the game's time, including sleep and
+It displays the world's time in 24-hour `HH:MM` format. It follows the game's
+time, including sleep and
 server time changes. `mods.minimap_mod.show_clock` defaults to `true`; set it to
-`false` to hide the clock while keeping the minimap. Changes apply while playing.
-The clock is included in version 0.5.2.
+`false` to hide the time while keeping the minimap. Weather has its own switch. Changes apply while playing.
+Version 0.5.3 adds live weather and fog of war. The weather panel uses
+one combined day/night weather icon and a label for Clear, Rain, Snow or
+Blizzard. Clear skies show a sun or moon; precipitation puts a cloud with rain,
+snow or blowing snow in front of it. When weather is visible, the time has no separate sun/moon icon. With weather
+hidden or unavailable, the day/night icon returns beside the clock. It reads the game's ambient weather mix, so transitions can blend
+before the displayed label changes. `show_weather` defaults to `true`; set it
+to `false` for the compact time-only panel. Set `show_clock` to `false` and leave
+`show_weather` enabled for weather alone. Set both to `false` to hide the panel.
+Unavailable or stale data hides only the affected feature.
 See [clock implementation and testing](docs/world-clock.md).
+
+## Fog of war
+
+`mods.minimap_mod.show_fog_of_war` defaults to `true`. Unexplored terrain is
+covered using the local player's live exploration grid, with soft edges as
+areas are revealed. Set it to `false` to see the full terrain again; changes
+apply while playing. No personal exploration save is bundled or required.
+
+If live exploration is unavailable, terrain stays covered until a valid grid
+arrives or the option is disabled. Original world locations, NPCs, shrines,
+towers and dungeons are hidden until their position is explored. Player arrows,
+pings, custom pins, player-placed Flame Altars, waypoints, tombstones and quest
+markers remain visible through fog. Turning fog off restores the normal location
+icons too.
+
+Custom pins on an existing marker keep that marker's original icon and add a
+transparent red diamond outline. Pins on empty terrain remain red flags. Both
+remain visible through fog, and removing a pin removes its outline.
+
+See [live fog implementation and testing](docs/live-fog-weather.md).
 
 ## Live markers and world-map display
 
@@ -263,7 +298,7 @@ installation steps above; building and packaging do not modify the game.
 
 ## Version
 
-Current community mod version: `0.5.2`.
+Current community mod version: `0.5.3`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.
