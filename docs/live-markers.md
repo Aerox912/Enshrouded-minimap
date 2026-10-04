@@ -1,14 +1,15 @@
 # Live minimap markers
 
-This feature is on `feature/multiplayer-player-markers`, based on the tested
-camera and Vulkan fixes at `b511739`. It adds client-only capture and drawing;
+This feature is on `feature/multiplayer-player-markers`, based on the
+camera and Vulkan fixes in PR #5. It adds client-only capture and drawing;
 no server component or network protocol is changed. Other-player markers,
 pings and waypoints were confirmed working in user gameplay testing on
 2026-10-03.
 
 The subsequent world-map display and graphics extensions are described in
-[PR #4 feature coverage](pr4-feature-parity.md). They require new gameplay
-validation; the confirmation above applies to the earlier marker build.
+[PR #4 feature coverage](pr4-feature-parity.md). The user confirmed the combined
+build was working on 2026-10-04 after selecting the original location-icon style,
+and requested that both PRs be marked ready for review.
 
 ## Display and configuration
 
@@ -85,9 +86,11 @@ Camera and renderer regression tests remain separate.
 
 On 2026-10-03, the user confirmed that multiplayer markers, pings and waypoints
 had been tested and were working. This includes the revised waypoint reader.
-Extended-session stability has not been separately confirmed. The following
-checklist is retained for regression testing; the confirmation does not record
-individual results for every scenario below.
+On 2026-10-04, the deployed combined build from `0ab0ffd` was also reported
+working with `icon_style: "original"`. That style is now the default, with gold
+frames remaining opt-in. Extended-session stability has not been separately
+confirmed. The following checklist is retained for regression testing; these
+confirmations do not record individual results for every scenario below.
 
 1. Join a world with a friend. Walk and turn independently; compare their green
    arrow with their position on the full map. Check nearby, far away, after fast
@@ -104,4 +107,5 @@ individual results for every scenario below.
    alt-tab/display sleep and return. Synthetic checks do not prove live stability.
 
 Install or roll back a test DLL only with Enshrouded fully closed. Keep the tested
-DLL available for rollback; the existing ready PR does not contain this branch.
+DLL available for rollback. PR #5 contains the shared camera and Vulkan fixes;
+the marker and display additions are in PR #6.

@@ -1295,7 +1295,7 @@ namespace
     std::atomic<int> g_minimapMapSampleStep{ MINIMAP_DEFAULT_MAP_SAMPLE_STEP };
     std::atomic<int> g_minimapMapLight{ 55 };
     std::atomic<int> g_headingSmoothingMs{ 55 };
-    std::atomic<bool> g_worldMapIconStyle{ true };
+    std::atomic<bool> g_worldMapIconStyle{ false };
     std::atomic<bool> g_showWorldMarkers{ true };
     std::atomic<int> g_minimapMaxDrawnPoints{ MINIMAP_DEFAULT_MAX_DRAWN_POINTS };
     DWORD g_lastConfigPollTick = 0;
@@ -1613,7 +1613,7 @@ namespace
         }
 
         std::string configuredMapLight = "55", configuredSmoothing = "55", ignoredSource;
-        std::string configuredIconStyle = "world-map";
+        std::string configuredIconStyle = "original";
         const auto readOption = [&](const char* key, std::string& value) {
             if (!TryReadMinimapConfigStringFromFile(modContext, key, value, ignoredSource) &&
                 modContext != nullptr && modContext->config.GetString)

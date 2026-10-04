@@ -15,7 +15,7 @@ against the installed Steam executable before use.
 | Custom map pins | PR #6 copies the custom-pin list and displays red flags |
 | Other players and pings | Existing green player arrows and ping diamonds, retained |
 | Selected waypoint | Existing hollow yellow outline, retained instead of replacing the underlying icon with a flag |
-| Brighter terrain and icon styling | Configurable parchment lighting, gold diamond frames and dark atlas glyphs |
+| Brighter terrain and icon styling | Configurable parchment lighting, original atlas icons by default, optional gold diamond frames and dark glyphs |
 | Zoom and rotation polish | Zoom steps -3 through +7; configurable frame-time heading smoothing |
 | Map-edge clutter | Ordinary distant POIs are omitted; custom pins, NPCs, players, pings and the selected waypoint can remain at the edge |
 | Diagnostics | Existing tracking/render diagnostics plus throttled snapshot counts and unknown atlas keys behind `debug_logging` |
@@ -35,7 +35,7 @@ These settings belong under `mods.minimap_mod` and refresh every second:
 | --- | --- | --- |
 | `show_world_markers` | `true` | Use the world-map and custom-pin snapshots; `false` restores the previous POI path |
 | `map_light` | `55` | Integer 0-100; 0 restores the original dark terrain treatment |
-| `icon_style` | `"world-map"` | Gold frames and dark glyphs; `"original"` restores the source atlas colors |
+| `icon_style` | `"original"` | Source atlas icons and colors; `"world-map"` enables gold frames and dark glyphs |
 | `heading_smoothing_ms` | `55` | Integer 0-250; 0 follows the camera immediately |
 
 The existing `show_other_players`, `show_pings`, and `show_waypoints` settings
@@ -81,10 +81,18 @@ actual atlas glyphs and circle clipping. The optional executable check maps byte
 into a local test buffer; it neither starts nor modifies the game. A modified
 stride or clear-array instruction must fail the production layout gate.
 
-The graphics and display extensions dated 2026-10-04 are not covered by the
-earlier successful multiplayer-marker gameplay test. Before marking the updated
-PRs ready, compare altars, NPCs and custom pins against the full map; add/remove a
-pin; recheck players, pings and the selected-icon waypoint; exercise all zoom
-levels and live display options; then test world re-entry, resolution changes,
-alt-tab/display sleep and an extended session. Automated checks and CPU previews
-do not establish real-GPU stability or an FPS improvement.
+On 2026-10-04, the user confirmed the deployed combined build from
+`0ab0ffd2a5a28a044b8cbcc5ca76c461979e429f` was working and requested both PRs be
+marked ready for review. The tested DLL SHA256 is
+`A20012F47AE3C3D082C9760186BC78578DC40820503A21C6DD95B6A9C5C0A8CA`.
+The confirmation followed selecting `icon_style: "original"`; that setting is
+now the default in code and the manifest, with gold frames remaining opt-in.
+The change makes the reported configuration the default without changing either
+renderer style. The acceptance applies to that deployed build and configuration.
+
+For future regression testing, compare altars, NPCs and custom pins against the
+full map; add/remove a pin; recheck players, pings and the selected-icon waypoint;
+exercise all zoom levels and live display options; then test world re-entry,
+resolution changes, alt-tab/display sleep and an extended session. Individual
+results for those scenarios were not separately recorded. Automated checks and
+CPU previews do not establish real-GPU stability or an FPS improvement.

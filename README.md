@@ -121,8 +121,10 @@ The `feature/multiplayer-player-markers` branch adds client-side markers for
 Steam client data revision 1076226. These changes are not in the release zip above.
 Other-player markers, pings and waypoints were confirmed working in user
 gameplay testing on 2026-10-03.
-The 2026-10-04 world-map display and graphics extensions still need in-game
-validation; that earlier confirmation does not cover them.
+The combined world-map display and graphics build was confirmed working in
+user gameplay testing on 2026-10-04, with original location icons selected.
+Both PRs are ready for review following that confirmation; individual
+extended-session and display-change results were not separately recorded.
 
 - Other players use the local player's arrow artwork tinted green, sampled up
   to ten times per second. Arrows follow their facing direction relative to the map.
@@ -146,10 +148,11 @@ See [live marker validation](docs/live-markers.md) for layout evidence and the
 in-game regression checklist.
 
 The branch also mirrors world-map POIs, altars, NPC markers and custom pins,
-adds parchment lighting and gold-framed icons, supports zoom up to +7, and
+adds parchment lighting and optional gold-framed icons, supports zoom up to +7, and
 offers configurable rotation smoothing. Ordinary distant POIs no longer crowd
 the map edge. These additions retain the green player/ping markers and the
-hollow yellow selected-waypoint outline.
+hollow yellow selected-waypoint outline. Location icons use the original atlas
+style by default; set `icon_style` to `"world-map"` to enable gold frames.
 
 See [display settings and PR #4 feature coverage](docs/pr4-feature-parity.md)
 for `map_light`, `icon_style`, `heading_smoothing_ms`, `show_world_markers`,

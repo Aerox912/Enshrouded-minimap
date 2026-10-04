@@ -162,13 +162,13 @@ int main(int argc, char** argv)
     config.config.GetString = [](const char*, const char* key, std::string fallback) {
         if (std::strcmp(key, "map_light") == 0) return std::string("150");
         if (std::strcmp(key, "heading_smoothing_ms") == 0) return std::string("0");
-        if (std::strcmp(key, "icon_style") == 0) return std::string("original");
+        if (std::strcmp(key, "icon_style") == 0) return std::string("world-map");
         if (std::strcmp(key, "show_world_markers") == 0) return std::string("false");
         return fallback;
     };
     RefreshMinimapConfig(&config);
-    Check(g_minimapMapLight == 100 && g_headingSmoothingMs == 0 && !g_worldMapIconStyle && !g_showWorldMarkers,
-        "runtime config applies display options and clamps numeric ranges");
+    Check(g_minimapMapLight == 100 && g_headingSmoothingMs == 0 && g_worldMapIconStyle && !g_showWorldMarkers,
+        "runtime config enables gold icons and applies bounded display options");
     Check(g_showOtherPlayers && g_showPings && g_showWaypoints, "world-map option preserves independent live-marker settings");
     config.config.GetString = [](const char*, const char* key, std::string fallback) {
         return std::strcmp(key, "heading_smoothing_ms") == 0 ? std::string("-1") : fallback;
@@ -180,8 +180,8 @@ int main(int argc, char** argv)
     Check(ParseConfigInteger("999999999999999999999", 55, 0, 100) == 100 && ParseConfigInteger(" 0 ", 55, 0, 100) == 0,
         "numeric config handles large values and surrounding whitespace");
     RefreshMinimapConfig(nullptr);
-    Check(g_minimapMapLight == 55 && g_headingSmoothingMs == 55 && g_worldMapIconStyle && g_showWorldMarkers,
-        "default display settings can be restored without reinstalling");
+    Check(g_minimapMapLight == 55 && g_headingSmoothingMs == 55 && !g_worldMapIconStyle && g_showWorldMarkers,
+        "original icons and default display settings are restored without reinstalling");
 
     float r = 0.2f, g = 0.3f, b = 0.4f;
     ApplyMapLighting(r, g, b, 0.0f, 0);
