@@ -29,7 +29,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExceptionHandling>Async</ExceptionHandling>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\include;$(MSBuildProjectDirectory)\..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>

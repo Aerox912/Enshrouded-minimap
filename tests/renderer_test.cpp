@@ -11,8 +11,10 @@ namespace
         bool signaled[2] = { true, true };
         bool invalidReset = false, invalidSubmit = false, idle = false, destroyedBeforeIdle = false;
         int commandResets = 0, fenceResets = 0, submissions = 0, destroyedFences = 0;
+        bool recordFault = false, submitFault = false, faultScopeUnwound = false;
         std::int32_t statusResult = 0, commandResetResult = 0, beginResult = 0, endResult = 0, fenceResetResult = 0, submitResult = 0;
     } gpu;
+    struct FaultScope { ~FaultScope() { gpu.faultScopeUnwound = true; } };
     const void* gameSemaphore = reinterpret_cast<void*>(0x500);
     VkPresentInfoKHR present{}, adjusted{};
     const void* adjustedSemaphore = nullptr;
@@ -54,7 +56,9 @@ namespace
         };
         g_renderer.fns.beginCommandBuffer = [](void*, const VkCommandBufferBeginInfo*) -> std::int32_t { return gpu.beginResult; };
         g_renderer.fns.endCommandBuffer = [](void*) -> std::int32_t { return gpu.endResult; };
-        g_renderer.fns.cmdBeginRenderPass = [](void*, const VkRenderPassBeginInfo*, std::uint32_t) {};
+        g_renderer.fns.cmdBeginRenderPass = [](void*, const VkRenderPassBeginInfo*, std::uint32_t) {
+            if (gpu.recordFault) { FaultScope scope; RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr); }
+        };
         g_renderer.fns.cmdEndRenderPass = [](void*) {};
         g_renderer.fns.resetFences = [](void*, std::uint32_t count, void* const* fences) -> std::int32_t {
             ++gpu.fenceResets;
@@ -65,6 +69,7 @@ namespace
         };
         g_renderer.fns.queueSubmit = [](void*, std::uint32_t count, const VkSubmitInfo* info, void* fence) -> std::int32_t {
             ++gpu.submissions;
+            if (gpu.submitFault) { FaultScope scope; RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr); }
             const auto index = reinterpret_cast<uintptr_t>(fence) - 0x300;
             if (index >= 2) { gpu.invalidSubmit = true; return TEST_ERROR; }
             gpu.invalidSubmit |= count != 1 || gpu.signaled[index] || gpu.pending[index] ||
@@ -103,6 +108,33 @@ namespace
 
 int main()
 {
+    // Same handle and extent do not establish that cached image views are valid.
+    Setup();
+    SwapchainRuntimeInfo snapshot{};
+    snapshot.device = g_renderer.device;
+    snapshot.handle = g_renderer.swapchain = 0x900;
+    snapshot.width = g_renderer.width = 1920;
+    snapshot.height = g_renderer.height = 1080;
+    snapshot.format = g_renderer.format = 37;
+    snapshot.images = g_renderer.images = { 0x910, 0x911 };
+    snapshot.generation = g_renderer.swapchainGeneration = 1;
+    Check(BuildVulkanMinimapRendererLocked(snapshot), "unchanged swapchain reuses the renderer");
+    snapshot.images[0] = 0x912;
+    Check(!RendererMatchesSwapchain(g_renderer, snapshot, 1920, 1080, 37), "changed image handles invalidate same-handle renderer");
+    snapshot.images.clear();
+    Check(RendererMatchesSwapchain(g_renderer, snapshot, 1920, 1080, 37), "missing image list alone does not rebuild each frame");
+    ++snapshot.generation;
+    Check(!RendererMatchesSwapchain(g_renderer, snapshot, 1920, 1080, 37), "known recreation invalidates renderer before image list arrives");
+    VkSwapchainCreateInfoKHR create{};
+    create.imageFormat = 37;
+    create.imageExtent = { 1920, 1080 };
+    RememberSwapchainCreate(reinterpret_cast<void*>(1), &create, reinterpret_cast<void*>(0x900), VK_SUCCESS);
+    SwapchainRuntimeInfo first{}, second{};
+    TryGetSwapchainSnapshot(0x900, first);
+    RememberSwapchainCreate(reinterpret_cast<void*>(1), &create, reinterpret_cast<void*>(0x900), VK_SUCCESS);
+    TryGetSwapchainSnapshot(0x900, second);
+    Check(second.generation > first.generation && second.images.empty(), "same-handle creations have distinct generations");
+
     Setup();
     Check(Submit() && !gpu.invalidSubmit && !gpu.invalidReset && gpu.pending[0], "first frame submits with its completion fence");
     Check(adjusted.waitSemaphoreCount == 1 && adjusted.pWaitSemaphores == &adjustedSemaphore &&
@@ -160,6 +192,17 @@ int main()
         "failed submission does not make presentation wait on an unsignaled overlay semaphore");
     gpu.submitResult = VK_SUCCESS;
     Check(!Submit() && gpu.submissions == 1 && gpu.commandResets == 1, "failed submission is not retried with uncertain state");
+    Setup();
+    gpu.recordFault = true;
+    Check(!Submit() && g_renderer.submissionFailed && gpu.faultScopeUnwound &&
+        gpu.fenceResets == 0 && gpu.submissions == 0 && adjusted.waitSemaphoreCount == 7,
+        "recording access violation unwinds scopes and stops drawing without changing presentation");
+    Setup();
+    gpu.submitFault = true;
+    Check(!Submit() && g_renderer.submissionFailed && gpu.faultScopeUnwound && adjusted.waitSemaphoreCount == 7,
+        "submit access violation unwinds scopes and preserves original presentation waits");
+    gpu.submitFault = false;
+    Check(!Submit() && gpu.submissions == 1, "driver access violation is not retried on the same renderer");
     Setup();
     g_renderer.submissionFences = { 0x300, 0 };
     g_renderer.submissionFailed = true;

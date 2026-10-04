@@ -88,3 +88,23 @@ does not itself prove that presentation has consumed a semaphore, as described i
 
 Long-session stability of this synchronization change remains unverified. The
 earlier runtime acceptance above applies to camera tracking only.
+
+## Swapchain recreation and driver faults
+
+The 2026-10-04 extension covers the recreated-swapchain issue identified in
+[PR #4](https://github.com/elxokker/Enshrouded-minimap/pull/4). Renderer reuse now
+requires matching image handles when available and the same tracked creation
+generation, even when the swapchain handle and dimensions are reused. A missing
+image list alone does not trigger continuous rebuilding.
+
+Access violations while recording or submitting stop overlay submissions until
+the renderer is rebuilt, preserving the game's original presentation waits.
+The code does not retry a faulting driver every frame. The production translation
+unit and tests use `/EHa` so C++ scopes, including mutex guards, unwind before
+the narrow access-violation handler runs. Other exceptions are not swallowed.
+
+Release/x64 validation with MSVC v143 passed all 27 renderer and 17 tracking
+checks. These include handle reuse, creation generations, delayed completion,
+access-violation containment and scope unwinding. The graphics additions still
+need live scene-change, resolution-change and extended-session checks; the
+earlier gameplay confirmation does not cover this extension.
