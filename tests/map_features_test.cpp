@@ -12,7 +12,7 @@ namespace
     template<class T> void Put(void* data, std::size_t offset, T value)
     { std::memcpy(static_cast<std::uint8_t*>(data) + offset, &value, sizeof(value)); }
     std::int64_t Fixed(int value) { return static_cast<std::int64_t>(value) * 4294967296LL; }
-    std::vector<std::uint8_t> state(CUSTOM_MAP_ARRAY_OFFSET + 32);
+    std::vector<std::uint8_t> state(DEATH_MAP_ARRAY_OFFSET + 32);
     std::array<std::uint8_t, WORLD_MAP_MARKER_STRIDE * 5> world{};
     std::array<std::uint8_t, WORLD_MAP_MARKER_STRIDE> custom{};
     void Entry(void* data, std::size_t index, int x, int z, std::uint32_t key)
@@ -56,6 +56,88 @@ namespace
         }
         Check(out.good(), "CPU preview written");
     }
+    void CheckDeaths(VulkanMinimapRenderer& renderer)
+    {
+        std::array<std::uint8_t, WORLD_MAP_MARKER_STRIDE * 3> deaths{};
+        const uintptr_t ui = reinterpret_cast<uintptr_t>(state.data());
+        const DWORD now = GetTickCount();
+        Entry(deaths.data(), 0, 1020, 1000, 0x1AD8F96E);
+        Entry(deaths.data(), 1, 1000, 1040, 0x1AD8F96E);
+        Entry(deaths.data(), 2, -10000, 1000, 0x1AD8F96E);
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET, reinterpret_cast<uintptr_t>(deaths.data()));
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{3});
+        g_deathMarkerLayoutSupported = g_worldMapLayoutSupported = true;
+        CaptureWorldMapMarkers(ui, now);
+        Check(CopyDeathMarkers(now).size() == 2, "multiple tombstones are captured; invalid coordinates are omitted");
+        Check(CopyWorldMapMarkers(now).size() == 1, "death capture preserves existing POIs");
+        Check(CopyDeathMarkers(now + 2001).empty(), "interrupted tombstone feed expires");
+        CaptureWorldMapMarkers(ui, 0xFFFFFFF0u);
+        Check(CopyDeathMarkers(0x10).size() == 2, "tombstone freshness survives tick wrap");
+        Entry(deaths.data(), 0, 1050, 1000, 0x1AD8F96E);
+        CaptureWorldMapMarkers(ui, now);
+        Check(CopyDeathMarkers(now)[0].x == Fixed(1050), "tombstone positions update from each completed snapshot");
+        g_showDeathMarkers = false;
+        Check(CopyDeathMarkers(now).empty(), "death visibility toggle hides existing tombstones");
+        g_showDeathMarkers = true;
+        Check(CopyDeathMarkers(now).size() == 2, "death visibility toggle restores the current snapshot");
+
+        // Exercise the real draw path: ordinary POI limits and visibility cannot
+        // suppress deaths; even coincident tombstones remain separate records.
+        Entry(deaths.data(), 1, 1050, 1000, 0x1AD8F96E);
+        CaptureWorldMapMarkers(ui, GetTickCount());
+        g_showWorldMarkers = false; g_minimapMaxDrawnPoints = 8;
+        std::memset(pixels, 0, sizeof(pixels)); clears = 0;
+        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
+        Check(clears == 4 && pixels[155][210].r > 0.9f, "death layer renders skulls independently of POI visibility, limits and deduplication");
+        Check(pixels[159][207].r < 0.1f, "skull fallback keeps dark eye sockets");
+        g_showDeathMarkers = false; clears = 0;
+        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
+        Check(clears == 0, "disabled death layer issues no draw commands");
+        g_showDeathMarkers = true; g_showWorldMarkers = true;
+        g_minimapMaxDrawnPoints = MINIMAP_DEFAULT_MAX_DRAWN_POINTS;
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{1});
+        Entry(deaths.data(), 0, 9000, 1000, 0x1AD8F96E);
+        CaptureWorldMapMarkers(ui, GetTickCount());
+        for (float heading : {0.0f, 1.5707963f, 3.1415926f, 4.7123889f})
+        {
+            for (float zoom : {0.5f, 12.0f})
+            {
+                std::memset(pixels, 0, sizeof(pixels)); clears = 0;
+                DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, zoom, heading, 160, 160, 130);
+                bool outside = false;
+                for (int y=0; y<320; ++y) for (int x=0; x<512; ++x)
+                    if ((x-160)*(x-160)+(y-160)*(y-160)>130*130 && pixels[y][x].r != 0) outside=true;
+                Check(clears == 2 && !outside, "distant skull remains inside the rim through rotation and zoom");
+            }
+        }
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{0});
+        CaptureWorldMapMarkers(ui, now);
+        Check(CopyDeathMarkers(now).empty(), "recovering the final tombstone removes its marker");
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{1});
+        CaptureWorldMapMarkers(ui, now);
+        Check(CopyDeathMarkers(now).size() == 1, "a later death creates a fresh marker");
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{DEATH_MAP_MAX_ENTRIES + 1});
+        CaptureWorldMapMarkers(ui, now);
+        Check(CopyDeathMarkers(now).empty() && CopyWorldMapMarkers(now).size() == 1,
+            "oversized death array clears only deaths and preserves POIs");
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{1});
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET, uintptr_t{1});
+        CaptureWorldMapMarkers(ui, now);
+        Check(CopyDeathMarkers(now).empty() && CopyWorldMapMarkers(now).size() == 1,
+            "unreadable death array clears only deaths and preserves POIs");
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET, reinterpret_cast<uintptr_t>(deaths.data()));
+        CaptureWorldMapMarkers(ui, now);
+        ClearLiveMarkers();
+        Check(CopyDeathMarkers(now).empty(), "world exit clears tombstones");
+        g_deathMarkerLayoutSupported = false;
+        CaptureWorldMapMarkers(ui, now);
+        Check(CopyDeathMarkers(now).empty() && CopyWorldMapMarkers(now).size() == 1,
+            "unsupported death layout leaves existing POI capture working");
+        Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{0});
+        ClearLiveMarkers();
+        g_deathMarkerLayoutSupported = true;
+    }
+
     void CheckClientLayout(const char* path)
     {
         std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -88,6 +170,14 @@ namespace
             }
         g_iterInit = reinterpret_cast<IterInitFn>(g_exeBase + 0x8DA7C0);
         Check(HasVerifiedWorldMapLayout(), "production layout gate matches installed Steam executable");
+        Check(HasVerifiedDeathMarkerLayout(), "death layout gate matches the installed Steam executable");
+        for (auto rva : {0x29DE49, 0x2A9D8F, 0x2A9DB0, 0x29C3F3})
+        {
+            image[rva] ^= 1;
+            Check(!HasVerifiedDeathMarkerLayout() && HasVerifiedWorldMapLayout(),
+                "changed tombstone layout disables deaths without disabling POIs");
+            image[rva] ^= 1;
+        }
         image[0x2A0D34] ^= 1;
         Check(!HasVerifiedWorldMapLayout(), "changed marker stride disables the reader");
         image[0x2A0D34] ^= 1; image[0x29DE3B] ^= 1;
@@ -163,12 +253,14 @@ int main(int argc, char** argv)
         if (std::strcmp(key, "map_light") == 0) return std::string("150");
         if (std::strcmp(key, "heading_smoothing_ms") == 0) return std::string("0");
         if (std::strcmp(key, "icon_style") == 0) return std::string("world-map");
+        if (std::strcmp(key, "show_death_markers") == 0) return std::string("false");
         if (std::strcmp(key, "show_world_markers") == 0) return std::string("false");
         return fallback;
     };
     RefreshMinimapConfig(&config);
     Check(g_minimapMapLight == 100 && g_headingSmoothingMs == 0 && g_worldMapIconStyle && !g_showWorldMarkers,
         "runtime config enables gold icons and applies bounded display options");
+    Check(!g_showDeathMarkers, "runtime config hides death markers");
     Check(g_showOtherPlayers && g_showPings && g_showWaypoints, "world-map option preserves independent live-marker settings");
     config.config.GetString = [](const char*, const char* key, std::string fallback) {
         return std::strcmp(key, "heading_smoothing_ms") == 0 ? std::string("-1") : fallback;
@@ -183,6 +275,8 @@ int main(int argc, char** argv)
     Check(g_minimapMapLight == 55 && g_headingSmoothingMs == 55 && !g_worldMapIconStyle && g_showWorldMarkers,
         "original icons and default display settings are restored without reinstalling");
 
+    Check(g_showDeathMarkers, "death markers default to enabled without configuration");
+
     float r = 0.2f, g = 0.3f, b = 0.4f;
     ApplyMapLighting(r, g, b, 0.0f, 0);
     Check(std::fabs(r - 0.208f) < 0.0001f && std::fabs(b - 0.412f) < 0.0001f, "zero lighting retains original terrain treatment");
@@ -193,6 +287,7 @@ int main(int argc, char** argv)
     Check(r <= 1 && g <= 1 && b <= 1 && r > b, "lighting clamps input and warms the edge");
     VulkanMinimapRenderer renderer{};
     renderer.width = 512; renderer.height = 320; renderer.fns.cmdClearAttachments = Raster;
+    CheckDeaths(renderer);
     Check(SmoothMapHeading(renderer, 3.1f, true, 100) == 3.1f, "first heading is immediate");
     Check(std::abs(SmoothMapHeading(renderer, -3.1f, true, 116)) > 3, "heading smoothing crosses the short arc at north");
     Check(SmoothMapHeading(renderer, 1, true, 2000) == 1, "stale heading resets after a pause");
@@ -239,6 +334,7 @@ int main(int argc, char** argv)
         CmdClearPoiIcon(renderer, nullptr, 160, 160, 130, 120, 195, 11, false);
         CmdClearPoiIcon(renderer, nullptr, 160, 160, 130, 195, 195, 12, false);
         DrawWaypointDiamond(renderer, nullptr, 160, 160); DrawPingDiamond(renderer, nullptr, 195, 90);
+        DrawDeathMarker(renderer, nullptr, 160, 160, 130, 85, 185, 0x1AD8F96E);
         WritePreview(argv[2]);
     }
     return 0;

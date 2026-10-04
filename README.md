@@ -15,6 +15,13 @@ draws the minimap directly inside the Enshrouded frame.
 - Shows the player's position and facing direction.
 - Uses real map marker icons extracted from the game's map UI.
 - Shows nearby points of interest that are visible or detected by the map.
+- Shows other players as green arrows, pings as green diamonds, and your
+  selected waypoint as a hollow yellow outline.
+- Mirrors world-map locations, altars, NPC markers and custom pins.
+- Development build: shows tombstones as skull markers, including friends'
+  tombstones supplied by the client. See [death marker testing](docs/death-markers.md).
+- Uses original location icons by default, with optional gold frames,
+  adjustable terrain lighting and heading smoothing.
 - Uses fog-of-war and POI data as a fallback when the game does not expose all
   live markers.
 - Renders inside the game's Vulkan frame without a separate overlay window.
@@ -96,6 +103,11 @@ Example:
       "show_other_players": true,
       "show_pings": true,
       "show_waypoints": true,
+      "show_world_markers": true,
+      "show_death_markers": true,
+      "map_light": 55,
+      "icon_style": "original",
+      "heading_smoothing_ms": 55,
       "map_sample_step": 2,
       "max_icons": 64
     }
@@ -143,6 +155,13 @@ are clamped to its rim. They have separate visibility settings:
 `show_other_players`, `show_pings`, and `show_waypoints` (all default to `true`).
 These settings refresh every second. Live markers do not consume the POI
 `max_icons` allowance. No server component is added by this feature.
+
+In the death-marker development build, `show_death_markers` also defaults to
+`true` and refreshes live. Tombstones have their own layer, so hiding ordinary
+POIs or reaching `max_icons` does not hide them. Distant tombstones stay at the
+rim; recovering one removes its marker when the game removes it from the map
+list. The existing icon atlas uses a small cream skull fallback. This feature
+is not included in the v0.4.46 download linked above.
 
 See [live marker validation](docs/live-markers.md) for layout evidence and the
 in-game regression checklist.
