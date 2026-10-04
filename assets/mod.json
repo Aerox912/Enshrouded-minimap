@@ -1,11 +1,12 @@
 {
   "id": "minimap_mod",
-  "version": "0.4.46",
-  "name": "Embervale Minimap",
-  "description": "Internal minimap data bridge for Enshrouded. No external overlay window.",
-  "author": "OpenAI + xoker",
+  "version": "0.5.0",
+  "name": "Enshrouded Minimap - Community Edition",
+  "description": "Community-maintained in-game minimap with live player, ping and waypoint markers.",
+  "author": "elxokker; community maintenance by Aerox912",
   "authors": [
-    "OpenAI + xoker"
+    "elxokker",
+    "Aerox912"
   ],
   "capabilities": [],
   "shroudtopia": {

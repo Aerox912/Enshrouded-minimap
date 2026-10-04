@@ -1,6 +1,16 @@
-# Enshrouded Minimap
+# Enshrouded Minimap - Community Edition
 
-Integrated in-game minimap mod for Enshrouded using Shroudtopia.
+Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
+Version **0.5.0** includes the camera/graphics fixes from upstream
+[PR #5](https://github.com/elxokker/Enshrouded-minimap/pull/5) and the player,
+ping, waypoint and world-map additions from
+[PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
+
+Original creator: [elxokker (xoker)](https://github.com/elxokker/Enshrouded-minimap).
+Community maintenance: [Aerox912](https://github.com/Aerox912/Enshrouded-minimap).
+This is an independent fork, not an official upstream release. See
+[credits and license](CREDITS.md) and the
+[original Nexus mod](https://www.nexusmods.com/enshrouded/mods/97).
 
 This is not an external Windows overlay. The mod hooks into the game client and
 draws the minimap directly inside the Enshrouded frame.
@@ -15,6 +25,11 @@ draws the minimap directly inside the Enshrouded frame.
 - Shows the player's position and facing direction.
 - Uses real map marker icons extracted from the game's map UI.
 - Shows nearby points of interest that are visible or detected by the map.
+- Shows other players as green arrows, pings as green diamonds, and your
+  selected waypoint as a hollow yellow outline.
+- Mirrors world-map locations, altars, NPC markers and custom pins.
+- Uses original location icons by default, with optional gold frames,
+  adjustable terrain lighting and heading smoothing.
 - Uses fog-of-war and POI data as a fallback when the game does not expose all
   live markers.
 - Renders inside the game's Vulkan frame without a separate overlay window.
@@ -31,18 +46,24 @@ The numpad `+`, `-`, and `*` keys also work.
 
 Download the latest zip from the release page:
 
-[Enshrouded Minimap v0.4.46](https://github.com/elxokker/Enshrouded-minimap/releases/tag/v0.4.46)
+[Community Edition v0.5.0](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.0)
 
 Release asset:
 
-`enshrouded-minimap-v0.4.46.zip`
+`enshrouded-minimap-community-v0.5.0.zip`
+
+Requires Windows x64 Enshrouded,
+[Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
+[Microsoft Visual C++ x64 Redistributable](https://aka.ms/vc14/vc_redist.x64.exe).
+Visual Studio is not needed to use the mod. Install the minimap on each player's
+client; no server component is required.
 
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Download `enshrouded-minimap-v0.4.46.zip`.
-3. Extract the zip.
-4. Copy the full `minimap_mod` folder to:
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.0.zip`.
+3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
+4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
 ```text
 C:\Program Files (x86)\Steam\steamapps\common\Enshrouded\mods\minimap_mod
@@ -66,7 +87,11 @@ Enshrouded
 5. Start Enshrouded with Shroudtopia.
 
 If you already had an older version installed, replace the whole `minimap_mod`
-folder with the new one.
+folder with the new one. Keep only one copy inside `mods`. The ZIP does not
+replace `shroudtopia.json`, so your existing preferences remain in place.
+
+To uninstall, close the game and remove `mods/minimap_mod`. Leave Shroudtopia
+installed if other mods need it. To roll back, restore your backed-up mod folder.
 
 ## Position Config
 
@@ -96,6 +121,10 @@ Example:
       "show_other_players": true,
       "show_pings": true,
       "show_waypoints": true,
+      "show_world_markers": true,
+      "map_light": 55,
+      "icon_style": "original",
+      "heading_smoothing_ms": 55,
       "map_sample_step": 2,
       "max_icons": 64
     }
@@ -117,13 +146,13 @@ If the minimap is not loaded yet, start or restart the game after changing it.
 
 ## Live markers and world-map display
 
-The `feature/multiplayer-player-markers` branch adds client-side markers for
-Steam client data revision 1076226. These changes are not in the release zip above.
+This release includes client-side markers for Steam client data revision
+1076226, developed on `feature/multiplayer-player-markers`.
 Other-player markers, pings and waypoints were confirmed working in user
 gameplay testing on 2026-10-03.
 The combined world-map display and graphics build was confirmed working in
 user gameplay testing on 2026-10-04, with original location icons selected.
-Both PRs are ready for review following that confirmation; individual
+Both upstream PRs are ready for review following that confirmation; individual
 extended-session and display-change results were not separately recorded.
 
 - Other players use the local player's arrow artwork tinted green, sampled up
@@ -147,7 +176,7 @@ These settings refresh every second. Live markers do not consume the POI
 See [live marker validation](docs/live-markers.md) for layout evidence and the
 in-game regression checklist.
 
-The branch also mirrors world-map POIs, altars, NPC markers and custom pins,
+The minimap also mirrors world-map POIs, altars, NPC markers and custom pins,
 adds parchment lighting and optional gold-framed icons, supports zoom up to +7, and
 offers configurable rotation smoothing. Ordinary distant POIs no longer crowd
 the map edge. These additions retain the green player/ping markers and the
@@ -184,23 +213,22 @@ Requirements:
 - Visual Studio with MSBuild and the C++ toolset.
 - Shroudtopia installed in the game folder to load the mod.
 
-Build:
+From a Visual Studio 2022 x64 Native Tools prompt, build into a separate output
+directory:
 
 ```powershell
-.\build-release.ps1
+MSBuild minimap_mod.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:OutDir=E:\Build\Enshrouded-minimap\bin\ /p:IntDir=E:\Build\Enshrouded-minimap\obj\
 ```
 
-Install to the default Steam path:
+Package a committed build for manual installation:
 
 ```powershell
-.\install.ps1
+.\package-release.ps1 -DllPath E:\Build\Enshrouded-minimap\bin\minimap_mod.dll -OutputDirectory E:\Build\Enshrouded-minimap\release
 ```
 
-Install to a custom Enshrouded path:
-
-```powershell
-.\install.ps1 -GameDir "D:\SteamLibrary\steamapps\common\Enshrouded"
-```
+Use a new output directory for each package. The package includes runtime assets,
+license, credits, source commit metadata and SHA-256 checksums. Follow the manual
+installation steps above; building and packaging do not modify the game.
 
 ## Repository Layout
 
@@ -209,10 +237,12 @@ Install to a custom Enshrouded path:
 - `assets/` - runtime assets copied next to the DLL.
 - `build-release.ps1` - builds `Release|x64`.
 - `install.ps1` - installs the mod and backs up the previous install.
+- `package-release.ps1` - packages a built DLL with runtime assets and credits.
+- `docs/releases/` - release notes and installation details.
 
 ## Version
 
-Current mod version: `0.4.46`.
+Current community mod version: `0.5.0`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.

@@ -1177,9 +1177,9 @@ namespace
 
     ModMetaData g_metaData = {
         "minimap_mod",
-        "Internal minimap data bridge for Enshrouded. No external overlay window.",
-        "0.4.46",
-        "OpenAI + xoker",
+        "Community-maintained in-game minimap with live player, ping and waypoint markers.",
+        "0.5.0",
+        "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,
         false
