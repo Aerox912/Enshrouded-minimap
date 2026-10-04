@@ -1,7 +1,7 @@
 # Enshrouded Minimap - Community Edition
 
 Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
-Version **0.5.1** includes the camera/graphics fixes from upstream
+Version **0.5.2** includes the camera/graphics fixes from upstream
 [PR #5](https://github.com/elxokker/Enshrouded-minimap/pull/5) and the player,
 ping, waypoint, death-marker and world-map additions from
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
@@ -18,6 +18,7 @@ draws the minimap directly inside the Enshrouded frame.
 ## What It Does
 
 - Shows a circular minimap on the right side of the screen.
+- Displays world time below the map, with sun and moon icons.
 - Defaults to the bottom-right corner and supports top-right, middle-right,
   and bottom-right placement.
 - Uses a premium compass-style frame asset.
@@ -48,11 +49,11 @@ The numpad `+`, `-`, and `*` keys also work.
 
 Download the latest zip from the release page:
 
-[Community Edition v0.5.1](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.1)
+[Community Edition v0.5.2](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.2)
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.1.zip`
+`enshrouded-minimap-community-v0.5.2.zip`
 
 Requires Windows x64 Enshrouded,
 [Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
@@ -63,7 +64,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.1.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.2.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
@@ -125,6 +126,7 @@ Example:
       "show_waypoints": true,
       "show_world_markers": true,
       "show_death_markers": true,
+      "show_clock": true,
       "map_light": 55,
       "icon_style": "original",
       "heading_smoothing_ms": 55,
@@ -146,6 +148,16 @@ feed from firing before the minimap draws.
 
 The mod reads these values directly and refreshes them every second while active.
 If the minimap is not loaded yet, start or restart the game after changing it.
+
+## World clock
+
+The clock appears below the minimap in a bronze frame with matching cyan jewels.
+It displays the world's time in 24-hour `HH:MM` format, with a sun during daylight
+and a crescent moon at night. It follows the game's time, including sleep and
+server time changes. `mods.minimap_mod.show_clock` defaults to `true`; set it to
+`false` to hide the clock while keeping the minimap. Changes apply while playing.
+The clock is included in version 0.5.2.
+See [clock implementation and testing](docs/world-clock.md).
 
 ## Live markers and world-map display
 
@@ -251,7 +263,7 @@ installation steps above; building and packaging do not modify the game.
 
 ## Version
 
-Current community mod version: `0.5.1`.
+Current community mod version: `0.5.2`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.

@@ -1,8 +1,8 @@
 {
   "id": "minimap_mod",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "name": "Enshrouded Minimap - Community Edition",
-  "description": "Community-maintained in-game minimap with player, ping, waypoint and death markers.",
+  "description": "Community-maintained in-game minimap with a world clock, players, pings, waypoints and death markers.",
   "author": "elxokker; community maintenance by Aerox912",
   "authors": [
     "elxokker",
@@ -25,7 +25,8 @@
       "icon_style": "original",
       "heading_smoothing_ms": 55,
       "map_sample_step": 2,
-      "max_icons": 64
+      "max_icons": 64,
+      "show_clock": true
     }
   }
 }

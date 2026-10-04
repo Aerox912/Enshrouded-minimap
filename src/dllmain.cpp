@@ -1179,8 +1179,8 @@ namespace
 
     ModMetaData g_metaData = {
         "minimap_mod",
-        "Community-maintained in-game minimap with player, ping, waypoint and death markers.",
-        "0.5.1",
+        "Community-maintained in-game minimap with a world clock, players, pings, waypoints and death markers.",
+        "0.5.2",
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,
@@ -1219,6 +1219,23 @@ namespace
     bool g_liveMarkerLayoutSupported = false;
     Mem::Detour* g_playerUiDataHook = nullptr;
     Mem::Detour* g_clearMapMarkersHook = nullptr;
+    Mem::Detour* g_daytimeUiHook = nullptr;
+    std::atomic<bool> g_clockLayoutSupported{ false };
+    std::atomic<bool> g_showClock{ true };
+    struct WorldClockSnapshot
+    {
+        int minuteOfDay = 0;
+        bool daytime = false, valid = false;
+        DWORD tick = 0;
+        std::uint64_t session = 0;
+    };
+    std::mutex g_clockMutex;
+    WorldClockSnapshot g_worldClock;
+    DWORD g_lastClockCaptureTick = 0;
+    constexpr std::int64_t CLOCK_NANOSECONDS_PER_MINUTE = 60000000000LL;
+    constexpr std::int64_t CLOCK_NANOSECONDS_PER_DAY = 1440 * CLOCK_NANOSECONDS_PER_MINUTE;
+    constexpr int CLOCK_PANEL_HALF_HEIGHT = 18;
+    constexpr int CLOCK_FRAME_GAP = 8;
     std::atomic<bool> g_worldMapLayoutSupported{ false };
     std::mutex g_worldMapMutex;
     std::vector<CapturedWorldMapMarker> g_worldMapMarkers;
@@ -1652,6 +1669,8 @@ namespace
         const bool showPings = ReadMarkerVisibility(modContext, "show_pings");
         const bool showWaypoints = ReadMarkerVisibility(modContext, "show_waypoints");
         const bool showDeaths = ReadMarkerVisibility(modContext, "show_death_markers");
+        const bool showClock = ReadMarkerVisibility(modContext, "show_clock");
+        const bool previousClock = g_showClock.exchange(showClock);
         const bool previousDeaths = g_showDeathMarkers.exchange(showDeaths);
         const bool previousPlayers = g_showOtherPlayers.exchange(showPlayers);
         const bool previousPings = g_showPings.exchange(showPings);
@@ -1663,7 +1682,7 @@ namespace
             previousDebugLogging == debugLogging &&
             previousMapSampleStep == mapSampleStep &&
             previousMaxIcons == maxIcons && previousPlayers == showPlayers &&
-            previousPings == showPings && previousWaypoints == showWaypoints && previousDeaths == showDeaths &&
+            previousPings == showPings && previousWaypoints == showWaypoints && previousDeaths == showDeaths && previousClock == showClock &&
             previousLight == mapLight && previousSmoothing == smoothing &&
             previousStyle == worldMapStyle && previousWorld == showWorld)
         {
@@ -1690,6 +1709,7 @@ namespace
             << " | show_pings=" << showPings
             << " | show_waypoints=" << showWaypoints
             << " | show_death_markers=" << showDeaths
+            << " | show_clock=" << showClock
             << " | show_world_markers=" << showWorld
             << " | map_light=" << mapLight
             << " | icon_style=" << (worldMapStyle ? "world-map" : "original")
@@ -1697,13 +1717,13 @@ namespace
         Log(oss.str());
     }
 
-    int ComputeMinimapCenterY(std::uint32_t height, int radius, int marginY)
+    int ComputeMinimapCenterY(std::uint32_t height, int radius, int marginY, int footerHeight = 0)
     {
         const int screenHeight = static_cast<int>(height);
         const int top = marginY + radius;
         const int bottom = screenHeight - marginY - radius;
         const int safeTop = radius + 8;
-        const int safeBottom = MaxValue(safeTop, screenHeight - radius - 8);
+        const int safeBottom = MaxValue(safeTop, screenHeight - radius - 8 - footerHeight);
 
         MinimapPlacement placement = MinimapPlacement::BottomRight;
         const int rawPlacement = g_minimapPlacement.load();
@@ -2425,6 +2445,10 @@ namespace
     {
         ++g_worldSessionGeneration;
         {
+            std::lock_guard<std::mutex> lock(g_clockMutex);
+            g_worldClock = {};
+        }
+        {
             std::lock_guard<std::mutex> lock(g_worldMapMutex);
             g_worldMapMarkers.clear();
             g_deathMarkers.clear();
@@ -2733,6 +2757,82 @@ namespace
             descriptor[0] >= g_exeBase && descriptor[0] - g_exeBase + length <= g_exeImageSize &&
             descriptor[1] == length - 1 && descriptor[2] == g_exeBase + functionRva &&
             SafeRead(descriptor[0], actual, length) && std::memcmp(actual, name, length) == 0;
+    }
+
+    // Entire instructions before the iterator call; no relative operands copied.
+    const std::array<std::uint8_t, 17> g_daytimeUiExpected = {
+        0x41, 0x56, 0x48, 0x83, 0xEC, 0x60, 0x41, 0xB8, 0x28, 0, 0, 0,
+        0x48, 0x8D, 0x54, 0x24, 0x30
+    };
+
+    bool HasVerifiedWorldClockLayout()
+    {
+        const std::uint8_t iterator[] = { 0xE8, 0x27, 0x3E, 0x67, 0,
+            0x48, 0x8B, 0x4C, 0x24, 0x40, 0xE8, 0x6D, 0xCD, 0xA5, 0 };
+        // isDaytime reads sunrise +28, sunset +30 and current solar time +48.
+        const std::uint8_t daytime[] = { 0x48, 0x8B, 0x41, 0x48, 0x48, 0x3B, 0x41, 0x28,
+            0x7C, 0x09, 0x48, 0x3B, 0x41, 0x30, 0x7D, 0x03, 0xB0, 0x01, 0xC3, 0x32, 0xC0, 0xC3 };
+        const std::uint8_t dayLength[] = { 0x48, 0xB9, 0, 0, 0x4F, 0x91, 0x94, 0x4E, 0, 0 };
+        const std::uint8_t timeWrite[] = { 0x48, 0x89, 0x47, 0x48 };
+        return IsNamedSystemAt(0x1D437D0, "player_daytime_ui", 0x266980) &&
+            IsNamedSystemAt(0x1D469E0, "client_update_daytime", 0x2A0020) &&
+            reinterpret_cast<uintptr_t>(g_iterInit) == g_exeBase + 0x8DA7C0 &&
+            BytesMatchRva(0x266980, g_daytimeUiExpected.data(), g_daytimeUiExpected.size()) &&
+            BytesMatchRva(0x266994, iterator, sizeof(iterator)) &&
+            BytesMatchRva(0xCC3710, daytime, sizeof(daytime)) &&
+            BytesMatchRva(0xCAA96E, dayLength, sizeof(dayLength)) &&
+            BytesMatchRva(0xCE519A, timeWrite, sizeof(timeWrite));
+    }
+
+    bool ReadWorldClock(uintptr_t daytime, WorldClockSnapshot& result)
+    {
+        result = {};
+        // Copy values on the game's UI thread, never retain a game-owned pointer.
+        // The two duration fields between sunset and time are real-time lengths,
+        // not solar time; they can differ on servers with custom day lengths.
+        std::int64_t values[5] = {};
+        if (!IsLikelyRuntimePointer(daytime) || !SafeRead(daytime + 0x28, values, sizeof(values))) return false;
+        const auto sunrise = values[0], sunset = values[1], time = values[4];
+        if (sunrise < 0 || sunset <= sunrise || sunset > CLOCK_NANOSECONDS_PER_DAY ||
+            time < 0 || time >= CLOCK_NANOSECONDS_PER_DAY) return false;
+        result.minuteOfDay = static_cast<int>(time / CLOCK_NANOSECONDS_PER_MINUTE);
+        result.daytime = time >= sunrise && time < sunset;
+        result.valid = true;
+        return true;
+    }
+
+    bool TryInitDaytimeState(void* ctx, uintptr_t& daytime)
+    {
+        uintptr_t localCtx[2] = {}, record[5] = {};
+        if (g_iterInit == nullptr || !SafeRead(reinterpret_cast<uintptr_t>(ctx), localCtx, sizeof(localCtx))) return false;
+        __try { g_iterInit(localCtx, record, sizeof(record)); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        daytime = record[2];
+        return IsLikelyRuntimePointer(daytime);
+    }
+
+    void __fastcall CaptureDaytimeUiHook(void* ctx, void*, void*, void*)
+    {
+        if (!g_clockLayoutSupported) return;
+        const DWORD now = GetTickCount();
+        if (now - g_lastClockCaptureTick < 100) return;
+        g_lastClockCaptureTick = now;
+        const auto session = g_worldSessionGeneration.load();
+        uintptr_t daytime = 0;
+        WorldClockSnapshot snapshot{};
+        if (TryInitDaytimeState(ctx, daytime)) ReadWorldClock(daytime, snapshot);
+        snapshot.tick = now;
+        snapshot.session = session;
+        std::lock_guard<std::mutex> lock(g_clockMutex);
+        g_worldClock = snapshot;
+    }
+
+    bool CopyWorldClock(WorldClockSnapshot& result, DWORD now)
+    {
+        std::lock_guard<std::mutex> lock(g_clockMutex);
+        result = g_worldClock;
+        return g_clockLayoutSupported && g_showClock && result.valid &&
+            result.session == g_worldSessionGeneration.load() && now - result.tick <= 2000;
     }
 
     const std::array<std::uint8_t, 15> g_clearMapMarkersExpected = {
@@ -7858,6 +7958,70 @@ namespace
         return renderer.mapHeading;
     }
 
+    void DrawWorldClockPanel(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, const WorldClockSnapshot& clock)
+    {
+        if (!clock.valid || clock.minuteOfDay < 0 || clock.minuteOfDay >= 1440) return;
+        // A small bronze nameplate, with the compass frame's dark inset and cyan
+        // jewels. Batch scanlines by colour, just like the existing map glyphs.
+        auto plate = [&](int halfWidth, int halfHeight, float r, float g, float b) {
+            std::vector<VkClearRect> rows;
+            rows.reserve(halfHeight * 2 + 1);
+            for (int y = -halfHeight; y <= halfHeight; ++y)
+            {
+                const int cut = MaxValue(0, std::abs(y) - halfHeight + 7);
+                AppendClippedClearRect(renderer, rows, cx - halfWidth + cut, cy + y,
+                    2 * (halfWidth - cut) + 1, 1);
+            }
+            CmdClearRects(renderer, commandBuffer, r, g, b, 1.0f, rows);
+        };
+        plate(74, CLOCK_PANEL_HALF_HEIGHT, 0.025f, 0.022f, 0.018f);
+        plate(72, 16, 0.65f, 0.48f, 0.25f);
+        plate(71, 15, 0.23f, 0.17f, 0.09f);
+        plate(69, 13, 0.76f, 0.59f, 0.32f);
+        plate(68, 12, 0.032f, 0.042f, 0.043f);
+        CmdClearRimJewel(renderer, commandBuffer, cx - 72, cy);
+        CmdClearRimJewel(renderer, commandBuffer, cx + 72, cy);
+
+        static constexpr std::uint8_t digits[10][7] = {
+            {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14},
+            {14,17,1,2,4,8,31}, {30,1,1,14,1,1,30},
+            {2,6,10,18,31,2,2}, {31,16,16,30,1,1,30},
+            {14,16,16,30,17,17,14}, {31,1,2,4,8,8,8},
+            {14,17,17,14,17,17,14}, {14,17,17,15,1,1,14}
+        };
+        const int hours = clock.minuteOfDay / 60, minutes = clock.minuteOfDay % 60;
+        const int values[5] = {hours / 10, hours % 10, -1, minutes / 10, minutes % 10};
+        std::vector<VkClearRect> ink;
+        ink.reserve(150);
+        for (int i = 0; i < 5; ++i)
+            for (int y = 0; y < 7; ++y)
+                for (int x = 0; x < 5; ++x)
+                {
+                    const bool lit = values[i] < 0 ? (x == 2 && (y == 2 || y == 5)) :
+                        (digits[values[i]][y] & (1 << (4 - x))) != 0;
+                    if (lit) AppendClippedClearRect(renderer, ink, cx - 22 + i * 12 + x * 2,
+                        cy - 7 + y * 2, 2, 2);
+                }
+        CmdClearRects(renderer, commandBuffer, 0.96f, 0.89f, 0.69f, 1.0f, ink);
+
+        std::vector<VkClearRect> symbol;
+        for (int y = -9; y <= 9; ++y)
+            for (int x = -9; x <= 9; ++x)
+            {
+                const int d = x * x + y * y;
+                // Eight rays around the sun; the moon is a crescent with a dark
+                // cutout, not a filled circle that obscures the panel inset.
+                const bool lit = clock.daytime
+                    ? d <= 20 || (d >= 45 && d <= 85 &&
+                        (std::abs(x) <= 1 || std::abs(y) <= 1 || std::abs(std::abs(x) - std::abs(y)) <= 1))
+                    : d <= 64 && (x - 4) * (x - 4) + (y + 3) * (y + 3) > 49;
+                if (lit) AppendClippedClearRect(renderer, symbol, cx - 44 + x, cy + y, 1, 1);
+            }
+        CmdClearRects(renderer, commandBuffer, clock.daytime ? 1.0f : 0.74f,
+            clock.daytime ? 0.78f : 0.88f, clock.daytime ? 0.30f : 0.98f, 1.0f, symbol);
+    }
+
     void DrawMinimapWidget(VulkanMinimapRenderer& renderer, void* commandBuffer)
     {
         const int shortEdge = static_cast<int>(MinValue(renderer.width, renderer.height));
@@ -7865,7 +8029,14 @@ namespace
         const int marginX = MaxValue(58, static_cast<int>(renderer.width) / 58);
         const int marginY = MaxValue(52, static_cast<int>(renderer.height) / 42);
         const int cx = static_cast<int>(renderer.width) - marginX - radius;
-        const int cy = ComputeMinimapCenterY(renderer.height, radius, marginY);
+        const bool hasRasterFrame = HasLoadedMinimapFrame();
+        const int frameExtra = MinimapRasterFrameExtra(radius);
+        WorldClockSnapshot clock{};
+        const bool showClock = CopyWorldClock(clock, GetTickCount());
+        const int frameExtent = hasRasterFrame ? frameExtra : 26;
+        // Keep the whole footer on screen at bottom-right as well as top-right.
+        const int clockFooter = frameExtent + CLOCK_FRAME_GAP + 2 * CLOCK_PANEL_HALF_HEIGHT;
+        const int cy = ComputeMinimapCenterY(renderer.height, radius, marginY, showClock ? clockFooter : 0);
         const int zoomStep = ClampValue(g_minimapZoomStep.load(), MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
         const float zoom = std::pow(1.32f, static_cast<float>(zoomStep));
         const float unitsPerPixel = MINIMAP_BASE_UNITS_PER_PIXEL / zoom;
@@ -7887,8 +8058,6 @@ namespace
             AppendVisibleStaticPoiPoints(points, nearbyMarkers, visibleMapMarkers, centerX, centerZ, unitsPerPixel * static_cast<float>(radius) * STATIC_POI_DRAW_RADIUS_FACTOR);
         LimitMinimapWorldPoints(points, centerX, centerZ);
 
-        const bool hasRasterFrame = HasLoadedMinimapFrame();
-        const int frameExtra = MinimapRasterFrameExtra(radius);
         const int frameMapRadius = hasRasterFrame ? MinimapRasterMapRadius(radius, frameExtra) : radius - 6;
         if (!hasRasterFrame)
             CmdClearCompassFrameBase(renderer, commandBuffer, cx, cy, radius);
@@ -7922,6 +8091,9 @@ namespace
 
         if (!TryDrawPremiumPlayerArrow(renderer, commandBuffer, cx, cy, radius))
             CmdClearPlayerArrow(renderer, commandBuffer, cx, cy, radius);
+        if (showClock)
+            DrawWorldClockPanel(renderer, commandBuffer, cx,
+                cy + radius + frameExtent + CLOCK_FRAME_GAP + CLOCK_PANEL_HALF_HEIGHT, clock);
     }
 
     bool RecordVulkanMinimapCommandLocked(std::uint32_t imageIndex)
@@ -8697,6 +8869,17 @@ namespace
                 ? "[Minimap] live ping and waypoint layout verified (client 1076226)"
                 : "[Minimap] live marker layout unavailable for this client");
 
+            g_clockLayoutSupported = namedClient && HasVerifiedWorldClockLayout();
+            if (g_clockLayoutSupported)
+            {
+                g_daytimeUiHook = InstallEntryHook(0x266980, g_daytimeUiExpected,
+                    reinterpret_cast<void*>(&CaptureDaytimeUiHook), "player_daytime_ui (world clock)");
+                g_clockLayoutSupported = g_daytimeUiHook != nullptr;
+            }
+            modContext->Log(g_clockLayoutSupported
+                ? "[Minimap] world clock layout verified (client 1076226)"
+                : "[Minimap] world clock unavailable for this client");
+
             g_worldMapLayoutSupported = namedClient && HasVerifiedWorldMapLayout();
             g_deathMarkerLayoutSupported = g_worldMapLayoutSupported && HasVerifiedDeathMarkerLayout();
             if (g_worldMapLayoutSupported)
@@ -8746,6 +8929,13 @@ namespace
 
         void Unload(ModContext* modContext) override
         {
+            g_clockLayoutSupported = false;
+            if (g_daytimeUiHook != nullptr)
+            {
+                g_daytimeUiHook->deactivate();
+                delete g_daytimeUiHook;
+                g_daytimeUiHook = nullptr;
+            }
             if (g_clearMapMarkersHook != nullptr)
             {
                 g_clearMapMarkersHook->deactivate();
@@ -8868,6 +9058,7 @@ namespace
             const bool cameraOk = ActivateHook(g_playerCameraTransformHook);
             ActivateHook(g_playerUiDataHook);
             ActivateHook(g_clearMapMarkersHook);
+            ActivateHook(g_daytimeUiHook);
             const bool uiOk = ActivateHook(g_localPlayerUiRenderSetupHook);
             const bool waypointOk = ActivateHook(g_playerWaypointsUiHook);
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
@@ -8882,6 +9073,7 @@ namespace
                 << " | camera_hook=" << HookActivationState(g_playerCameraTransformHook)
                 << " | remote_player_hook=" << HookActivationState(g_playerUiDataHook)
                 << " | world_map_hook=" << HookActivationState(g_clearMapMarkersHook)
+                << " | world_clock_hook=" << HookActivationState(g_daytimeUiHook)
                 << " | ui_hook=" << HookActivationState(g_localPlayerUiRenderSetupHook)
                 << " | waypoint_hook=" << HookActivationState(g_playerWaypointsUiHook)
                 << " | marker_visibility_hook=" << HookActivationState(g_mapMarkerVisibilityHook)
@@ -8893,6 +9085,8 @@ namespace
 
         void Deactivate(ModContext* modContext) override
         {
+            if (g_daytimeUiHook != nullptr)
+                g_daytimeUiHook->deactivate();
             if (g_clearMapMarkersHook != nullptr)
                 g_clearMapMarkersHook->deactivate();
             if (g_playerUiDataHook != nullptr)

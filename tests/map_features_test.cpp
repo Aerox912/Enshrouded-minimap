@@ -138,6 +138,117 @@ namespace
         g_deathMarkerLayoutSupported = true;
     }
 
+    std::array<std::uint8_t, 0x70> daytimeState{};
+    void __fastcall InitDaytime(void* ctx, void* record, std::uint32_t size)
+    {
+        if (size != 0x28) std::exit(2);
+        static_cast<uintptr_t*>(ctx)[1] = 999;
+        static_cast<uintptr_t*>(record)[2] = reinterpret_cast<uintptr_t>(daytimeState.data());
+    }
+    void CheckWorldClock(VulkanMinimapRenderer& renderer)
+    {
+        const auto ns = CLOCK_NANOSECONDS_PER_MINUTE;
+        const auto ptr = reinterpret_cast<uintptr_t>(daytimeState.data());
+        Put(daytimeState.data(), 0x28, 360 * ns);
+        Put(daytimeState.data(), 0x30, 1080 * ns);
+        WorldClockSnapshot clock{};
+        for (int minute : {0, 359, 360, 719, 720, 1079, 1080, 1439})
+        {
+            Put(daytimeState.data(), 0x48, minute * ns + ns - 1);
+            Check(ReadWorldClock(ptr, clock) && clock.minuteOfDay == minute &&
+                clock.daytime == (minute >= 360 && minute < 1080), "solar minute and sun/moon match day boundaries");
+        }
+        Put(daytimeState.data(), 0x28, 420 * ns); Put(daytimeState.data(), 0x30, 1200 * ns);
+        Put(daytimeState.data(), 0x48, 1100 * ns);
+        Check(ReadWorldClock(ptr, clock) && clock.daytime, "sun uses the world's configured daylight interval");
+        for (auto bad : {-1LL, CLOCK_NANOSECONDS_PER_DAY, 0x7FFFFFFFFFFFFFFFLL})
+        {
+            Put(daytimeState.data(), 0x48, bad);
+            Check(!ReadWorldClock(ptr, clock) && !clock.valid, "invalid time is hidden instead of formatted");
+        }
+        Check(!ReadWorldClock(0, clock) && !ReadWorldClock(0x10001, clock), "missing time object is safely rejected");
+        Put(daytimeState.data(), 0x48, 725 * ns); Put(daytimeState.data(), 0x28, 1250 * ns);
+        Check(!ReadWorldClock(ptr, clock), "reversed daylight interval is rejected");
+        Put(daytimeState.data(), 0x28, 360 * ns); Put(daytimeState.data(), 0x30, 1080 * ns);
+        const auto savedInit = g_iterInit;
+        g_iterInit = InitDaytime; g_clockLayoutSupported = true; g_showClock = true;
+        uintptr_t ctx[] = {0x1234, 7};
+        auto capture = [&]() { g_lastClockCaptureTick = GetTickCount() - 100; CaptureDaytimeUiHook(ctx, nullptr, nullptr, nullptr); };
+        capture();
+        Check(ctx[1] == 7 && CopyWorldClock(clock, GetTickCount()) && clock.minuteOfDay == 725,
+            "clock hook uses private iterator and copies only values");
+        Put(daytimeState.data(), 0x48, 360 * ns); capture();
+        Check(CopyWorldClock(clock, GetTickCount()) && clock.minuteOfDay == 360,
+            "sleep or server time jumps are reflected immediately without wall-clock interpolation");
+        Put(daytimeState.data(), 0x48, 1439 * ns); capture();
+        Put(daytimeState.data(), 0x48, std::int64_t{0}); capture();
+        Check(CopyWorldClock(clock, GetTickCount()) && clock.minuteOfDay == 0 && !clock.daytime, "midnight wraps to 00:00 and moon");
+        Check(!CopyWorldClock(clock, GetTickCount() + 2001), "clock disappears when source stops updating");
+        g_worldClock.tick = 0xFFFFFFF0;
+        Check(CopyWorldClock(clock, 0x10), "clock freshness handles tick wrap");
+        capture(); g_showClock = false;
+        Check(!CopyWorldClock(clock, GetTickCount()), "show_clock hides current snapshot");
+        g_showClock = true;
+        Check(CopyWorldClock(clock, GetTickCount()), "show_clock restores fresh snapshot");
+        ClearLiveMarkers();
+        Check(!CopyWorldClock(clock, GetTickCount()), "world exit clears clock");
+        capture(); ++g_worldSessionGeneration;
+        Check(!CopyWorldClock(clock, GetTickCount()), "previous-session clock cannot appear in a new world");
+        capture(); g_clockLayoutSupported = false;
+        Check(!CopyWorldClock(clock, GetTickCount()), "unsupported clock layout never renders cached data");
+        g_clockLayoutSupported = true;
+
+        // Execute the actual entry trampoline against a synthetic function with
+        // the verified prologue and a known return value. No game is modified.
+        auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        Check(code != nullptr, "allocate isolated clock hook fixture");
+        constexpr int offset = 128;
+        std::memcpy(code + offset, g_daytimeUiExpected.data(), g_daytimeUiExpected.size());
+        const std::uint8_t tail[] = {0x48,0x83,0xC4,0x60,0x41,0x5E,0xB8,0x7B,0,0,0,0xC3};
+        std::memcpy(code + offset + g_daytimeUiExpected.size(), tail, sizeof(tail));
+        const auto savedBase = g_exeBase; g_exeBase = reinterpret_cast<uintptr_t>(code);
+        auto* hook = InstallEntryHook(offset, g_daytimeUiExpected, reinterpret_cast<void*>(&CaptureDaytimeUiHook), "clock fixture");
+        Check(hook && ActivateHook(hook), "clock entry trampoline installs on verified whole instructions");
+        FlushInstructionCache(GetCurrentProcess(), code, 4096);
+        using Fixture = int(__fastcall*)(void*);
+        ClearLiveMarkers(); g_lastClockCaptureTick = GetTickCount() - 100;
+        Check(reinterpret_cast<Fixture>(code + offset)(ctx) == 123 && ctx[1] == 7 && CopyWorldClock(clock, GetTickCount()),
+            "real clock trampoline preserves stack, context and original return");
+        hook->deactivate();
+        Check(std::memcmp(code + offset, g_daytimeUiExpected.data(), g_daytimeUiExpected.size()) == 0,
+            "clock hook removal restores original instructions");
+        auto allocation = reinterpret_cast<void*>(hook->shellcode->data->address);
+        delete hook->shellcode; delete hook->patch; delete hook;
+        VirtualFree(allocation, 0, MEM_RELEASE); VirtualFree(code, 0, MEM_RELEASE);
+        g_exeBase = savedBase; g_iterInit = savedInit;
+
+        for (int height : {480,720,1080,1440,2160})
+        {
+            const int radius = ClampValue(height / 11, 104, 142);
+            const int extent = MinimapRasterFrameExtra(radius);
+            const int footer = extent + CLOCK_FRAME_GAP + 2 * CLOCK_PANEL_HALF_HEIGHT;
+            for (auto placement : {MinimapPlacement::TopRight,MinimapPlacement::MiddleRight,MinimapPlacement::BottomRight})
+            {
+                g_minimapPlacement = static_cast<int>(placement);
+                const int cy = ComputeMinimapCenterY(height, radius, MaxValue(52,height/42), footer);
+                Check(cy + radius + footer <= height - 8, "clock footer fits all supported map positions and screen sizes");
+            }
+        }
+        g_minimapPlacement = static_cast<int>(MinimapPlacement::BottomRight);
+        clock.valid = true; clock.minuteOfDay = 725; clock.daytime = true;
+        std::memset(pixels, 0, sizeof(pixels)); clears = 0;
+        DrawWorldClockPanel(renderer, nullptr, 256, 160, clock);
+        Check(pixels[160][212].r == 1.0f && clears < 30, "sun and text render with a bounded number of batches");
+        Check(pixels[142][256].r > 0 && pixels[139][256].r == 0, "clock frame has bounded vertical footprint");
+        clock.daytime = false;
+        DrawWorldClockPanel(renderer, nullptr, 256, 160, clock);
+        Check(pixels[160][207].b > 0.9f && pixels[157][216].r < 0.1f, "moon renders a crescent with a dark cutout");
+        clock.valid = false; clears = 0;
+        DrawWorldClockPanel(renderer, nullptr, 256, 160, clock);
+        Check(clears == 0, "invalid clock emits no drawing commands");
+        ClearLiveMarkers();
+    }
+
     void CheckClientLayout(const char* path)
     {
         std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -161,7 +272,7 @@ namespace
         }
         const auto savedBase = g_exeBase; const auto savedSize = g_exeImageSize; const auto savedInit = g_iterInit;
         g_exeBase = reinterpret_cast<uintptr_t>(image.data()); g_exeImageSize = image.size();
-        for (const auto rva : { 0x1D45390, 0x1D47820, 0x1D4C100 })
+        for (const auto rva : { 0x1D45390, 0x1D47820, 0x1D4C100, 0x1D437D0, 0x1D469E0 })
             for (int word : { 0, 2 })
             {
                 uintptr_t value = 0; std::memcpy(&value, image.data() + rva + word * 8, 8);
@@ -171,6 +282,14 @@ namespace
         g_iterInit = reinterpret_cast<IterInitFn>(g_exeBase + 0x8DA7C0);
         Check(HasVerifiedWorldMapLayout(), "production layout gate matches installed Steam executable");
         Check(HasVerifiedDeathMarkerLayout(), "death layout gate matches the installed Steam executable");
+        Check(HasVerifiedWorldClockLayout(), "clock layout matches the installed Steam executable");
+        for (auto rva : {0x266980, 0x266994, 0xCC3710, 0xCAA96E, 0xCE519A, 0x1D437D8, 0x1D469F0})
+        {
+            image[rva] ^= 1;
+            Check(!HasVerifiedWorldClockLayout() && HasVerifiedWorldMapLayout(),
+                "changed time layout disables clock without disabling map markers");
+            image[rva] ^= 1;
+        }
         for (auto rva : {0x29DE49, 0x2A9D8F, 0x2A9DB0, 0x29C3F3})
         {
             image[rva] ^= 1;
@@ -253,6 +372,7 @@ int main(int argc, char** argv)
         if (std::strcmp(key, "map_light") == 0) return std::string("150");
         if (std::strcmp(key, "heading_smoothing_ms") == 0) return std::string("0");
         if (std::strcmp(key, "icon_style") == 0) return std::string("world-map");
+        if (std::strcmp(key, "show_clock") == 0) return std::string("false");
         if (std::strcmp(key, "show_death_markers") == 0) return std::string("false");
         if (std::strcmp(key, "show_world_markers") == 0) return std::string("false");
         return fallback;
@@ -261,6 +381,7 @@ int main(int argc, char** argv)
     Check(g_minimapMapLight == 100 && g_headingSmoothingMs == 0 && g_worldMapIconStyle && !g_showWorldMarkers,
         "runtime config enables gold icons and applies bounded display options");
     Check(!g_showDeathMarkers, "runtime config hides death markers");
+    Check(!g_showClock, "runtime config hides world clock");
     Check(g_showOtherPlayers && g_showPings && g_showWaypoints, "world-map option preserves independent live-marker settings");
     config.config.GetString = [](const char*, const char* key, std::string fallback) {
         return std::strcmp(key, "heading_smoothing_ms") == 0 ? std::string("-1") : fallback;
@@ -276,6 +397,7 @@ int main(int argc, char** argv)
         "original icons and default display settings are restored without reinstalling");
 
     Check(g_showDeathMarkers, "death markers default to enabled without configuration");
+    Check(g_showClock, "world clock defaults to enabled without configuration");
 
     float r = 0.2f, g = 0.3f, b = 0.4f;
     ApplyMapLighting(r, g, b, 0.0f, 0);
@@ -288,6 +410,7 @@ int main(int argc, char** argv)
     VulkanMinimapRenderer renderer{};
     renderer.width = 512; renderer.height = 320; renderer.fns.cmdClearAttachments = Raster;
     CheckDeaths(renderer);
+    CheckWorldClock(renderer);
     Check(SmoothMapHeading(renderer, 3.1f, true, 100) == 3.1f, "first heading is immediate");
     Check(std::abs(SmoothMapHeading(renderer, -3.1f, true, 116)) > 3, "heading smoothing crosses the short arc at north");
     Check(SmoothMapHeading(renderer, 1, true, 2000) == 1, "stale heading resets after a pause");
@@ -335,7 +458,26 @@ int main(int argc, char** argv)
         CmdClearPoiIcon(renderer, nullptr, 160, 160, 130, 195, 195, 12, false);
         DrawWaypointDiamond(renderer, nullptr, 160, 160); DrawPingDiamond(renderer, nullptr, 195, 90);
         DrawDeathMarker(renderer, nullptr, 160, 160, 130, 85, 185, 0x1AD8F96E);
+        // Separate compact preview of both clock states using production draws.
         WritePreview(argv[2]);
+        std::memset(pixels, 0, sizeof(pixels));
+        WorldClockSnapshot clock{}; clock.valid = true; clock.minuteOfDay = 9 * 60 + 42; clock.daytime = true;
+        DrawWorldClockPanel(renderer, nullptr, 256, 80, clock);
+        clock.minuteOfDay = 23 * 60 + 7; clock.daytime = false;
+        DrawWorldClockPanel(renderer, nullptr, 256, 145, clock);
+        WritePreview((std::string(argv[2]) + ".clock.bmp").c_str());
+        std::memset(pixels, 0, sizeof(pixels));
+        Check(TryLoadMinimapFrameFromPath("assets/embervale_minimap_frame.rgba", g_minimapFrame), "load actual compass frame for clock preview");
+        g_minimapFrame.attempted = true;
+        const int previewRadius = 90, previewExtra = MinimapRasterFrameExtra(previewRadius);
+        DrawRealMap(renderer, nullptr, 256, 138, MinimapRasterMapRadius(previewRadius, previewExtra), 2200, 2200, 2, 0);
+        TryDrawMinimapRasterFrame(renderer, nullptr, 256, 138, previewRadius, previewExtra);
+        DrawPingDiamond(renderer, nullptr, 300, 100);
+        DrawWaypointDiamond(renderer, nullptr, 212, 173);
+        CmdClearPlayerArrow(renderer, nullptr, 256, 138, previewRadius);
+        clock.minuteOfDay = 12 * 60 + 35; clock.daytime = true;
+        DrawWorldClockPanel(renderer, nullptr, 256, 138 + previewRadius + previewExtra + CLOCK_FRAME_GAP + CLOCK_PANEL_HALF_HEIGHT, clock);
+        WritePreview((std::string(argv[2]) + ".combined.bmp").c_str());
     }
     return 0;
 }
