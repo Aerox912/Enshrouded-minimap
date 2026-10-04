@@ -1179,8 +1179,8 @@ namespace
 
     ModMetaData g_metaData = {
         "minimap_mod",
-        "Community-maintained in-game minimap with live player, ping and waypoint markers.",
-        "0.5.0",
+        "Community-maintained in-game minimap with player, ping, waypoint and death markers.",
+        "0.5.1",
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,

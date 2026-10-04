@@ -1,9 +1,9 @@
 # Enshrouded Minimap - Community Edition
 
 Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
-Version **0.5.0** includes the camera/graphics fixes from upstream
+Version **0.5.1** includes the camera/graphics fixes from upstream
 [PR #5](https://github.com/elxokker/Enshrouded-minimap/pull/5) and the player,
-ping, waypoint and world-map additions from
+ping, waypoint, death-marker and world-map additions from
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
 
 Original creator: [elxokker (xoker)](https://github.com/elxokker/Enshrouded-minimap).
@@ -28,7 +28,7 @@ draws the minimap directly inside the Enshrouded frame.
 - Shows other players as green arrows, pings as green diamonds, and your
   selected waypoint as a hollow yellow outline.
 - Mirrors world-map locations, altars, NPC markers and custom pins.
-- Development build: shows tombstones as skull markers, including friends'
+- Shows tombstones as skull markers, including friends'
   tombstones supplied by the client. See [death marker testing](docs/death-markers.md).
 - Uses original location icons by default, with optional gold frames,
   adjustable terrain lighting and heading smoothing.
@@ -48,11 +48,11 @@ The numpad `+`, `-`, and `*` keys also work.
 
 Download the latest zip from the release page:
 
-[Community Edition v0.5.0](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.0)
+[Community Edition v0.5.1](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.1)
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.0.zip`
+`enshrouded-minimap-community-v0.5.1.zip`
 
 Requires Windows x64 Enshrouded,
 [Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
@@ -63,7 +63,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.0.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.1.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
@@ -176,12 +176,11 @@ are clamped to its rim. They have separate visibility settings:
 These settings refresh every second. Live markers do not consume the POI
 `max_icons` allowance. No server component is added by this feature.
 
-In the death-marker development build, `show_death_markers` also defaults to
+`show_death_markers` also defaults to
 `true` and refreshes live. Tombstones have their own layer, so hiding ordinary
 POIs or reaching `max_icons` does not hide them. Distant tombstones stay at the
 rim; recovering one removes its marker when the game removes it from the map
-list. The existing icon atlas uses a small cream skull fallback. This feature
-is not included in the v0.5.0 download linked above.
+list. The existing icon atlas uses a small cream skull fallback.
 
 See [live marker validation](docs/live-markers.md) for layout evidence and the
 in-game regression checklist.
@@ -252,7 +251,7 @@ installation steps above; building and packaging do not modify the game.
 
 ## Version
 
-Current community mod version: `0.5.0`.
+Current community mod version: `0.5.1`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.
