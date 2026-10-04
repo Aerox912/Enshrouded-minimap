@@ -5,7 +5,7 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
-    <ProjectGuid>{B55A52BE-348B-4C18-AD54-BA6A5C324079}</ProjectGuid>
+    <ProjectGuid>{603E89AC-B73A-4621-A457-F75119141B20}</ProjectGuid>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <VcpkgEnabled>false</VcpkgEnabled>
   </PropertyGroup>
@@ -17,7 +17,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
     <OutDir>$(MSBuildProjectDirectory)\..\build\tests\</OutDir>
-    <IntDir>$(MSBuildProjectDirectory)\..\build\obj\markers_test\</IntDir>
+    <IntDir>$(MSBuildProjectDirectory)\..\build\obj\map_features_test\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -29,6 +29,6 @@
     </ClCompile>
     <Link><SubSystem>Console</SubSystem></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="markers_test.cpp" /></ItemGroup>
+  <ItemGroup><ClCompile Include="map_features_test.cpp" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

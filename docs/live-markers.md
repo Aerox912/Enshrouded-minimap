@@ -6,6 +6,10 @@ no server component or network protocol is changed. Other-player markers,
 pings and waypoints were confirmed working in user gameplay testing on
 2026-10-03.
 
+The subsequent world-map display and graphics extensions are described in
+[PR #4 feature coverage](pr4-feature-parity.md). They require new gameplay
+validation; the confirmation above applies to the earlier marker build.
+
 ## Display and configuration
 
 - Players: the same arrow asset as the local player, tinted green and rotated

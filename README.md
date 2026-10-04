@@ -115,12 +115,14 @@ feed from firing before the minimap draws.
 The mod reads these values directly and refreshes them every second while active.
 If the minimap is not loaded yet, start or restart the game after changing it.
 
-## Experimental Live Markers
+## Live markers and world-map display
 
 The `feature/multiplayer-player-markers` branch adds client-side markers for
 Steam client data revision 1076226. These changes are not in the release zip above.
 Other-player markers, pings and waypoints were confirmed working in user
 gameplay testing on 2026-10-03.
+The 2026-10-04 world-map display and graphics extensions still need in-game
+validation; that earlier confirmation does not cover them.
 
 - Other players use the local player's arrow artwork tinted green, sampled up
   to ten times per second. Arrows follow their facing direction relative to the map.
@@ -142,6 +144,16 @@ These settings refresh every second. Live markers do not consume the POI
 
 See [live marker validation](docs/live-markers.md) for layout evidence and the
 in-game regression checklist.
+
+The branch also mirrors world-map POIs, altars, NPC markers and custom pins,
+adds parchment lighting and gold-framed icons, supports zoom up to +7, and
+offers configurable rotation smoothing. Ordinary distant POIs no longer crowd
+the map edge. These additions retain the green player/ping markers and the
+hollow yellow selected-waypoint outline.
+
+See [display settings and PR #4 feature coverage](docs/pr4-feature-parity.md)
+for `map_light`, `icon_style`, `heading_smoothing_ms`, `show_world_markers`,
+compatibility boundaries and test instructions.
 
 ## EML Compatibility Notes
 

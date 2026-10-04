@@ -92,6 +92,14 @@ namespace
     constexpr std::uint32_t MAP_MARKER_QUEST_KIND = 0xC52E92E5u;
     constexpr int MINIMAP_DEFAULT_MAP_SAMPLE_STEP = 2;
     constexpr int MINIMAP_DEFAULT_MAX_DRAWN_POINTS = 64;
+    constexpr int MINIMAP_MIN_ZOOM = -3;
+    constexpr int MINIMAP_MAX_ZOOM = 7;
+    constexpr std::size_t WORLD_MAP_ARRAY_OFFSET = 0x1C100;
+    constexpr std::size_t CUSTOM_MAP_ARRAY_OFFSET = 0x3C128;
+    constexpr std::size_t WORLD_MAP_MARKER_STRIDE = 0x80;
+    constexpr std::size_t WORLD_MAP_MAX_ENTRIES = 2048;
+    constexpr std::uint32_t WORLD_MAP_FLAME_ALTAR = 0xA447CBA3;
+    constexpr std::uint32_t WORLD_MAP_PING = 0x813080BC;
 
     constexpr double FIXED_32_32_TO_WORLD = 1.0 / 4294967296.0;
 
@@ -225,6 +233,13 @@ namespace
         std::int64_t x = 0;
         std::int64_t y = 0;
         std::int64_t z = 0;
+    };
+
+    struct CapturedWorldMapMarker
+    {
+        std::int64_t x = 0, y = 0, z = 0;
+        std::uint32_t key = 0;
+        bool custom = false;
     };
 
     struct CapturedNearbyMarker
@@ -1047,6 +1062,10 @@ namespace
         uintptr_t device = 0;
         uintptr_t swapchain = 0;
         std::uint64_t swapchainGeneration = 0;
+        float mapHeading = 0.0f;
+        DWORD mapHeadingTick = 0;
+        std::uint64_t mapHeadingSession = 0;
+        bool mapHeadingValid = false;
         std::uint32_t format = 0;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -1119,6 +1138,7 @@ namespace
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         std::vector<std::uint8_t> rgba;
+        std::vector<std::uint8_t> glyph;
     };
 
     struct MinimapIconAtlas
@@ -1196,6 +1216,14 @@ namespace
     std::atomic<DWORD> g_lastWaypointTick{ 0 };
     bool g_liveMarkerLayoutSupported = false;
     Mem::Detour* g_playerUiDataHook = nullptr;
+    Mem::Detour* g_clearMapMarkersHook = nullptr;
+    std::atomic<bool> g_worldMapLayoutSupported{ false };
+    std::mutex g_worldMapMutex;
+    std::vector<CapturedWorldMapMarker> g_worldMapMarkers;
+    DWORD g_worldMapTick = 0;
+    bool g_worldMapValid = false;
+    DWORD g_lastWorldMapCaptureTick = 0;
+    std::atomic<std::uint64_t> g_worldSessionGeneration{ 0 };
     DWORD g_lastRemoteCaptureTick = 0;
     using GetEcsWorldFn = uintptr_t(__fastcall*)(uintptr_t descriptor);
     using LookupComponentFn = uintptr_t*(__fastcall*)(uintptr_t* result, uintptr_t world, uintptr_t lookup, std::uint32_t entity);
@@ -1265,6 +1293,10 @@ namespace
     std::atomic<bool> g_showPings{ true };
     std::atomic<bool> g_showWaypoints{ true };
     std::atomic<int> g_minimapMapSampleStep{ MINIMAP_DEFAULT_MAP_SAMPLE_STEP };
+    std::atomic<int> g_minimapMapLight{ 55 };
+    std::atomic<int> g_headingSmoothingMs{ 55 };
+    std::atomic<bool> g_worldMapIconStyle{ true };
+    std::atomic<bool> g_showWorldMarkers{ true };
     std::atomic<int> g_minimapMaxDrawnPoints{ MINIMAP_DEFAULT_MAX_DRAWN_POINTS };
     DWORD g_lastConfigPollTick = 0;
     DWORD g_lastSessionLogPollTick = 0;
@@ -1464,19 +1496,20 @@ namespace
 
     int ParseConfigInteger(const std::string& value, int fallback, int low, int high)
     {
-        const std::string normalized = NormalizeConfigValue(value);
-        if (normalized.empty())
+        const auto first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
             return fallback;
+        const auto last = value.find_last_not_of(" \t\r\n");
 
         int parsed = 0;
-        for (char ch : normalized)
+        for (std::size_t i = first; i <= last; ++i)
         {
+            const char ch = value[i];
             if (ch < '0' || ch > '9')
                 return fallback;
-
-            parsed = (parsed * 10) + (ch - '0');
-            if (parsed > high)
-                return high;
+            // Keep validating the whole value after saturation. Do not turn
+            // "-1" into 1 or "1.5" into 15 by stripping punctuation.
+            parsed = static_cast<int>(MinValue<std::int64_t>(high, static_cast<std::int64_t>(parsed) * 10 + (ch - '0')));
         }
 
         return ClampValue(parsed, low, high);
@@ -1579,6 +1612,25 @@ namespace
             maxIconsSource = "shroudtopia_config_api";
         }
 
+        std::string configuredMapLight = "55", configuredSmoothing = "55", ignoredSource;
+        std::string configuredIconStyle = "world-map";
+        const auto readOption = [&](const char* key, std::string& value) {
+            if (!TryReadMinimapConfigStringFromFile(modContext, key, value, ignoredSource) &&
+                modContext != nullptr && modContext->config.GetString)
+                value = modContext->config.GetString("minimap_mod", key, value);
+        };
+        readOption("map_light", configuredMapLight);
+        readOption("heading_smoothing_ms", configuredSmoothing);
+        readOption("icon_style", configuredIconStyle);
+        const int mapLight = ParseConfigInteger(configuredMapLight, 55, 0, 100);
+        const int smoothing = ParseConfigInteger(configuredSmoothing, 55, 0, 250);
+        const bool worldMapStyle = configuredIconStyle != "original";
+        const bool showWorld = ReadMarkerVisibility(modContext, "show_world_markers");
+        const int previousLight = g_minimapMapLight.exchange(mapLight);
+        const int previousSmoothing = g_headingSmoothingMs.exchange(smoothing);
+        const bool previousStyle = g_worldMapIconStyle.exchange(worldMapStyle);
+        const bool previousWorld = g_showWorldMarkers.exchange(showWorld);
+
         const MinimapPlacement placement = ParseMinimapPlacement(configuredPosition);
         const int toggleKey = ParseMinimapToggleKey(configuredToggleKey);
         const bool renderFallback = ParseConfigBoolean(configuredRenderFallback, true);
@@ -1604,7 +1656,9 @@ namespace
             previousDebugLogging == debugLogging &&
             previousMapSampleStep == mapSampleStep &&
             previousMaxIcons == maxIcons && previousPlayers == showPlayers &&
-            previousPings == showPings && previousWaypoints == showWaypoints)
+            previousPings == showPings && previousWaypoints == showWaypoints &&
+            previousLight == mapLight && previousSmoothing == smoothing &&
+            previousStyle == worldMapStyle && previousWorld == showWorld)
         {
             return;
         }
@@ -1627,7 +1681,11 @@ namespace
             << " | max_icons_source=" << maxIconsSource
             << " | show_other_players=" << showPlayers
             << " | show_pings=" << showPings
-            << " | show_waypoints=" << showWaypoints;
+            << " | show_waypoints=" << showWaypoints
+            << " | show_world_markers=" << showWorld
+            << " | map_light=" << mapLight
+            << " | icon_style=" << (worldMapStyle ? "world-map" : "original")
+            << " | heading_smoothing_ms=" << smoothing;
         Log(oss.str());
     }
 
@@ -2357,6 +2415,13 @@ namespace
 
     void ClearLiveMarkers()
     {
+        ++g_worldSessionGeneration;
+        {
+            std::lock_guard<std::mutex> lock(g_worldMapMutex);
+            g_worldMapMarkers.clear();
+            g_worldMapValid = false;
+            g_worldMapTick = 0;
+        }
         {
             std::lock_guard<std::mutex> lock(g_liveMarkerMutex);
             g_remotePlayers.clear();
@@ -2659,6 +2724,110 @@ namespace
             descriptor[0] >= g_exeBase && descriptor[0] - g_exeBase + length <= g_exeImageSize &&
             descriptor[1] == length - 1 && descriptor[2] == g_exeBase + functionRva &&
             SafeRead(descriptor[0], actual, length) && std::memcmp(actual, name, length) == 0;
+    }
+
+    const std::array<std::uint8_t, 15> g_clearMapMarkersExpected = {
+        0x48, 0x83, 0xEC, 0x38, 0x41, 0xB8, 0x10, 0, 0, 0, 0x48, 0x8D, 0x54, 0x24, 0x20
+    };
+
+    bool HasVerifiedWorldMapLayout()
+    {
+        const std::uint8_t init[] = { 0xE8, 0x8C, 0xC9, 0x63, 0x00 };
+        const std::uint8_t clear[] = { 0x48, 0x89, 0x88, 0x08, 0xC1, 0x01, 0x00,
+            0x48, 0x89, 0x88, 0x30, 0xC1, 0x03, 0x00 };
+        const std::uint8_t custom[] = { 0x48, 0x8D, 0x9D, 0x28, 0xC1, 0x03, 0x00 };
+        const std::uint8_t stride[] = { 0x48, 0xC1, 0xE2, 0x07 };
+        const std::uint8_t position[] = { 0x0F, 0x10, 0x07, 0x0F, 0x11, 0x46, 0x10,
+            0xF2, 0x0F, 0x10, 0x4F, 0x10, 0xF2, 0x0F, 0x11, 0x4E, 0x20 };
+        const std::uint8_t key[] = { 0x89, 0x46, 0x30 };
+        return IsNamedSystemAt(0x1D45390, "clear_map_markers_for_ui", 0x29DE20) &&
+            IsNamedSystemAt(0x1D47820, "custom_map_markers_ui", 0x2A0C30) &&
+            IsNamedSystemAt(0x1D4C100, "replicate_map_markers_for_ui", 0x2A9C50) &&
+            reinterpret_cast<uintptr_t>(g_iterInit) == g_exeBase + 0x8DA7C0 &&
+            BytesMatchRva(0x29DE20, g_clearMapMarkersExpected.data(), g_clearMapMarkersExpected.size()) &&
+            BytesMatchRva(0x29DE2F, init, sizeof(init)) && BytesMatchRva(0x29DE3B, clear, sizeof(clear)) &&
+            BytesMatchRva(0x2A0CF6, custom, sizeof(custom)) && BytesMatchRva(0x2A0D34, stride, sizeof(stride)) &&
+            BytesMatchRva(0x2A9FA3, position, sizeof(position)) && BytesMatchRva(0x2AA0E9, key, sizeof(key));
+    }
+
+    bool ReadWorldMapArray(uintptr_t state, std::size_t offset, bool custom,
+        std::vector<CapturedWorldMapMarker>& markers)
+    {
+        uintptr_t entries = 0;
+        std::uint64_t count = 0;
+        if (!IsLikelyRuntimePointer(state) || !SafeReadValue(state + offset, entries) ||
+            !SafeReadValue(state + offset + 8, count) || count > WORLD_MAP_MAX_ENTRIES)
+            return false;
+        if (count == 0) return true; // A valid empty frame removes old markers.
+        if (!IsLikelyRuntimePointer(entries)) return false;
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(count) * WORLD_MAP_MARKER_STRIDE);
+        if (!SafeRead(entries, bytes.data(), bytes.size())) return false;
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            const auto* entry = bytes.data() + i * WORLD_MAP_MARKER_STRIDE;
+            CapturedWorldMapMarker marker{};
+            std::memcpy(&marker.x, entry + 0x10, sizeof(marker.x));
+            std::memcpy(&marker.y, entry + 0x18, sizeof(marker.y));
+            std::memcpy(&marker.z, entry + 0x20, sizeof(marker.z));
+            std::memcpy(&marker.key, entry + 0x30, sizeof(marker.key));
+            marker.custom = custom;
+            if (IsOnMapWorldPosition(FixedToWorld(marker.x), FixedToWorld(marker.y), FixedToWorld(marker.z)))
+                markers.push_back(marker);
+        }
+        return true;
+    }
+
+    void CaptureWorldMapMarkers(uintptr_t state, DWORD now)
+    {
+        std::vector<CapturedWorldMapMarker> markers;
+        const bool valid = ReadWorldMapArray(state, CUSTOM_MAP_ARRAY_OFFSET, true, markers) &&
+            ReadWorldMapArray(state, WORLD_MAP_ARRAY_OFFSET, false, markers);
+        if (!valid) markers.clear();
+        const auto count = markers.size();
+        {
+            std::lock_guard<std::mutex> lock(g_worldMapMutex);
+            g_worldMapMarkers = std::move(markers);
+            g_worldMapTick = now;
+            g_worldMapValid = valid;
+        }
+        static DWORD lastDebugTick = 0;
+        if (g_debugLoggingEnabled.load() && now - lastDebugTick >= 15000)
+        {
+            lastDebugTick = now;
+            std::ostringstream message;
+            message << "[Minimap] world-map snapshot | valid=" << valid << " | markers=" << count;
+            Log(message.str());
+        }
+    }
+
+    std::vector<CapturedWorldMapMarker> CopyWorldMapMarkers(DWORD now)
+    {
+        std::lock_guard<std::mutex> lock(g_worldMapMutex);
+        if (!g_worldMapValid || now - g_worldMapTick > MinimapLive::PlayerStaleMs) return {};
+        return g_worldMapMarkers;
+    }
+
+    bool TryInitWorldMapState(void* ctx, uintptr_t& state)
+    {
+        uintptr_t localCtx[2] = {}, record[2] = {};
+        if (g_iterInit == nullptr || !SafeRead(reinterpret_cast<uintptr_t>(ctx), localCtx, sizeof(localCtx))) return false;
+        __try { g_iterInit(localCtx, record, sizeof(record)); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        state = record[1];
+        return IsLikelyRuntimePointer(state);
+    }
+
+    void __fastcall CaptureWorldMapHook(void* ctx, void*, void*, void*)
+    {
+        if (!g_worldMapLayoutSupported) return;
+        const DWORD now = GetTickCount();
+        if (now - g_lastWorldMapCaptureTick < 100) return;
+        g_lastWorldMapCaptureTick = now;
+        uintptr_t state = 0;
+        TryInitWorldMapState(ctx, state);
+        // At this entry the preceding frame is complete. Copy before the game
+        // clears/rebuilds the lists; no game-owned pointers reach the renderer.
+        CaptureWorldMapMarkers(state, now);
     }
 
     const std::array<std::uint8_t, 16> g_playerUiDataExpected = {
@@ -5013,6 +5182,13 @@ namespace
 
     void CmdClearPoiBackplate(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, int size, float red, float green, float blue)
     {
+        if (g_worldMapIconStyle.load())
+        {
+            CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x, y, size + 4, 0.99f, 0.97f, 0.90f, 1.0f);
+            CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x, y, size + 2, red, green, blue, 1.0f);
+            CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x, y, size, 0.99f, 0.97f, 0.90f, 1.0f);
+            return;
+        }
         CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x + 1, y + 2, size + 5, 0.0f, 0.0f, 0.0f, 0.72f);
         CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x, y, size + 4, 0.055f, 0.045f, 0.034f, 0.98f);
         CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x, y, size + 2, red, green, blue, 0.95f);
@@ -5088,7 +5264,8 @@ namespace
 
     void CmdClearPoiIcon(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, std::uint32_t kind, bool clipped)
     {
-        if (TryDrawMinimapRasterIcon(renderer, commandBuffer, cx, cy, radius, x, y, kind, clipped))
+        if (kind != 11 && kind != 12 && kind != 13 &&
+            TryDrawMinimapRasterIcon(renderer, commandBuffer, cx, cy, radius, x, y, kind, clipped))
             return;
 
         const int size = clipped ? 5 : 7;
@@ -5111,6 +5288,18 @@ namespace
         {
         case 10:
             CmdClearQuestIcon(renderer, commandBuffer, cx, cy, radius, x, y, clipped ? 7 : 10, 1.0f, 0.72f, 0.10f);
+            break;
+        case 11: // Custom map pin, distinct from the selected waypoint outline.
+            CmdClearPoiBackplate(renderer, commandBuffer, cx, cy, radius, x, y, size, 0.92f, 0.18f, 0.14f);
+            CmdClearRect(renderer, commandBuffer, 0.97f, 0.94f, 0.86f, 1.0f, x - 1, y - size, 2, size * 2);
+            CmdClearRect(renderer, commandBuffer, 0.96f, 0.16f, 0.12f, 1.0f, x + 1, y - size, size, size);
+            break;
+        case 12: // Untyped world-map/NPC marker.
+            CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x, y, 5, 0.99f, 0.97f, 0.90f, 1.0f);
+            CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, x, y, 3, 0.30f, 0.66f, 0.96f, 1.0f);
+            break;
+        case 13:
+            CmdClearSolidDiamond(renderer, commandBuffer, x, y, size, 0.20f, 0.82f, 0.32f);
             break;
         case 2:
         case 40:
@@ -5638,6 +5827,36 @@ namespace
         candidates.push_back(JoinPath(directory, "embervale_player_arrow.rgba"));
     }
 
+    void PrepareMapIconGlyph(MinimapIcon& icon)
+    {
+        const std::size_t count = icon.rgba.size() / 4;
+        std::size_t opaque = 0, light = 0, border = 0, lightBorder = 0;
+        for (std::size_t i = 0; i < count; ++i)
+            if (icon.rgba[i * 4 + 3] > 24)
+            {
+                ++opaque;
+                const bool lit = icon.rgba[i * 4] * 0.30f + icon.rgba[i * 4 + 1] * 0.59f + icon.rgba[i * 4 + 2] * 0.11f > 127.5f;
+                if (lit) ++light;
+                const auto x = i % icon.width, y = i / icon.width;
+                if (x == 0 || y == 0 || x + 1 == icon.width || y + 1 == icon.height ||
+                    icon.rgba[(i - 1) * 4 + 3] <= 24 || icon.rgba[(i + 1) * 4 + 3] <= 24 ||
+                    icon.rgba[(i - icon.width) * 4 + 3] <= 24 || icon.rgba[(i + icon.width) * 4 + 3] <= 24)
+                { ++border; if (lit) ++lightBorder; }
+            }
+        // Infer two-tone tile backgrounds from the opaque edge, not total fill:
+        // a large glyph can cover most of its tile. Uniform transparent glyphs
+        // retain their alpha shape. Cache once rather than each drawn frame.
+        const bool useLuminance = light > 0 && light < opaque;
+        const bool darkGlyph = border > 0 ? lightBorder * 2 > border : light * 2 > opaque;
+        icon.glyph.resize(count);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            const float luminance = (icon.rgba[i * 4] * 0.30f + icon.rgba[i * 4 + 1] * 0.59f + icon.rgba[i * 4 + 2] * 0.11f) / 255.0f;
+            icon.glyph[i] = icon.rgba[i * 4 + 3] > 24 &&
+                (!useLuminance || (darkGlyph ? luminance < 0.45f : luminance > 0.55f));
+        }
+    }
+
     bool TryLoadMinimapIconsFromPath(const std::string& path, MinimapIconAtlas& atlas)
     {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -5690,6 +5909,7 @@ namespace
                 return false;
 
             icon.rgba.assign(bytes.begin() + static_cast<std::ptrdiff_t>(cursor), bytes.begin() + static_cast<std::ptrdiff_t>(cursor + pixelBytes));
+            PrepareMapIconGlyph(icon);
             cursor += pixelBytes;
             icons.push_back(std::move(icon));
         }
@@ -6044,6 +6264,20 @@ namespace
         return resolvedKey != key && TryCopyMinimapIconExact(key, outIcon);
     }
 
+    void DrawMapIconDiamond(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, int radius, int x, int y, int size, float r, float g, float b)
+    {
+        for (int dy = -size; dy <= size; ++dy)
+        {
+            const int mapY = y + dy - cy;
+            if (std::abs(mapY) > radius) continue;
+            const int half = static_cast<int>(std::sqrt(static_cast<float>(radius * radius - mapY * mapY)));
+            const int left = MaxValue(x - size + std::abs(dy), cx - half);
+            const int right = MinValue(x + size - std::abs(dy), cx + half);
+            if (left <= right) CmdClearRect(renderer, commandBuffer, r, g, b, 1.0f, left, y + dy, right - left + 1, 1);
+        }
+    }
+
     bool TryDrawMinimapRasterIcon(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, std::uint32_t kind, bool clipped)
     {
         MinimapIcon icon{};
@@ -6056,6 +6290,13 @@ namespace
         const int top = y - targetHeight / 2;
         const int radiusSq = radius * radius;
 
+        const bool styled = g_worldMapIconStyle.load();
+        if (styled)
+        {
+            const int diamond = MaxValue(6, MaxValue(targetWidth, targetHeight) / 2 + 1);
+            DrawMapIconDiamond(renderer, commandBuffer, cx, cy, radius, x, y, diamond + 2, 0.99f, 0.95f, 0.78f);
+            DrawMapIconDiamond(renderer, commandBuffer, cx, cy, radius, x, y, diamond, 0.97f, 0.75f, 0.16f);
+        }
         for (int dstY = 0; dstY < targetHeight; ++dstY)
         {
             const int screenY = top + dstY;
@@ -6094,15 +6335,15 @@ namespace
                     (static_cast<std::size_t>(srcY) * static_cast<std::size_t>(icon.width) + static_cast<std::size_t>(srcX)) *
                     4u;
                 const std::uint8_t alpha = icon.rgba[offset + 3];
-                if (alpha <= 24)
+                if (alpha <= 24 || (styled && (offset / 4 >= icon.glyph.size() || !icon.glyph[offset / 4])))
                 {
                     flushRun(screenX);
                     continue;
                 }
 
-                const float red = static_cast<float>(icon.rgba[offset + 0]) / 255.0f;
-                const float green = static_cast<float>(icon.rgba[offset + 1]) / 255.0f;
-                const float blue = static_cast<float>(icon.rgba[offset + 2]) / 255.0f;
+                const float red = styled ? 0.33f : static_cast<float>(icon.rgba[offset + 0]) / 255.0f;
+                const float green = styled ? 0.20f : static_cast<float>(icon.rgba[offset + 1]) / 255.0f;
+                const float blue = styled ? 0.05f : static_cast<float>(icon.rgba[offset + 2]) / 255.0f;
 
                 if (runStart >= 0 &&
                     std::fabs(runRed - red) < 0.002f &&
@@ -6649,6 +6890,35 @@ namespace
         const std::vector<CapturedNearbyMarker>& nearbyMarkers,
         const std::vector<CapturedMapMarkerVisibility>& visibleMapMarkers)
     {
+        if (g_worldMapLayoutSupported && g_showWorldMarkers.load())
+        {
+            const DWORD now = GetTickCount();
+            static DWORD lastUnknownLog = 0;
+            const bool debugKeys = g_debugLoggingEnabled.load() && now - lastUnknownLog >= 15000;
+            std::ostringstream unknownKeys;
+            int unknownCount = 0;
+            for (const auto& marker : CopyWorldMapMarkers(now))
+            {
+                // Dedicated ping capture preserves per-sender expiry and toggles.
+                if (marker.key == WORLD_MAP_PING && (g_liveMarkerLayoutSupported || !g_showPings.load())) continue;
+                std::uint32_t known = 0;
+                const std::uint32_t kind = marker.custom ? 11 :
+                    marker.key == WORLD_MAP_FLAME_ALTAR ? 31 : marker.key == WORLD_MAP_PING ? 13 :
+                    marker.key == 0 ? 12 : TryResolveKnownMarkerIconKey(marker.key, known) ? known : 55;
+                if (debugKeys && kind == 55 && unknownCount < 6)
+                {
+                    if (unknownCount++) unknownKeys << ',';
+                    unknownKeys << Hex(marker.key);
+                }
+                PushWorldPointUnique(points, { FixedToWorld(marker.x), FixedToWorld(marker.z), kind });
+            }
+            if (debugKeys)
+            {
+                lastUnknownLog = now;
+                if (unknownCount) Log("[Minimap] world-map unknown icon keys | " + unknownKeys.str());
+            }
+            return; // An empty/expired snapshot must not resurrect cached POIs.
+        }
         std::vector<MinimapWorldPoint> visibleMarkerPoints;
         visibleMarkerPoints.reserve(visibleMapMarkers.size());
         for (const CapturedMapMarkerVisibility& marker : visibleMapMarkers)
@@ -6907,6 +7177,20 @@ namespace
         return true;
     }
 
+    void ApplyMapLighting(float& red, float& green, float& blue, float distance, int light)
+    {
+        const float strength = static_cast<float>(ClampValue(light, 0, 100)) / 100.0f;
+        const float lift = strength * 0.62f;
+        const float style = MinValue(1.0f, strength / 0.55f);
+        red += (1.0f - red) * lift;
+        green = (green + (1.0f - green) * lift) * (1.0f - 0.035f * style);
+        blue = (blue + (1.0f - blue) * lift) * (1.0f - 0.115f * style);
+        const float vignette = (1.02f - 0.01f * style) - (0.34f - 0.24f * style) * distance * distance;
+        red = ClampValue(red * vignette + 0.004f, 0.0f, 1.0f);
+        green = ClampValue(green * vignette + 0.004f, 0.0f, 1.0f);
+        blue = ClampValue(blue * vignette + 0.004f, 0.0f, 1.0f);
+    }
+
     void DrawRealMap(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, float centerX, float centerZ, float unitsPerPixel, float headingRadians)
     {
         EnsureRealMapLoaded();
@@ -6917,9 +7201,10 @@ namespace
         std::lock_guard<std::mutex> lock(g_realMapMutex);
         const bool hasMap = g_realMap.loaded && !g_realMap.rgba.empty();
         const int sampleStep = ClampValue(g_minimapMapSampleStep.load(), 1, 4);
-        const auto quantizeColor = [](float value) -> float
+        const int mapLight = g_minimapMapLight.load();
+        const auto quantizeColor = [mapLight](float value) -> float
         {
-            constexpr float kSteps = 34.0f;
+            const float kSteps = mapLight == 0 ? 34.0f : 48.0f;
             return std::round(ClampValue(value, 0.0f, 1.0f) * kSteps) / kSteps;
         };
 
@@ -6995,10 +7280,7 @@ namespace
                     blue = ClampValue((blue - 0.42f) * 1.16f + 0.42f, 0.0f, 1.0f);
 
                     const float distance = std::sqrt(static_cast<float>(distanceSq)) / static_cast<float>(innerRadius);
-                    const float vignette = 1.02f - 0.34f * distance * distance;
-                    red = ClampValue(red * vignette + 0.004f, 0.0f, 1.0f);
-                    green = ClampValue(green * vignette + 0.004f, 0.0f, 1.0f);
-                    blue = ClampValue(blue * vignette + 0.004f, 0.0f, 1.0f);
+                    ApplyMapLighting(red, green, blue, distance, mapLight);
                 }
 
                 red = quantizeColor(red);
@@ -7485,6 +7767,26 @@ namespace
         }
     }
 
+    float SmoothMapHeading(VulkanMinimapRenderer& renderer, float heading, bool valid, DWORD now)
+    {
+        const int smoothingMs = g_headingSmoothingMs.load();
+        const auto session = g_worldSessionGeneration.load();
+        if (!valid || !renderer.mapHeadingValid || renderer.mapHeadingSession != session ||
+            now - renderer.mapHeadingTick > 1000 || smoothingMs == 0)
+            renderer.mapHeading = valid ? heading : 0.0f;
+        else
+        {
+            constexpr float turn = 6.28318530718f;
+            const float delta = std::remainder(heading - renderer.mapHeading, turn);
+            const float alpha = 1.0f - std::exp(-static_cast<float>(now - renderer.mapHeadingTick) / smoothingMs);
+            renderer.mapHeading = std::remainder(renderer.mapHeading + delta * alpha, turn);
+        }
+        renderer.mapHeadingValid = valid;
+        renderer.mapHeadingTick = now;
+        renderer.mapHeadingSession = session;
+        return renderer.mapHeading;
+    }
+
     void DrawMinimapWidget(VulkanMinimapRenderer& renderer, void* commandBuffer)
     {
         const int shortEdge = static_cast<int>(MinValue(renderer.width, renderer.height));
@@ -7493,7 +7795,7 @@ namespace
         const int marginY = MaxValue(52, static_cast<int>(renderer.height) / 42);
         const int cx = static_cast<int>(renderer.width) - marginX - radius;
         const int cy = ComputeMinimapCenterY(renderer.height, radius, marginY);
-        const int zoomStep = ClampValue(g_minimapZoomStep.load(), -3, 3);
+        const int zoomStep = ClampValue(g_minimapZoomStep.load(), MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
         const float zoom = std::pow(1.32f, static_cast<float>(zoomStep));
         const float unitsPerPixel = MINIMAP_BASE_UNITS_PER_PIXEL / zoom;
 
@@ -7509,8 +7811,9 @@ namespace
 
         const float centerX = FixedToWorld(playerPosition.x);
         const float centerZ = FixedToWorld(playerPosition.z);
-        const float mapHeading = playerPosition.hasHeading ? playerPosition.headingRadians : 0.0f;
-        AppendVisibleStaticPoiPoints(points, nearbyMarkers, visibleMapMarkers, centerX, centerZ, unitsPerPixel * static_cast<float>(radius) * STATIC_POI_DRAW_RADIUS_FACTOR);
+        const float mapHeading = SmoothMapHeading(renderer, playerPosition.headingRadians, playerPosition.hasHeading, GetTickCount());
+        if (!g_worldMapLayoutSupported || !g_showWorldMarkers.load())
+            AppendVisibleStaticPoiPoints(points, nearbyMarkers, visibleMapMarkers, centerX, centerZ, unitsPerPixel * static_cast<float>(radius) * STATIC_POI_DRAW_RADIUS_FACTOR);
         LimitMinimapWorldPoints(points, centerX, centerZ);
 
         const bool hasRasterFrame = HasLoadedMinimapFrame();
@@ -7538,6 +7841,8 @@ namespace
             bool clipped = false;
             ProjectWorldToMinimap(point.x, point.z, centerX, centerZ, unitsPerPixel, mapHeading, cx, cy, pointProjectionRadius, px, py, clipped);
 
+            if (clipped && point.kind != 11 && point.kind != 12 && point.kind != 13)
+                continue;
             CmdClearPoiIcon(renderer, commandBuffer, cx, cy, pointClipRadius, px, py, point.kind, clipped);
         }
 
@@ -7713,14 +8018,14 @@ namespace
         if ((GetAsyncKeyState(VK_ADD) & 0x0001) != 0 ||
             (GetAsyncKeyState(VK_OEM_PLUS) & 0x0001) != 0)
         {
-            step = ClampValue(step + 1, -3, 3);
+            step = ClampValue(step + 1, MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
             changed = true;
         }
 
         if ((GetAsyncKeyState(VK_SUBTRACT) & 0x0001) != 0 ||
             (GetAsyncKeyState(VK_OEM_MINUS) & 0x0001) != 0)
         {
-            step = ClampValue(step - 1, -3, 3);
+            step = ClampValue(step - 1, MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
             changed = true;
         }
 
@@ -8321,6 +8626,17 @@ namespace
                 ? "[Minimap] live ping and waypoint layout verified (client 1076226)"
                 : "[Minimap] live marker layout unavailable for this client");
 
+            g_worldMapLayoutSupported = namedClient && HasVerifiedWorldMapLayout();
+            if (g_worldMapLayoutSupported)
+            {
+                g_clearMapMarkersHook = InstallEntryHook(0x29DE20, g_clearMapMarkersExpected,
+                    reinterpret_cast<void*>(&CaptureWorldMapHook), "clear_map_markers_for_ui (completed map snapshot)");
+                g_worldMapLayoutSupported = g_clearMapMarkersHook != nullptr;
+            }
+            modContext->Log(g_worldMapLayoutSupported
+                ? "[Minimap] world-map marker layout verified (client 1076226)"
+                : "[Minimap] world-map marker layout unavailable for this client");
+
             g_mapMarkerVisibilityHook = InstallMapMarkerVisibilityLoopHook(
                 mapMarkerVisibilityLoopRva,
                 reinterpret_cast<void*>(&CaptureMapMarkerVisibilityRecordHook)
@@ -8354,6 +8670,13 @@ namespace
 
         void Unload(ModContext* modContext) override
         {
+            if (g_clearMapMarkersHook != nullptr)
+            {
+                g_clearMapMarkersHook->deactivate();
+                delete g_clearMapMarkersHook;
+                g_clearMapMarkersHook = nullptr;
+            }
+            g_worldMapLayoutSupported = false;
             if (g_playerUiDataHook != nullptr)
             {
                 g_playerUiDataHook->deactivate();
@@ -8467,6 +8790,7 @@ namespace
             RefreshMinimapConfig(modContext, true);
             const bool cameraOk = ActivateHook(g_playerCameraTransformHook);
             ActivateHook(g_playerUiDataHook);
+            ActivateHook(g_clearMapMarkersHook);
             const bool uiOk = ActivateHook(g_localPlayerUiRenderSetupHook);
             const bool waypointOk = ActivateHook(g_playerWaypointsUiHook);
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
@@ -8480,6 +8804,7 @@ namespace
             oss << "[Minimap] activate internal bridge"
                 << " | camera_hook=" << HookActivationState(g_playerCameraTransformHook)
                 << " | remote_player_hook=" << HookActivationState(g_playerUiDataHook)
+                << " | world_map_hook=" << HookActivationState(g_clearMapMarkersHook)
                 << " | ui_hook=" << HookActivationState(g_localPlayerUiRenderSetupHook)
                 << " | waypoint_hook=" << HookActivationState(g_playerWaypointsUiHook)
                 << " | marker_visibility_hook=" << HookActivationState(g_mapMarkerVisibilityHook)
@@ -8491,6 +8816,8 @@ namespace
 
         void Deactivate(ModContext* modContext) override
         {
+            if (g_clearMapMarkersHook != nullptr)
+                g_clearMapMarkersHook->deactivate();
             if (g_playerUiDataHook != nullptr)
                 g_playerUiDataHook->deactivate();
             {

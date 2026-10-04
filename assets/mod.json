@@ -18,6 +18,10 @@
       "show_other_players": true,
       "show_pings": true,
       "show_waypoints": true,
+      "show_world_markers": true,
+      "map_light": 55,
+      "icon_style": "world-map",
+      "heading_smoothing_ms": 55,
       "map_sample_step": 2,
       "max_icons": 64
     }
