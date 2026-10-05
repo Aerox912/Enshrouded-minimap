@@ -242,7 +242,7 @@ namespace
                     Check(cy - half + yOffset >= 8 && cy + radius + (showClock ? footer : bottomExtra) <= height - 8,
                         "complete frame and optional clock fit every placement and screen height");
                     if (placement == MinimapPlacement::TopRight)
-                        Check(cy - half + yOffset >= height / 9 + 8, "top-right frame leaves the quest title and Journal region clear");
+                        Check(cy - half + yOffset >= height / 9 + 20, "top-right frame leaves the localized quest title and Journal region clear");
                 }
             }
             Check(CLOCK_FRAME_GAP < 0 && CLOCK_FRAME_GAP >= -8 && bottomExtra + CLOCK_FRAME_GAP >= 8,

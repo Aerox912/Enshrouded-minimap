@@ -1,7 +1,7 @@
 # Enshrouded Minimap - Community Edition
 
 Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
-Version **0.5.5** includes the camera/graphics fixes from upstream
+Version **0.5.6** includes the camera/graphics fixes from upstream
 [PR #5](https://github.com/elxokker/Enshrouded-minimap/pull/5) and the player,
 ping, waypoint, death-marker and world-map additions from
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
@@ -66,11 +66,11 @@ layout and writes these values automatically.
 
 Download the latest zip from the release page:
 
-[Community Edition v0.5.5](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.5)
+[Community Edition v0.5.6](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.6)
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.5.zip`
+`enshrouded-minimap-community-v0.5.6.zip`
 
 Requires Windows x64 Enshrouded,
 [Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
@@ -81,7 +81,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.5.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.6.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
@@ -313,8 +313,15 @@ installation steps above; building and packaging do not modify the game.
 
 ## Version
 
-Current community mod version: `0.5.5`.
+Current community mod version: `0.5.6`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.
 Large game updates can still require structure offsets to be revalidated.
+
+This update moves the top-right minimap down another 12 pixels to leave room for
+the Journal prompt under taller localized quest text. The weather clock keeps
+its existing spacing. It also removes a blocking Vulkan scan from activation:
+the normal game hook captures the device table first, and late-loading fallback
+discovery resumes in short slices. Other Shroudtopia mods can process settings
+immediately, including first-person switching through the Mod Manager.

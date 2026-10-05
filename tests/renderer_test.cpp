@@ -104,10 +104,61 @@ namespace
     {
         return SubmitVulkanMinimapFrameLocked(reinterpret_cast<void*>(0x2), present, index, adjusted, &adjustedSemaphore);
     }
+
+    void CheckVulkanFallbackScan()
+    {
+        constexpr std::size_t bytes = 4 * 1024 * 1024;
+        auto memory = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+        Check(memory != nullptr, "allocate readable private memory for Vulkan fallback discovery");
+        std::memset(memory, 0, bytes);
+        const uintptr_t begin = reinterpret_cast<uintptr_t>(memory), end = begin + bytes;
+        const uintptr_t table = end - VULKAN_TABLE_QUEUE_PRESENT_OFFSET - sizeof(uintptr_t);
+        constexpr uintptr_t module = 0x12340000, proc = 0x56780000;
+        for (std::size_t offset : {std::size_t(0x10), std::size_t(0x18), std::size_t(0x20), std::size_t(0x78),
+            VULKAN_TABLE_CREATE_SWAPCHAIN_OFFSET, VULKAN_TABLE_QUEUE_PRESENT_OFFSET})
+            *reinterpret_cast<uintptr_t*>(table + offset) = offset == 0x10 ? module : offset == 0x18 ? proc : 1;
+
+        g_vulkanDeviceTable = 0;
+        g_vulkanScanCursor = 0;
+        Check(!ScanExistingVulkanDeviceTable(module, proc, begin, end) &&
+            g_vulkanScanCursor > begin && g_vulkanScanCursor < table,
+            "large fallback scan yields before completion so other mods can process configuration");
+        bool found = false;
+        for (int slice = 0; slice < 1024 && !found; ++slice)
+            found = ScanExistingVulkanDeviceTable(module, proc, begin, end);
+        Check(found && g_vulkanDeviceTable.load() == table && g_vulkanScanCursor == 0,
+            "resumed fallback discovers a table at the last valid address without skipping candidates");
+
+        g_vulkanDeviceTable = 0;
+        g_vulkanScanCursor = begin;
+        Check(!ScanExistingVulkanDeviceTable(module, proc, begin, end), "start another partial fallback pass");
+        const uintptr_t capturedByHook = begin + 0x1000;
+        g_vulkanDeviceTable = capturedByHook;
+        Check(ScanExistingVulkanDeviceTable(module, proc, begin, end) &&
+            g_vulkanDeviceTable.load() == capturedByHook && g_vulkanScanCursor == 0,
+            "normal Vulkan hook cancels pending discovery without replacing its captured table");
+
+        g_vulkanDeviceTable = 0;
+        std::memset(memory, 0, bytes);
+        bool complete = false, noFalsePositive = true;
+        for (int slice = 0; slice < 1024 && !complete; ++slice)
+        {
+            noFalsePositive = !ScanExistingVulkanDeviceTable(module, proc, begin, end) && noFalsePositive;
+            complete = g_vulkanScanCursor == 0;
+        }
+        Check(noFalsePositive && g_vulkanDeviceTable.load() == 0, "empty scan does not invent a Vulkan table");
+        Check(complete, "exhausted fallback pass resets its cursor for the delayed retry");
+        DWORD oldProtect = 0;
+        Check(VirtualProtect(memory, bytes, PAGE_NOACCESS, &oldProtect) != FALSE, "protect inaccessible scan fixture");
+        Check(!ScanExistingVulkanDeviceTable(module, proc, begin, end) && g_vulkanScanCursor == 0,
+            "fallback skips inaccessible pages without reading them");
+        VirtualFree(memory, 0, MEM_RELEASE);
+    }
 }
 
 int main()
 {
+    CheckVulkanFallbackScan();
     // Same handle and extent do not establish that cached image views are valid.
     Setup();
     SwapchainRuntimeInfo snapshot{};

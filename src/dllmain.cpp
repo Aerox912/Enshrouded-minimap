@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1302,6 +1303,7 @@ namespace
     DWORD g_lastVulkanFunctionScanTick = 0;
     DWORD g_lastVulkanRendererLogTick = 0;
     int g_vulkanScanAttempts = 0;
+    uintptr_t g_vulkanScanCursor = 0; // Owned by Shroudtopia's update thread.
     bool g_vulkanFunctionOffsetsLogged = false;
     std::atomic<uintptr_t> g_vulkanDeviceTable{ 0 };
     std::atomic<uintptr_t> g_patchedVulkanDeviceTable{ 0 };
@@ -1789,9 +1791,9 @@ namespace
     {
         const int screenHeight = static_cast<int>(height);
         // Reserve the quest title and Journal prompt above the entire frame.
-        // The HUD scales with screen height; the supplied 1439p capture needs
-        // about 160 pixels clear at the top, plus a small separation.
-        const int top = MaxValue(marginY, screenHeight / 9 + 8) + radius + frameExtra;
+        // Scale with the HUD and leave room for the Journal prompt beneath
+        // taller, localized quest text, including the rotating top ornament.
+        const int top = MaxValue(marginY, screenHeight / 9 + 20) + radius + frameExtra;
         const int bottom = screenHeight - marginY - radius;
         const int safeTop = radius + frameExtra + 8;
         const int safeBottom = MaxValue(safeTop, screenHeight - radius - 8 - MaxValue(footerHeight, frameExtra));
@@ -9123,8 +9125,8 @@ namespace
         uintptr_t createSwapchain = 0;
         uintptr_t queuePresent = 0;
 
-        if (!SafeReadValue(candidate + 0x10, module) ||
-            !SafeReadValue(candidate + 0x18, getInstanceProcAddr) ||
+        if (!SafeReadValue(candidate + 0x10, module) || module != vulkanModule ||
+            !SafeReadValue(candidate + 0x18, getInstanceProcAddr) || getInstanceProcAddr != vkGetInstanceProcAddr ||
             !SafeReadValue(candidate + 0x20, createInstance) ||
             !SafeReadValue(candidate + 0x78, getDeviceProcAddr) ||
             !SafeReadValue(candidate + VULKAN_TABLE_CREATE_SWAPCHAIN_OFFSET, createSwapchain) ||
@@ -9141,61 +9143,100 @@ namespace
             queuePresent != 0;
     }
 
-    bool TryFindExistingVulkanDeviceTable()
+    bool ScanExistingVulkanDeviceTable(uintptr_t vulkanModule, uintptr_t getInstanceProcAddr,
+        uintptr_t minimum, uintptr_t maximum)
     {
-        if (g_vulkanDeviceTable.load() != 0)
-            return true;
-
-        HMODULE vulkanModule = GetModuleHandleA("vulkan-1.dll");
-        if (vulkanModule == nullptr)
-            return false;
-
-        FARPROC getInstanceProcAddr = GetProcAddress(vulkanModule, "vkGetInstanceProcAddr");
-        if (getInstanceProcAddr == nullptr)
-            return false;
-
-        SYSTEM_INFO systemInfo{};
-        GetSystemInfo(&systemInfo);
-
-        uintptr_t cursor = reinterpret_cast<uintptr_t>(systemInfo.lpMinimumApplicationAddress);
-        const uintptr_t maximum = reinterpret_cast<uintptr_t>(systemInfo.lpMaximumApplicationAddress);
+        // This runs on the shared loader thread. Resume short slices instead of
+        // blocking configuration reloads (including first-person switching).
+        if (g_vulkanScanCursor < minimum || g_vulkanScanCursor >= maximum)
+            g_vulkanScanCursor = minimum;
         constexpr std::size_t TABLE_MIN_SIZE = VULKAN_TABLE_QUEUE_PRESENT_OFFSET + sizeof(uintptr_t);
+        const auto started = std::chrono::steady_clock::now();
+        const auto expired = [&]() { return std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(2); };
+        std::size_t candidates = 0, regions = 0;
 
         MEMORY_BASIC_INFORMATION info{};
-        while (cursor < maximum && VirtualQuery(reinterpret_cast<const void*>(cursor), &info, sizeof(info)) == sizeof(info))
+        while (g_vulkanScanCursor < maximum)
         {
+            if (g_vulkanDeviceTable.load() != 0)
+            {
+                g_vulkanScanCursor = 0;
+                return true;
+            }
+            if (++regions > 256 || expired())
+                return false;
+            if (VirtualQuery(reinterpret_cast<const void*>(g_vulkanScanCursor), &info, sizeof(info)) != sizeof(info))
+                break;
             const uintptr_t regionBase = reinterpret_cast<uintptr_t>(info.BaseAddress);
             const uintptr_t next = regionBase + info.RegionSize;
+            if (next <= g_vulkanScanCursor)
+                break;
+            const uintptr_t end = next < maximum ? next : maximum;
+            const uintptr_t first = ((regionBase > g_vulkanScanCursor ? regionBase : g_vulkanScanCursor) + 7) & ~uintptr_t(7);
 
             if (info.State == MEM_COMMIT &&
                 info.Type == MEM_PRIVATE &&
-                info.RegionSize >= TABLE_MIN_SIZE &&
+                end >= first && end - first >= TABLE_MIN_SIZE &&
                 IsReadablePage(info.Protect))
             {
-                const uintptr_t first = (regionBase + 7) & ~uintptr_t(7);
-                const uintptr_t last = next > TABLE_MIN_SIZE ? next - TABLE_MIN_SIZE : first;
+                const uintptr_t last = end - TABLE_MIN_SIZE;
                 for (uintptr_t candidate = first; candidate <= last; candidate += sizeof(uintptr_t))
                 {
-                    if (LooksLikeVulkanDeviceTable(
-                        candidate,
-                        reinterpret_cast<uintptr_t>(vulkanModule),
-                        reinterpret_cast<uintptr_t>(getInstanceProcAddr)))
+                    // The normal Vulkan init hook can find the table during a
+                    // scan. Stop immediately rather than traversing the heap.
+                    if (g_vulkanDeviceTable.load() != 0)
                     {
-                        g_vulkanDeviceTable.store(candidate);
-                        std::ostringstream oss;
-                        oss << "[Minimap] found existing Vulkan device table at " << Hex(candidate);
-                        Log(oss.str());
+                        g_vulkanScanCursor = 0;
                         return true;
                     }
+                    if (++candidates > 65536 || ((candidates & 255) == 0 && expired()))
+                        return false;
+                    if (LooksLikeVulkanDeviceTable(candidate, vulkanModule, getInstanceProcAddr))
+                    {
+                        uintptr_t expected = 0;
+                        if (g_vulkanDeviceTable.compare_exchange_strong(expected, candidate))
+                        {
+                            std::ostringstream oss;
+                            oss << "[Minimap] found existing Vulkan device table at " << Hex(candidate);
+                            Log(oss.str());
+                        }
+                        g_vulkanScanCursor = 0;
+                        return true;
+                    }
+                    g_vulkanScanCursor = candidate + sizeof(uintptr_t);
                 }
             }
-
-            if (next <= cursor)
-                break;
-            cursor = next;
+            g_vulkanScanCursor = next;
         }
-
+        g_vulkanScanCursor = 0;
         return false;
+    }
+
+    bool TryFindExistingVulkanDeviceTable()
+    {
+        if (g_vulkanDeviceTable.load() != 0)
+        {
+            g_vulkanScanCursor = 0;
+            return true;
+        }
+        HMODULE vulkanModule = GetModuleHandleA("vulkan-1.dll");
+        if (vulkanModule == nullptr)
+            return false;
+        FARPROC getInstanceProcAddr = GetProcAddress(vulkanModule, "vkGetInstanceProcAddr");
+        if (getInstanceProcAddr == nullptr)
+            return false;
+        SYSTEM_INFO systemInfo{};
+        GetSystemInfo(&systemInfo);
+        const bool found = ScanExistingVulkanDeviceTable(reinterpret_cast<uintptr_t>(vulkanModule),
+            reinterpret_cast<uintptr_t>(getInstanceProcAddr),
+            reinterpret_cast<uintptr_t>(systemInfo.lpMinimumApplicationAddress),
+            reinterpret_cast<uintptr_t>(systemInfo.lpMaximumApplicationAddress));
+        if (!found && g_vulkanScanCursor == 0)
+        {
+            ++g_vulkanScanAttempts;
+            g_lastVulkanScanTick = GetTickCount();
+        }
+        return found;
     }
 
     void ProbeVulkanTable()
@@ -9203,10 +9244,8 @@ namespace
         if (g_vulkanDeviceTable.load() == 0)
         {
             const DWORD now = GetTickCount();
-            if (g_vulkanScanAttempts < 3 && now - g_lastVulkanScanTick >= 10000)
+            if (g_vulkanScanAttempts < 3 && (g_vulkanScanCursor != 0 || now - g_lastVulkanScanTick >= 10000))
             {
-                g_lastVulkanScanTick = now;
-                ++g_vulkanScanAttempts;
                 TryFindExistingVulkanDeviceTable();
             }
         }
@@ -9595,6 +9634,7 @@ namespace
             g_lastSwapchainState.store(0);
             g_lastVulkanQueueFamilyIndex.store(0);
             g_vulkanScanAttempts = 0;
+            g_vulkanScanCursor = 0;
             g_lastVulkanScanTick = 0;
             g_lastVulkanFunctionScanTick = 0;
             g_vulkanFunctionOffsetsLogged = false;
@@ -9628,8 +9668,11 @@ namespace
             const bool renderOk = ActivateHook(g_renderPresentFrameHook);
             const bool vulkanOk = ActivateHook(g_vulkanDeviceTableInitHook);
             active = cameraOk || uiOk || waypointOk || markerVisibilityOk || renderOk || vulkanOk;
-            if (active)
-                TryFindExistingVulkanDeviceTable();
+            // Let the normal init hook capture the table first. A late-loaded
+            // mod can use the bounded fallback from Update after this grace period.
+            g_vulkanScanAttempts = 0;
+            g_vulkanScanCursor = 0;
+            g_lastVulkanScanTick = GetTickCount();
 
             std::ostringstream oss;
             oss << "[Minimap] activate internal bridge"

@@ -120,3 +120,16 @@ This is user-reported gameplay acceptance. Individual scene-change,
 resolution-change, display-sleep and extended-session results were not
 separately recorded. Synthetic renderer checks do not prove live fault recovery
 or an FPS improvement, and other executable variants remain unverified.
+
+## 0.5.6 startup and Journal clearance
+
+The Release/x64 build passes 36 renderer, 313 map-feature/layout, 25 tracking and
+58 marker checks. The added renderer fixtures exercise yielding and resuming
+Vulkan discovery, finding a table at the final valid address, cancellation by
+the normal initialization hook, exhaustion and inaccessible memory.
+
+On 2026-10-05 the player confirmed the test build worked after a fresh launch.
+The live log shows minimap activation starting and finishing in the same second;
+the previous build took roughly 12 minutes and delayed first-person settings.
+Home switching and the separate controller vein-mining toggle were confirmed
+by the player. Home is implemented by the Mod Manager, not by the minimap.
