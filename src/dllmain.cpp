@@ -1529,7 +1529,7 @@ namespace
                 return VK_F1 + number - 1;
         }
 
-        if (normalized == "numpadmultiply" || normalized == "numpadstar" ||
+        if ((normalized == "numpad" && value.find('*') != std::string::npos) || normalized == "numpadmultiply" || normalized == "numpadstar" ||
             normalized == "multiply" || normalized == "asterisk" || normalized == "star")
             return VK_MULTIPLY;
         if (normalized == "insert" || normalized == "ins")
@@ -1617,7 +1617,7 @@ namespace
         case VK_BACK:
             return "Backspace";
         default:
-            return "F10";
+            return key == 0 ? "Disabled" : "VK " + std::to_string(key);
         }
     }
 
