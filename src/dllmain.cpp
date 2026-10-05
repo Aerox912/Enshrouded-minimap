@@ -1340,6 +1340,9 @@ namespace
     std::atomic<int> g_minimapZoomStep{ 0 };
     std::atomic<bool> g_minimapVisible{ true };
     std::atomic<int> g_minimapToggleKey{ VK_F10 };
+    std::atomic<int> g_minimapToggleSecondary{ VK_MULTIPLY };
+    std::atomic<int> g_minimapZoomInKey{ VK_OEM_PLUS }, g_minimapZoomInSecondary{ VK_ADD };
+    std::atomic<int> g_minimapZoomOutKey{ VK_OEM_MINUS }, g_minimapZoomOutSecondary{ VK_SUBTRACT };
     std::atomic<bool> g_renderCameraFallbackEnabled{ true };
     std::atomic<bool> g_debugLoggingEnabled{ false };
     std::atomic<bool> g_showOtherPlayers{ true };
@@ -1488,9 +1491,25 @@ namespace
         }
     }
 
-    int ParseMinimapToggleKey(const std::string& value)
+    int ParseMinimapToggleKey(const std::string& value, int fallback = VK_F10)
     {
         const std::string normalized = NormalizeConfigValue(value);
+        if (normalized == "none" || normalized == "disabled" || normalized == "0") return 0;
+        if (normalized.size() > 2 && normalized.substr(0, 2) == "0x") {
+            unsigned code = 0;
+            for (std::size_t i = 2; i < normalized.size(); ++i) {
+                const char c = normalized[i];
+                const int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+                if (digit < 0 || code > 15) return fallback;
+                code = code * 16 + digit;
+            }
+            return code <= 254 ? static_cast<int>(code) : fallback;
+        }
+        if (normalized.size() == 1 && normalized[0] >= 'a' && normalized[0] <= 'z') return normalized[0] - 'a' + 'A';
+        if (normalized == "add" || normalized == "numpadplus") return VK_ADD;
+        if (normalized == "subtract" || normalized == "numpadminus") return VK_SUBTRACT;
+        if (normalized == "oemplus" || normalized == "plus") return VK_OEM_PLUS;
+        if (normalized == "oemminus" || normalized == "minus") return VK_OEM_MINUS;
         if (normalized.size() >= 2 && normalized[0] == 'f')
         {
             int number = 0;
@@ -1503,6 +1522,7 @@ namespace
                     valid = false;
                     break;
                 }
+                if (number > 24) return fallback;
                 number = (number * 10) + (ch - '0');
             }
             if (valid && number >= 1 && number <= 24)
@@ -1527,7 +1547,7 @@ namespace
         if (normalized == "backspace")
             return VK_BACK;
 
-        return VK_F10;
+        return fallback;
     }
 
     bool ParseConfigBoolean(const std::string& value, bool fallback)
@@ -1673,6 +1693,16 @@ namespace
                 modContext != nullptr && modContext->config.GetString)
                 value = modContext->config.GetString("minimap_mod", key, value);
         };
+        const auto readKey = [&](const char* name, const char* initial, int fallback, std::atomic<int>& target) {
+            std::string value = initial; readOption(name, value);
+            const int key = ParseMinimapToggleKey(value, fallback);
+            return target.exchange(key) != key;
+        };
+        bool hotkeysChanged = readKey("toggle_key_secondary", "0x6A", VK_MULTIPLY, g_minimapToggleSecondary);
+        hotkeysChanged |= readKey("zoom_in_key", "0xBB", VK_OEM_PLUS, g_minimapZoomInKey);
+        hotkeysChanged |= readKey("zoom_in_key_secondary", "0x6B", VK_ADD, g_minimapZoomInSecondary);
+        hotkeysChanged |= readKey("zoom_out_key", "0xBD", VK_OEM_MINUS, g_minimapZoomOutKey);
+        hotkeysChanged |= readKey("zoom_out_key_secondary", "0x6D", VK_SUBTRACT, g_minimapZoomOutSecondary);
         readOption("map_light", configuredMapLight);
         readOption("heading_smoothing_ms", configuredSmoothing);
         readOption("icon_style", configuredIconStyle);
@@ -1711,7 +1741,7 @@ namespace
         const bool previousPlayers = g_showOtherPlayers.exchange(showPlayers);
         const bool previousPings = g_showPings.exchange(showPings);
         const bool previousWaypoints = g_showWaypoints.exchange(showWaypoints);
-        if (!forceLog &&
+        if (!forceLog && !hotkeysChanged &&
             previous == static_cast<int>(placement) &&
             previousToggleKey == toggleKey &&
             previousRenderFallback == renderFallback &&
@@ -8752,19 +8782,26 @@ namespace
         return SubmitVulkanMinimapFrameLocked(queue, info, imageIndex, adjustedInfo, adjustedWaitSemaphore);
     }
 
-    void UpdateMinimapZoomHotkeys()
+    bool MinimapKeyPressed(int primary, int secondary, SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
+    {
+        // Read both keys without short-circuiting so simultaneous presses do not
+        // leave a stale press queued for the following frame.
+        const bool first = primary > 0 && (poll(primary) & 1) != 0;
+        const bool second = secondary > 0 && secondary != primary && (poll(secondary) & 1) != 0;
+        return first || second;
+    }
+
+    void UpdateMinimapZoomHotkeys(SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
     {
         int step = g_minimapZoomStep.load();
         bool changed = false;
-        if ((GetAsyncKeyState(VK_ADD) & 0x0001) != 0 ||
-            (GetAsyncKeyState(VK_OEM_PLUS) & 0x0001) != 0)
+        if (MinimapKeyPressed(g_minimapZoomInKey.load(), g_minimapZoomInSecondary.load(), poll))
         {
             step = ClampValue(step + 1, MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
             changed = true;
         }
 
-        if ((GetAsyncKeyState(VK_SUBTRACT) & 0x0001) != 0 ||
-            (GetAsyncKeyState(VK_OEM_MINUS) & 0x0001) != 0)
+        if (MinimapKeyPressed(g_minimapZoomOutKey.load(), g_minimapZoomOutSecondary.load(), poll))
         {
             step = ClampValue(step - 1, MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
             changed = true;
@@ -8779,20 +8816,17 @@ namespace
         }
     }
 
-    void UpdateMinimapVisibilityHotkey()
+    void UpdateMinimapVisibilityHotkey(SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
     {
         const int toggleKey = g_minimapToggleKey.load();
-        const bool configuredPressed = toggleKey != 0 && (GetAsyncKeyState(toggleKey) & 0x0001) != 0;
-        const bool legacyPressed = toggleKey != VK_MULTIPLY && (GetAsyncKeyState(VK_MULTIPLY) & 0x0001) != 0;
-        if (!configuredPressed && !legacyPressed)
-            return;
+        if (!MinimapKeyPressed(toggleKey, g_minimapToggleSecondary.load(), poll)) return;
 
         const bool visible = !g_minimapVisible.load();
         g_minimapVisible.store(visible);
 
         std::ostringstream oss;
         oss << "[Minimap] visibility=" << (visible ? "on" : "off")
-            << " | key=" << (configuredPressed ? MinimapToggleKeyName(toggleKey) : "Numpad *");
+            << " | primary_key=" << toggleKey << " | secondary_key=" << g_minimapToggleSecondary.load();
         Log(oss.str());
     }
 

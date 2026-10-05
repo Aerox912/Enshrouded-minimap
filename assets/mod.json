@@ -1,6 +1,6 @@
 {
   "id": "minimap_mod",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "name": "Enshrouded Minimap - Community Edition",
   "description": "Community-maintained in-game minimap with live fog of war, a weather clock, players, pings, waypoints and death markers.",
   "author": "elxokker; community maintenance by Aerox912",
@@ -28,7 +28,12 @@
       "max_icons": 64,
       "show_clock": true,
       "show_weather": true,
-      "show_fog_of_war": true
+      "show_fog_of_war": true,
+      "toggle_key_secondary": "0x6A",
+      "zoom_in_key": "0xBB",
+      "zoom_in_key_secondary": "0x6B",
+      "zoom_out_key": "0xBD",
+      "zoom_out_key_secondary": "0x6D"
     }
   }
 }

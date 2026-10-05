@@ -56,8 +56,25 @@ namespace
     }
 }
 
+SHORT WINAPI TestKeyPoll(int key) { static_cast<void>(key); return key == VK_F7 || key == VK_F8 ? 1 : 0; }
 int main()
 {
+    Check(ParseMinimapToggleKey("0xC0") == VK_OEM_3 && ParseMinimapToggleKey("G") == 'G', "parse physical OEM keys and letter bindings");
+    Check(ParseMinimapToggleKey("none") == 0 && ParseMinimapToggleKey("0x00") == 0, "disable a primary or secondary key explicitly");
+    Check(ParseMinimapToggleKey("0x100", VK_ADD) == VK_ADD && ParseMinimapToggleKey("F9999999999999", VK_SUBTRACT) == VK_SUBTRACT, "reject invalid keys without overflow");
+    Check(ParseMinimapToggleKey("F10") == VK_F10 && ParseMinimapToggleKey("Numpad *") == VK_MULTIPLY, "retain named legacy toggle bindings");
+    g_minimapZoomInKey = VK_F7; g_minimapZoomInSecondary = 0;
+    g_minimapZoomOutKey = VK_F9; g_minimapZoomOutSecondary = 0; g_minimapZoomStep = 0;
+    UpdateMinimapZoomHotkeys(TestKeyPoll);
+    Check(g_minimapZoomStep == 1, "configured zoom-in key changes the actual zoom state");
+    g_minimapZoomInKey = 0; g_minimapZoomOutKey = VK_F8; UpdateMinimapZoomHotkeys(TestKeyPoll);
+    Check(g_minimapZoomStep == 0, "configured zoom-out key changes the actual zoom state");
+    g_minimapToggleKey = 0; g_minimapToggleSecondary = VK_F7; g_minimapVisible = true;
+    UpdateMinimapVisibilityHotkey(TestKeyPoll);
+    Check(!g_minimapVisible, "secondary configured key toggles the minimap");
+    g_minimapToggleSecondary = 0; UpdateMinimapVisibilityHotkey(TestKeyPoll);
+    Check(!g_minimapVisible, "disabled toggle keys do not trigger a hidden legacy shortcut");
+
     unsigned char image[0x400] = {};
     g_exeBase = reinterpret_cast<uintptr_t>(image);
     g_exeImageSize = sizeof(image);

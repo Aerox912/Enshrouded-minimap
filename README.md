@@ -1,7 +1,7 @@
 # Enshrouded Minimap - Community Edition
 
 Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
-Version **0.5.3** includes the camera/graphics fixes from upstream
+Version **0.5.5** includes the camera/graphics fixes from upstream
 [PR #5](https://github.com/elxokker/Enshrouded-minimap/pull/5) and the player,
 ping, waypoint, death-marker and world-map additions from
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
@@ -45,17 +45,32 @@ draws the minimap directly inside the Enshrouded frame.
 - `-` zooms out.
 - `F10` toggles the minimap on/off without leaving the game.
 
-The numpad `+`, `-`, and `*` keys also work.
+The numpad `+`, `-`, and `*` keys also work by default. All six primary/secondary
+bindings can be changed under `mods.minimap_mod` in `shroudtopia.json`:
+
+| Setting | Default |
+|---|---|
+| `toggle_key` | `F10` |
+| `toggle_key_secondary` | `0x6A` (numpad *) |
+| `zoom_in_key` | `0xBB` (main +) |
+| `zoom_in_key_secondary` | `0x6B` (numpad +) |
+| `zoom_out_key` | `0xBD` (main -) |
+| `zoom_out_key_secondary` | `0x6D` (numpad -) |
+
+Use a Windows virtual-key code such as `0x47` for G, or `none` to disable a
+binding. Changing a binding replaces that shortcut, including the numpad keys.
+The mod manager's Settings > Hotkeys section captures keys for your keyboard
+layout and writes these values automatically.
 
 ## Download
 
 Download the latest zip from the release page:
 
-[Community Edition v0.5.3](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.3)
+[Community Edition v0.5.5](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.5)
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.3.zip`
+`enshrouded-minimap-community-v0.5.5.zip`
 
 Requires Windows x64 Enshrouded,
 [Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
@@ -66,7 +81,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.3.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.5.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
@@ -163,7 +178,7 @@ It displays the world's time in 24-hour `HH:MM` format. It follows the game's
 time, including sleep and
 server time changes. `mods.minimap_mod.show_clock` defaults to `true`; set it to
 `false` to hide the time while keeping the minimap. Weather has its own switch. Changes apply while playing.
-Version 0.5.3 adds live weather and fog of war. The weather panel uses
+Version 0.5.5 adds live weather and fog of war. The weather panel uses
 one combined day/night weather icon and a label for Clear, Rain, Snow or
 Blizzard. Clear skies show a sun or moon; precipitation puts a cloud with rain,
 snow or blowing snow in front of it. When weather is visible, the time has no separate sun/moon icon. With weather
@@ -298,7 +313,7 @@ installation steps above; building and packaging do not modify the game.
 
 ## Version
 
-Current community mod version: `0.5.3`.
+Current community mod version: `0.5.5`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.
