@@ -1,0 +1,38 @@
+name: Build and release
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build, test and package
+        shell: pwsh
+        run: ./ci/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minimap
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets=@(Get-ChildItem ./dist -File | ForEach-Object FullName)
+          gh release create $env:GITHUB_REF_NAME --draft --title $env:GITHUB_REF_NAME --generate-notes @assets
+          if ($LASTEXITCODE) { throw 'Release upload failed' }
+          gh release edit $env:GITHUB_REF_NAME --draft=false
+          if ($LASTEXITCODE) { throw 'Release publication failed' }
