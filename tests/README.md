@@ -131,5 +131,16 @@ the normal initialization hook, exhaustion and inaccessible memory.
 On 2026-10-05 the player confirmed the test build worked after a fresh launch.
 The live log shows minimap activation starting and finishing in the same second;
 the previous build took roughly 12 minutes and delayed first-person settings.
-Home switching and the separate controller vein-mining toggle were confirmed
-by the player. Home is implemented by the Mod Manager, not by the minimap.
+
+## 0.5.7 minimap size
+
+Tests cover all seven scales, 50% and 75% included, independent terrain zoom, key
+rebinding, held keys, background presses, limits, live settings and unchanged
+configuration polling. Raster rectangles and batched marker geometry use the
+same transform. Gameplay at the new scales has not yet been verified.
+
+The inherited trampoline allocator changed protection on an unrelated memory
+region while searching for space. Native tests intermittently faulted in ntdll,
+sometimes during process exit. It now reserves only free addresses within rel32
+reach without changing occupied regions. Thirty consecutive native test runs
+passed after the fix; twelve sanitizer runs had also passed during diagnosis.

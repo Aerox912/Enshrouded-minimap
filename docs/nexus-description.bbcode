@@ -1,0 +1,36 @@
+[size=5][color=#d6b979][b]Find your way through Embervale[/b][/color][/size]
+A rotating minimap with a weather clock, live fog of war and multiplayer markers. This community edition builds on [url=https://www.nexusmods.com/enshrouded/mods/97]elxokker's original minimap[/url], maintained by Aerox912. Install it on your PC; no server mod is needed.
+
+[size=4][color=#7fc7cc][b]New in 0.5.7[/b][/color][/size]
+[b]F9 makes the minimap smaller. F11 makes it larger.[/b] Sizes run from 50% to 200% in 25% steps, including 75%. The frame, markers and clock resize together while terrain zoom stays unchanged. F10 also shows a brief On/Off notice.
+
+[size=4][color=#d6b979][b]On the map[/b][/color][/size]
+[list]
+[*]Original location icons, smooth rotation and adjustable terrain lighting.
+[*]A 24-hour clock with local Clear, Rain, Snow and Blizzard conditions.
+[*]Fog follows your character's exploration. Players, pings, waypoints, custom pins, placed Flame Altars and tombstones stay visible through it.
+[*]Independent switches for the clock, weather, fog and marker groups.
+[/list]
+[size=4][color=#7fc7cc][b]Controls & size[/b][/color][/size]
+[b]F10 / numpad *[/b] show or hide · [b]+ / -[/b] terrain zoom · [b]F9 / F11[/b] smaller / larger.
+
+Edit [b]mods.minimap_mod[/b] in [b]shroudtopia.json[/b]:
+[list]
+[*][b]scale_percent[/b]: 50, 75, 100 (default), 125, 150, 175 or 200. Hotkey resizing lasts for the session; this sets your startup size.
+[*][b]size_decrease_key / size_increase_key[/b]: F9 / F11 by default. Use a key name, virtual-key code or "none" to disable.
+[*][b]position[/b]: bottom-right, top-right or middle-right.
+[*][b]show_clock / show_weather / show_fog_of_war[/b]: true or false. Configuration changes apply live.
+[/list]
+[size=4][color=#d6b979][b]Install or update[/b][/color][/size]
+Requires Windows x64, [url=https://www.nexusmods.com/enshrouded/mods/43]Shroudtopia 0.1.1[/url] and the [url=https://aka.ms/vc14/vc_redist.x64.exe]Visual C++ x64 runtime[/url]. EML alone cannot load this mod.
+[list=1]
+[*]Close Enshrouded and install the requirements.
+[*]Back up your existing [b]mods/minimap_mod[/b] folder outside the mods directory.
+[*]Extract the ZIP into the game folder. Check for [b]Enshrouded/mods/minimap_mod/minimap_mod.dll[/b].
+[/list]
+Keep one minimap folder and your existing shroudtopia.json. To uninstall, close the game and remove mods/minimap_mod.
+
+[size=4][color=#7fc7cc][b]Compatibility & credits[/b][/color][/size]
+Targets Steam client data revision 1076226. Automated checks cover resizing, input, configuration and rendering; gameplay testing of the new sizes is pending. Snow, blizzard and dungeon tombstones still need gameplay checks. [url=https://github.com/Aerox912/Enshrouded-minimap/issues]Report an issue[/url] with your game build and what happened.
+
+Original minimap and assets by [b]elxokker (xoker)[/b]. Thanks to [b]s0T7x / Miguel Oppermann[/b] for Shroudtopia and [b]o-shabashov[/b] for marker findings. Enshrouded and its artwork belong to [b]Keen Games[/b]. [url=https://github.com/Aerox912/Enshrouded-minimap]Source, MIT license and full credits[/url].

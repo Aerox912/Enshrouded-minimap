@@ -29,6 +29,21 @@ namespace
     }
     struct Pixel { float r = 0, g = 0, b = 0; } pixels[320][512];
     int clears = 0;
+    void CheckToggleNotices()
+    {
+        ToggleNoticeState notice;
+        bool on = false;
+        Check(!notice.read(100, true, on), "no minimap notice at startup");
+        notice.show(false, 100);
+        Check(notice.read(1599, true, on) && !on, "off notice survives hiding the minimap for 1.5 seconds");
+        Check(!notice.read(1600, true, on), "minimap notice expires at 1.5 seconds");
+        notice.show(true, 2000);
+        notice.show(false, 2100);
+        Check(notice.read(2200, true, on) && !on, "rapid toggles replace the previous notice with actual latest state");
+        Check(!notice.read(2201, false, on) && !notice.read(2202, true, on), "leaving gameplay dismisses rather than replays the notice");
+        notice.show(true, 3000); notice.clear();
+        Check(!notice.read(3001, true, on), "session reset clears pending notices");
+    }
     void Raster(void*, std::uint32_t, const VkClearAttachment* a, std::uint32_t count, const VkClearRect* rects)
     {
         ++clears;
@@ -55,6 +70,78 @@ namespace
             out.write(reinterpret_cast<const char*>(color), 4);
         }
         Check(out.good(), "CPU preview written");
+    }
+    SHORT sizeKeys[256]{};
+    float framePush[8]{};
+    SHORT WINAPI ReadSizeKey(int key) { return sizeKeys[key]; }
+    void CheckMinimapSizing()
+    {
+        RefreshMinimapConfig(nullptr, true);
+        const int zoom = g_minimapZoomStep.load();
+        Check(g_minimapScalePercent == 100 && g_minimapSizeDecreaseKey == VK_F9 && g_minimapSizeIncreaseKey == VK_F11,
+            "default size is 100 percent with independent F9 and F11 shortcuts");
+        auto press = [](int key, bool gameplay = true) {
+            std::memset(sizeKeys, 0, sizeof(sizeKeys)); UpdateMinimapSizeHotkeys(gameplay, ReadSizeKey);
+            sizeKeys[key] = SHORT(0x8000); UpdateMinimapSizeHotkeys(gameplay, ReadSizeKey);
+        };
+        press(VK_F9); Check(g_minimapScalePercent == 75, "smaller key selects 75 percent");
+        UpdateMinimapSizeHotkeys(true, ReadSizeKey);
+        Check(g_minimapScalePercent == 75, "holding the resize key does not repeat");
+        RefreshMinimapConfig(nullptr);
+        Check(g_minimapScalePercent == 75, "unchanged config poll preserves session size");
+        press(VK_F9); press(VK_F9);
+        Check(g_minimapScalePercent == 50, "smaller key stops at 50 percent");
+        for (int i=0;i<8;++i) press(VK_F11);
+        Check(g_minimapScalePercent == 200 && g_minimapZoomStep == zoom, "larger key stops at 200 percent without changing terrain zoom");
+        press(VK_F9, false); UpdateMinimapSizeHotkeys(true, ReadSizeKey);
+        Check(g_minimapScalePercent == 200, "background or menu press is not replayed on returning to gameplay");
+        std::memset(sizeKeys,0,sizeof(sizeKeys)); UpdateMinimapSizeHotkeys(true,ReadSizeKey);
+        sizeKeys[VK_F9]=sizeKeys[VK_F11]=SHORT(0x8000); UpdateMinimapSizeHotkeys(true,ReadSizeKey);
+        Check(g_minimapScalePercent == 200, "simultaneous resize shortcuts cancel each other");
+        ModContext config{};
+        config.config.GetString=[](const char*,const char* key,std::string fallback) {
+            if (!std::strcmp(key,"scale_percent")) return std::string("75");
+            if (!std::strcmp(key,"size_decrease_key")) return std::string("none");
+            if (!std::strcmp(key,"size_increase_key")) return std::string("F7");
+            return fallback;
+        };
+        RefreshMinimapConfig(&config);
+        Check(g_minimapScalePercent==75, "changed saved scale applies live");
+        press(VK_F9); press(VK_F11);
+        Check(g_minimapScalePercent==75, "disabled and replaced size bindings stop responding");
+        press(VK_F7); Check(g_minimapScalePercent==100, "rebound size key works");
+        VulkanMinimapRenderer renderer{};
+        renderer.width=512; renderer.height=320; renderer.fns.cmdClearAttachments=Raster;
+        renderer.frameTextureReady=true;
+        renderer.framePipeline=renderer.framePipelineLayout=renderer.frameDescriptorSet=1;
+        renderer.fns.cmdBindPipeline=[](void*,std::uint32_t,void*) {};
+        renderer.fns.cmdBindDescriptorSets=[](void*,std::uint32_t,void*,std::uint32_t,std::uint32_t,void* const*,std::uint32_t,const std::uint32_t*) {};
+        renderer.fns.cmdPushConstants=[](void*,void*,std::uint32_t,std::uint32_t,std::uint32_t size,const void* data) {std::memcpy(framePush,data,size);};
+        renderer.fns.cmdDraw=[](void*,std::uint32_t,std::uint32_t,std::uint32_t,std::uint32_t) {};
+        for (int percent : {50,75,100,125,150,175,200}) {
+            std::memset(pixels,0,sizeof(pixels));
+            {
+                MinimapScaleScope scope(renderer,percent/100.f,256,160);
+                CmdClearRect(renderer,nullptr,1,0,0,1,216,120,80,80);
+                std::vector<VkClearRect> rects;
+                AppendClippedClearRect(renderer,rects,256,160,40,40);
+                Check(rects.size()==1 && rects[0].rect.extent.width==unsigned(percent*40/100),
+                    "batched terrain and marker rectangles share the widget scale");
+                int count=0; for(auto& row:pixels) for(auto& p:row) if(p.r>0.9f) ++count;
+                Check(count==(percent*80/100)*(percent*80/100), "rendered footprint matches every advertised scale");
+                Check(TryDrawMinimapTexturedFrame(renderer,nullptr,256,160,100,20,0.4f) &&
+                    std::abs((framePush[2]-framePush[0])*256-240*percent/100.f)<1.1f &&
+                    std::abs((framePush[3]-framePush[1])*160-240*percent/100.f)<1.1f,
+                    "Vulkan frame texture matches the scaled terrain footprint");
+                rects.clear(); AppendClippedClearRect(renderer,rects,-100,-100,800,800);
+                Check(rects.size()==1 && rects[0].rect.offset.x>=0 && rects[0].rect.offset.y>=0 &&
+                    rects[0].rect.offset.x+rects[0].rect.extent.width<=512 && rects[0].rect.offset.y+rects[0].rect.extent.height<=320,
+                    "scaled rectangles clip safely at the screen boundary");
+            }
+            Check(renderer.widgetScale==1.f, "widget drawing restores normal scale for notices");
+        }
+        RefreshMinimapConfig(nullptr,true);
+        std::memset(sizeKeys,0,sizeof(sizeKeys)); UpdateMinimapSizeHotkeys(true,ReadSizeKey);
     }
     void CheckDeaths(VulkanMinimapRenderer& renderer)
     {
@@ -808,6 +895,9 @@ namespace
 
 int main(int argc, char** argv)
 {
+    std::cout << std::unitbuf;
+    CheckToggleNotices();
+    CheckMinimapSizing();
     Check(TryLoadMinimapIconsFromPath("assets/embervale_minimap_icons.bin", g_minimapIcons), "load actual icon atlas");
     g_minimapIcons.attempted = true;
     const auto nativeIcon = std::find_if(g_minimapIcons.icons.begin(), g_minimapIcons.icons.end(), [](const auto& icon) { return icon.key > 0xFFFFu; });
@@ -918,6 +1008,15 @@ int main(int argc, char** argv)
     Check(r <= 1 && g <= 1 && b <= 1 && r > b, "lighting clamps input and warms the edge");
     VulkanMinimapRenderer renderer{};
     renderer.width = 512; renderer.height = 320; renderer.fns.cmdClearAttachments = Raster;
+    for (unsigned dpi : {96U,120U,144U,192U}) for (bool on : {false,true})
+    {
+        std::memset(pixels,0,sizeof(pixels));
+        DrawMinimapNotice(renderer,nullptr,on,dpi);
+        int textPixels=0;for(auto& row:pixels) for(auto& pixel:row) if(pixel.r>0.8f && pixel.g>0.8f) ++textPixels;
+        Check(textPixels>40,"popup text renders at common Windows display scales");
+        Check(pixels[213][256-120*dpi/96].g>0.5f,"popup border appears at the expected position");
+    }
+    std::memset(pixels,0,sizeof(pixels));
     CheckDeaths(renderer);
     CheckWeather(renderer);
     CheckWorldClock(renderer);

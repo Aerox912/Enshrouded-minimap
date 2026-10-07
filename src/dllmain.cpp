@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "live_markers.h"
+#include "toggle_notice.h"
+#pragma comment(lib, "gdi32.lib")
 
 #include <shroudtopia.h>
 #include <memory_utils.h>
@@ -1070,6 +1072,8 @@ namespace
         DWORD mapHeadingTick = 0;
         std::uint64_t mapHeadingSession = 0;
         bool mapHeadingValid = false;
+        float widgetScale = 1.0f;
+        int widgetCenterX = 0, widgetCenterY = 0;
         std::uint32_t format = 0;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -1183,7 +1187,7 @@ namespace
     ModMetaData g_metaData = {
         "minimap_mod",
         "Community-maintained in-game minimap with a world clock, players, pings, waypoints and death markers.",
-        "0.5.3",
+        "0.5.7",
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,
@@ -1340,7 +1344,12 @@ namespace
     std::atomic<bool> g_gameSessionOnline{ false };
     std::atomic<DWORD> g_lastWorldDataTick{ 0 };
     std::atomic<int> g_minimapZoomStep{ 0 };
+    std::atomic<int> g_minimapScalePercent{ 100 };
+    int g_configuredScalePercent = -1;
+    std::atomic<int> g_minimapSizeDecreaseKey{ VK_F9 }, g_minimapSizeIncreaseKey{ VK_F11 };
+    bool g_sizeDecreaseDown = false, g_sizeIncreaseDown = false;
     std::atomic<bool> g_minimapVisible{ true };
+    ToggleNoticeState g_toggleNotice;
     std::atomic<int> g_minimapToggleKey{ VK_F10 };
     std::atomic<int> g_minimapToggleSecondary{ VK_MULTIPLY };
     std::atomic<int> g_minimapZoomInKey{ VK_OEM_PLUS }, g_minimapZoomInSecondary{ VK_ADD };
@@ -1705,6 +1714,14 @@ namespace
         hotkeysChanged |= readKey("zoom_in_key_secondary", "0x6B", VK_ADD, g_minimapZoomInSecondary);
         hotkeysChanged |= readKey("zoom_out_key", "0xBD", VK_OEM_MINUS, g_minimapZoomOutKey);
         hotkeysChanged |= readKey("zoom_out_key_secondary", "0x6D", VK_SUBTRACT, g_minimapZoomOutSecondary);
+        hotkeysChanged |= readKey("size_decrease_key", "F9", VK_F9, g_minimapSizeDecreaseKey);
+        hotkeysChanged |= readKey("size_increase_key", "F11", VK_F11, g_minimapSizeIncreaseKey);
+        std::string configuredScale = "100";
+        readOption("scale_percent", configuredScale);
+        const int scalePercent = ((ParseConfigInteger(configuredScale, 100, 50, 200) + 12) / 25) * 25;
+        const bool scaleChanged = g_configuredScalePercent != scalePercent;
+        if (scaleChanged || forceLog) g_minimapScalePercent.store(scalePercent);
+        g_configuredScalePercent = scalePercent;
         readOption("map_light", configuredMapLight);
         readOption("heading_smoothing_ms", configuredSmoothing);
         readOption("icon_style", configuredIconStyle);
@@ -1743,7 +1760,7 @@ namespace
         const bool previousPlayers = g_showOtherPlayers.exchange(showPlayers);
         const bool previousPings = g_showPings.exchange(showPings);
         const bool previousWaypoints = g_showWaypoints.exchange(showWaypoints);
-        if (!forceLog && !hotkeysChanged &&
+        if (!forceLog && !hotkeysChanged && !scaleChanged &&
             previous == static_cast<int>(placement) &&
             previousToggleKey == toggleKey &&
             previousRenderFallback == renderFallback &&
@@ -1783,7 +1800,8 @@ namespace
             << " | show_world_markers=" << showWorld
             << " | map_light=" << mapLight
             << " | icon_style=" << (worldMapStyle ? "world-map" : "original")
-            << " | heading_smoothing_ms=" << smoothing;
+            << " | heading_smoothing_ms=" << smoothing
+            << " | scale_percent=" << g_minimapScalePercent.load();
         Log(oss.str());
     }
 
@@ -2260,17 +2278,28 @@ namespace
         return g_playerPosition.valid && now - g_playerPosition.lastUpdateTick <= WORLD_DATA_STALE_MS;
     }
 
-    bool ShouldDrawMinimapInWorld()
+    bool IsMinimapGameplay()
     {
-        if (!g_minimapVisible.load())
-            return false;
-
         CURSORINFO cursorInfo{};
         cursorInfo.cbSize = sizeof(cursorInfo);
         if (GetCursorInfo(&cursorInfo) && (cursorInfo.flags & CURSOR_SHOWING) != 0)
             return false;
 
         return HasFreshPlayerPosition();
+    }
+
+    bool ShouldDrawMinimapInWorld() { return g_minimapVisible.load() && IsMinimapGameplay(); }
+
+    bool IsMinimapGameFocused()
+    {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        return pid == GetCurrentProcessId();
+    }
+
+    bool ReadMinimapNotice(bool& on)
+    {
+        return g_toggleNotice.read(GetTickCount64(), IsMinimapGameFocused() && IsMinimapGameplay(), on);
     }
 
     std::string ResolveGameLogPath()
@@ -2554,6 +2583,7 @@ namespace
 
     void ResetWorldSessionFromLog()
     {
+        g_toggleNotice.clear();
         const bool wasOnline = g_gameSessionOnline.exchange(false);
         const bool wasReady = g_worldSessionReady.exchange(false);
         g_lastWorldDataTick.store(0);
@@ -2604,6 +2634,7 @@ namespace
             const bool wasOnline = g_gameSessionOnline.exchange(true);
             if (!wasOnline)
             {
+                g_toggleNotice.clear();
                 g_minimapVisible.store(true);
                 Log("[Minimap] game session detected from Enshrouded log");
             }
@@ -5477,8 +5508,26 @@ namespace
         return true;
     }
 
+    void ScaleMinimapRect(const VulkanMinimapRenderer& renderer, int& x, int& y, int& width, int& height)
+    {
+        if (renderer.widgetScale == 1.0f) return;
+        const auto scale = [&](int value, int center) { return static_cast<int>(std::lround(center + (value - center) * renderer.widgetScale)); };
+        const int right = scale(x + width, renderer.widgetCenterX), bottom = scale(y + height, renderer.widgetCenterY);
+        x = scale(x, renderer.widgetCenterX); y = scale(y, renderer.widgetCenterY);
+        width = right - x; height = bottom - y;
+    }
+
+    struct MinimapScaleScope
+    {
+        VulkanMinimapRenderer& renderer;
+        MinimapScaleScope(VulkanMinimapRenderer& value, float scale, int x, int y) : renderer(value)
+        { renderer.widgetScale = scale; renderer.widgetCenterX = x; renderer.widgetCenterY = y; }
+        ~MinimapScaleScope() { renderer.widgetScale = 1.0f; }
+    };
+
     bool AppendClippedClearRect(VulkanMinimapRenderer& renderer, std::vector<VkClearRect>& rects, int x, int y, int width, int height)
     {
+        ScaleMinimapRect(renderer, x, y, width, height);
         if (width <= 0 || height <= 0)
             return false;
 
@@ -5527,6 +5576,7 @@ namespace
 
     void CmdClearRect(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue, float alpha, int x, int y, int width, int height)
     {
+        ScaleMinimapRect(renderer, x, y, width, height);
         if (width <= 0 || height <= 0)
             return;
 
@@ -8047,10 +8097,11 @@ namespace
 
         const int targetSize = (radius + frameExtra) * 2;
         const int visualCenterYOffset = -MaxValue(1, (targetSize + 128) / 256);
-        const int left = cx - targetSize / 2;
-        const int top = cy - targetSize / 2 + visualCenterYOffset;
-        const int right = left + targetSize;
-        const int bottom = top + targetSize;
+        int left = cx - targetSize / 2, top = cy - targetSize / 2 + visualCenterYOffset;
+        int width = targetSize, height = targetSize;
+        ScaleMinimapRect(renderer, left, top, width, height);
+        const int right = left + width;
+        const int bottom = top + height;
 
         const float cosHeading = std::cos(headingRadians);
         const float sinHeading = std::sin(headingRadians);
@@ -8554,9 +8605,10 @@ namespace
     {
         const int shortEdge = static_cast<int>(MinValue(renderer.width, renderer.height));
         const int radius = ClampValue(shortEdge / 11, 104, 142);
+        const float scale = ClampValue(g_minimapScalePercent.load(), 50, 200) / 100.0f;
+        const auto scaled = [scale](int value) { return static_cast<int>(std::lround(value * scale)); };
         const int marginX = MaxValue(58, static_cast<int>(renderer.width) / 58);
         const int marginY = MaxValue(52, static_cast<int>(renderer.height) / 42);
-        const int cx = static_cast<int>(renderer.width) - marginX - radius;
         const bool hasRasterFrame = HasLoadedMinimapFrame();
         const int frameExtra = MinimapRasterFrameExtra(radius);
         WorldClockSnapshot clock{};
@@ -8567,12 +8619,14 @@ namespace
         const bool showPanel = showClock || weather.valid;
         const int frameHalf = hasRasterFrame ? MinimapRasterVisibleHalfHeight(radius, frameExtra) : radius + 26;
         const int frameYOffset = hasRasterFrame ? -MaxValue(1, (2 * (radius + frameExtra) + 128) / 256) : 0;
+        const int cx = static_cast<int>(renderer.width) - MaxValue(marginX, scaled(frameHalf - radius) + 8) - scaled(radius);
         const int frameTopExtra = frameHalf - frameYOffset - radius;
         const int frameBottomExtra = frameHalf + frameYOffset - radius;
         // Use the visible ornament, not the padded texture, for clock spacing.
         const int clockFooter = frameBottomExtra + CLOCK_FRAME_GAP + 2 * CLOCK_PANEL_HALF_HEIGHT;
-        const int cy = ComputeMinimapCenterY(renderer.height, radius, marginY,
-            showPanel ? clockFooter : frameBottomExtra, frameTopExtra);
+        const int cy = ComputeMinimapCenterY(renderer.height, scaled(radius), marginY,
+            scaled(showPanel ? clockFooter : frameBottomExtra), scaled(frameTopExtra));
+        MinimapScaleScope widgetScale(renderer, scale, cx, cy);
         const int zoomStep = ClampValue(g_minimapZoomStep.load(), MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
         const float zoom = std::pow(1.32f, static_cast<float>(zoomStep));
         const float unitsPerPixel = MINIMAP_BASE_UNITS_PER_PIXEL / zoom;
@@ -8626,6 +8680,66 @@ namespace
                 cy + radius + frameBottomExtra + CLOCK_FRAME_GAP + CLOCK_PANEL_HALF_HEIGHT, clock, weather, showClock);
     }
 
+    void DrawMinimapNotice(VulkanMinimapRenderer& renderer, void* commandBuffer, bool on, int dpi = 96)
+    {
+        // Rasterize only when state or display scale changes. Drawing uses the
+        // existing game render pass, including when the minimap itself is off.
+        static int cachedDpi = 0;
+        static bool cachedOn = false;
+        static std::array<std::vector<RECT>, 8> ink;
+        dpi = ClampValue(dpi, 96, 384);
+        const int width = MulDiv(240, dpi, 96), height = MulDiv(38, dpi, 96);
+        if (cachedDpi != dpi || cachedOn != on)
+        {
+            for (auto& shade : ink) shade.clear();
+            HDC dc = CreateCompatibleDC(nullptr);
+            BITMAPINFO info{};
+            info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            info.bmiHeader.biWidth = width; info.bmiHeader.biHeight = -height;
+            info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32;
+            void* pixels = nullptr;
+            HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+            HFONT font = CreateFontW(-MulDiv(16, dpi, 96), 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+            if (dc && bitmap && font && pixels)
+            {
+                auto oldBitmap = SelectObject(dc, bitmap), oldFont = SelectObject(dc, font);
+                std::memset(pixels, 0, width * height * 4);
+                SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255,255,255));
+                RECT bounds{0,0,width,height};
+                DrawTextW(dc, on ? L"Minimap: On" : L"Minimap: Off", -1, &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                GdiFlush();
+                auto bytes = static_cast<const std::uint8_t*>(pixels);
+                for (int y = 0; y < height; ++y)
+                    for (int x = 0; x < width;)
+                    {
+                        const int shade = bytes[(y * width + x) * 4] * 7 / 255;
+                        const int start = x++;
+                        while (x < width && bytes[(y * width + x) * 4] * 7 / 255 == shade) ++x;
+                        if (shade) ink[shade].push_back({start,y,x,y+1});
+                    }
+                SelectObject(dc, oldFont); SelectObject(dc, oldBitmap);
+                cachedDpi = dpi; cachedOn = on;
+            }
+            if (font) DeleteObject(font);
+            if (bitmap) DeleteObject(bitmap);
+            if (dc) DeleteDC(dc);
+        }
+        const int left = (static_cast<int>(renderer.width) - width) / 2;
+        const int top = static_cast<int>(renderer.height) * 2 / 3;
+        CmdClearRect(renderer, commandBuffer, on ? 112/255.f : 181/255.f, on ? 196/255.f : 186/255.f,
+            on ? 142/255.f : 192/255.f, 1, left, top, width, height);
+        CmdClearRect(renderer, commandBuffer, 24/255.f, 27/255.f, 30/255.f, 1, left+1, top+1, width-2, height-2);
+        for (int shade = 1; shade < 8; ++shade)
+        {
+            std::vector<VkClearRect> runs;
+            runs.reserve(ink[shade].size());
+            for (const auto& r : ink[shade]) AppendClippedClearRect(renderer, runs, left+r.left, top+r.top, r.right-r.left, 1);
+            const float a = shade/7.f;
+            CmdClearRects(renderer, commandBuffer, (24+215*a)/255.f, (27+215*a)/255.f, (30+214*a)/255.f, 1, runs);
+        }
+    }
+
     bool RecordVulkanMinimapCommandLocked(std::uint32_t imageIndex)
     {
         if (!g_renderer.ready || imageIndex >= g_renderer.commandBuffers.size() || imageIndex >= g_renderer.framebuffers.size())
@@ -8650,7 +8764,10 @@ namespace
         renderPassBegin.renderArea.extent.height = g_renderer.height;
 
         g_renderer.fns.cmdBeginRenderPass(commandBuffer, &renderPassBegin, 0);
-        DrawMinimapWidget(g_renderer, commandBuffer);
+        if (g_minimapVisible.load()) DrawMinimapWidget(g_renderer, commandBuffer);
+        bool noticeOn = false;
+        if (ReadMinimapNotice(noticeOn))
+            DrawMinimapNotice(g_renderer, commandBuffer, noticeOn, GetDpiForWindow(GetForegroundWindow()));
         g_renderer.fns.cmdEndRenderPass(commandBuffer);
         return g_renderer.fns.endCommandBuffer(commandBuffer) == VK_SUCCESS;
     }
@@ -8761,7 +8878,9 @@ namespace
         TryRefreshPlayerPositionFromCachedCamera();
         if (!HasFreshPlayerPosition() && g_renderCameraFallbackEnabled.load())
             TryCapturePlayerCameraFromRenderRoots();
-        if (!ShouldDrawMinimapInWorld())
+        bool noticeOn = false;
+        const bool noticeVisible = ReadMinimapNotice(noticeOn);
+        if (!ShouldDrawMinimapInWorld() && !noticeVisible)
             return false;
 
         if (info.waitSemaphoreCount != 0 && info.pWaitSemaphores == nullptr)
@@ -8818,6 +8937,20 @@ namespace
         }
     }
 
+    void UpdateMinimapSizeHotkeys(bool gameplay, SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
+    {
+        const int decrease = g_minimapSizeDecreaseKey.load(), increase = g_minimapSizeIncreaseKey.load();
+        const bool down = decrease > 0 && (poll(decrease) & 0x8000) != 0;
+        const bool up = increase > 0 && (poll(increase) & 0x8000) != 0;
+        const bool smaller = down && !g_sizeDecreaseDown, larger = up && !g_sizeIncreaseDown;
+        g_sizeDecreaseDown = down; g_sizeIncreaseDown = up;
+        // Sample even outside gameplay so held/background keys are not replayed.
+        if (!gameplay || smaller == larger) return;
+        const int scale = ClampValue(g_minimapScalePercent.load() + (larger ? 25 : -25), 50, 200);
+        if (g_minimapScalePercent.exchange(scale) != scale)
+            Log("[Minimap] size=" + std::to_string(scale) + "%");
+    }
+
     void UpdateMinimapVisibilityHotkey(SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
     {
         const int toggleKey = g_minimapToggleKey.load();
@@ -8825,6 +8958,7 @@ namespace
 
         const bool visible = !g_minimapVisible.load();
         g_minimapVisible.store(visible);
+        if (IsMinimapGameFocused() && IsMinimapGameplay()) g_toggleNotice.show(visible, GetTickCount64());
 
         std::ostringstream oss;
         oss << "[Minimap] visibility=" << (visible ? "on" : "off")
@@ -8843,6 +8977,7 @@ namespace
 
         UpdateMinimapVisibilityHotkey();
         UpdateMinimapZoomHotkeys();
+        UpdateMinimapSizeHotkeys(IsMinimapGameFocused() && IsMinimapGameplay());
     }
 
     void LogVulkanPresentInfo(void* queue, const void* presentInfo)
@@ -9693,6 +9828,7 @@ namespace
 
         void Deactivate(ModContext* modContext) override
         {
+            g_toggleNotice.clear();
             if (g_fogUpdateHook != nullptr)
             {
                 g_fogUpdateHook->deactivate();

@@ -1,7 +1,7 @@
 # Enshrouded Minimap - Community Edition
 
 Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
-Version **0.5.6** includes the camera/graphics fixes from upstream
+Version **0.5.7** includes the camera/graphics fixes from upstream
 [PR #5](https://github.com/elxokker/Enshrouded-minimap/pull/5) and the player,
 ping, waypoint, death-marker and world-map additions from
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
@@ -43,13 +43,17 @@ draws the minimap directly inside the Enshrouded frame.
 
 - `+` zooms in.
 - `-` zooms out.
+- `F9` makes the minimap smaller; `F11` makes it larger.
 - `F10` toggles the minimap on/off without leaving the game.
 
-The numpad `+`, `-`, and `*` keys also work by default. All six primary/secondary
+The numpad `+`, `-`, and `*` keys also work by default. All eight
 bindings can be changed under `mods.minimap_mod` in `shroudtopia.json`:
 
 | Setting | Default |
 |---|---|
+| `scale_percent` | `100` (50, 75, 100, 125, 150, 175 or 200) |
+| `size_decrease_key` | `F9` |
+| `size_increase_key` | `F11` |
 | `toggle_key` | `F10` |
 | `toggle_key_secondary` | `0x6A` (numpad *) |
 | `zoom_in_key` | `0xBB` (main +) |
@@ -59,18 +63,21 @@ bindings can be changed under `mods.minimap_mod` in `shroudtopia.json`:
 
 Use a Windows virtual-key code such as `0x47` for G, or `none` to disable a
 binding. Changing a binding replaces that shortcut, including the numpad keys.
-The mod manager's Settings > Hotkeys section captures keys for your keyboard
-layout and writes these values automatically.
+
+
+Size hotkeys change the whole widget for the current session, including its frame,
+markers and clock. Terrain zoom stays the same. Set `scale_percent` for the size at
+game launch. Changed configuration values apply live. F10 also shows a brief On/Off notice.
 
 ## Download
 
 Download the latest zip from the release page:
 
-[Community Edition v0.5.6](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.6)
+[Community Edition v0.5.7](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.7)
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.6.zip`
+`enshrouded-minimap-community-v0.5.7.zip`
 
 Requires Windows x64 Enshrouded,
 [Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
@@ -81,7 +88,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.6.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.7.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
@@ -313,15 +320,10 @@ installation steps above; building and packaging do not modify the game.
 
 ## Version
 
-Current community mod version: `0.5.6`.
+Current community mod version: `0.5.7`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.
 Large game updates can still require structure offsets to be revalidated.
 
-This update moves the top-right minimap down another 12 pixels to leave room for
-the Journal prompt under taller localized quest text. The weather clock keeps
-its existing spacing. It also removes a blocking Vulkan scan from activation:
-the normal game hook captures the device table first, and late-loading fallback
-discovery resumes in short slices. Other Shroudtopia mods can process settings
-immediately, including first-person switching through the Mod Manager.
+Version 0.5.7 adds independent widget sizing from 50% to 200%, rebindable size hotkeys and a brief visibility notice. It retains the Journal clearance and startup-scan fixes from 0.5.6.

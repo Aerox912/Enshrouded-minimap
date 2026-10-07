@@ -138,39 +138,31 @@ namespace Mem
         return Read(address, &value, sizeof(T));
     }
 
-    LPVOID AllocateMemoryNearAddress(LPVOID address, SIZE_T dwSize)
+    LPVOID AllocateMemoryNearAddress(LPVOID address, SIZE_T size)
     {
-        HANDLE hProcess = GetCurrentProcess();
-        SYSTEM_INFO si;
-        GetSystemInfo(&si);
-        LPVOID lpBaseAddress = nullptr;
-
-        // Calculate a range near the target address
-        LPVOID lpMinAddress = (LPVOID)((DWORD_PTR)address - si.dwAllocationGranularity * 10);
-
-        MEMORY_BASIC_INFORMATION mbi;
-        VirtualQueryEx(hProcess, lpMinAddress, &mbi, sizeof(mbi));
-
-        DWORD oldProtect;
-        VirtualProtectEx(hProcess, mbi.BaseAddress, mbi.RegionSize, PAGE_EXECUTE_READWRITE, &oldProtect);
-
-        // Attempt to allocate memory within the specified range
-        lpBaseAddress = VirtualAllocEx(hProcess, lpMinAddress, dwSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-
-        int tries = 0;
-        static const int maxTries = 10;
-        while (!lpBaseAddress && tries < maxTries)
-        {
-            // Retry with a wider range if necessary
-            lpBaseAddress = VirtualAllocEx(hProcess, (LPVOID)((uintptr_t)lpMinAddress - 0x10000000 * (tries + 1)), dwSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-            tries++;
-        }
-
-        VirtualProtectEx(hProcess, mbi.BaseAddress, mbi.RegionSize, oldProtect, &oldProtect);
-
-        return lpBaseAddress;
+        if (!address) return VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        SYSTEM_INFO info{}; GetSystemInfo(&info);
+        const uintptr_t granularity = info.dwAllocationGranularity;
+        const uintptr_t target = reinterpret_cast<uintptr_t>(address);
+        const uintptr_t aligned = target - target % granularity;
+        const uintptr_t minimum = reinterpret_cast<uintptr_t>(info.lpMinimumApplicationAddress);
+        const uintptr_t maximum = reinterpret_cast<uintptr_t>(info.lpMaximumApplicationAddress);
+        // Reserve only free addresses within rel32 reach. Never change protection
+        // on an existing region just to search for a trampoline allocation.
+        for (uintptr_t distance = granularity; distance <= 0x7FFF0000; distance += granularity)
+            for (bool above : {false, true})
+            {
+                if ((!above && distance > aligned) || (above && distance > maximum - aligned)) continue;
+                const uintptr_t candidate = above ? aligned + distance : aligned - distance;
+                if (candidate < minimum || candidate > maximum || size > maximum - candidate) continue;
+                MEMORY_BASIC_INFORMATION region{};
+                if (VirtualQuery(reinterpret_cast<void*>(candidate), &region, sizeof(region)) != sizeof(region) || region.State != MEM_FREE) continue;
+                const uintptr_t end = reinterpret_cast<uintptr_t>(region.BaseAddress) + region.RegionSize;
+                if (size > end - candidate) continue;
+                if (auto allocation = VirtualAlloc(reinterpret_cast<void*>(candidate), size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)) return allocation;
+            }
+        return nullptr;
     }
-
     class MemoryData
     {
     public:
