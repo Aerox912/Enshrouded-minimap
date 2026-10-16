@@ -11,6 +11,69 @@ namespace
     }
     template<class T> void Put(void* data, std::size_t offset, T value)
     { std::memcpy(static_cast<std::uint8_t*>(data) + offset, &value, sizeof(value)); }
+    void CheckMapAppearance()
+    {
+        std::vector<std::uint8_t> source(64 * 64 * 4), palette(32 * 32 * 3), bright;
+        for (std::size_t i=0;i<palette.size();i+=3) { palette[i]=70; palette[i+1]=150; palette[i+2]=35; }
+        for (std::size_t i=0;i<source.size();i+=4) {
+            const auto value=static_cast<std::uint8_t>((i/4)%256);
+            source[i]=source[i+1]=source[i+2]=value; source[i+3]=static_cast<std::uint8_t>((i/4)%251);
+        }
+        const auto unchanged=source;
+        Check(minimap::BuildBrightMapPixels(source,64,palette,bright), "bright appearance builds from original map pixels");
+        Check(source==unchanged && bright.size()==source.size(), "bright appearance keeps the source and pixel grid unchanged");
+        bool alpha=true, tone=true, bounded=true;
+        for(std::size_t i=0;i<source.size();i+=4) {
+            alpha &= bright[i+3]==source[i+3];
+            const float y=(0.2126f*bright[i]+0.7152f*bright[i+1]+0.0722f*bright[i+2])/255.0f;
+            tone &= std::fabs(y-std::pow(source[i]/255.0f,0.78f))<0.005f;
+            if(source[i]>0 && source[i]<255) bounded &= y>0 && y<1;
+        }
+        Check(alpha && tone && bounded, "bright colors preserve alpha and tone-map original brightness without terrain masks");
+        std::vector<std::uint8_t> sameTone(4*4*4,100), field(32*32*3), colored;
+        for(int y=0;y<32;++y) for(int x=0;x<32;++x) {
+            const auto i=(y*32+x)*3; field[i]=x<16?180:30; field[i+1]=30; field[i+2]=x<16?30:180;
+        }
+        Check(minimap::BuildBrightMapPixels(sameTone,4,field,colored) && colored[0]>colored[2] && colored[12]<colored[14],
+            "reference colors keep east/west orientation without moving terrain pixels");
+        palette.pop_back();
+        Check(!minimap::BuildBrightMapPixels(source,64,palette,bright) && bright.empty(), "truncated color palette is rejected");
+        palette.push_back(35); source.pop_back();
+        Check(!minimap::BuildBrightMapPixels(source,64,palette,bright), "malformed original map is rejected");
+        RefreshMinimapConfig(nullptr);
+        Check(g_brightMapStyle, "Bright appearance is the default");
+        ModContext config{};
+        config.config.GetString=[](const char*,const char* key,std::string fallback) {
+            return !std::strcmp(key,"map_style") ? std::string(" BRIGHT ") : fallback;
+        };
+        RefreshMinimapConfig(&config);
+        Check(g_brightMapStyle, "Bright appearance can be selected through live settings");
+        g_realMap={}; g_realMap.loaded=g_realMap.attempted=true; g_realMap.width=g_realMap.height=2; g_realMap.rgba.assign(16,80);
+        g_brightMap={};
+        float r=0,g=0,b=0; SampleRealMapColor(0,10240,r,g,b);
+        Check(std::fabs(r-80.0f/255)<0.001f, "missing Bright colors fall back to Original");
+        g_brightMap=g_realMap; g_brightMap.rgba.assign(16,160);
+        SampleRealMapColor(0,10240,r,g,b);
+        Check(std::fabs(r-160.0f/255)<0.001f && g_realMap.rgba[0]==80, "Bright samples its color cache without overwriting Original");
+        config.config.GetString=[](const char*,const char* key,std::string fallback) {
+            return !std::strcmp(key,"map_style") ? std::string("unknown") : fallback;
+        };
+        RefreshMinimapConfig(&config); SampleRealMapColor(0,10240,r,g,b);
+        Check(!g_brightMapStyle && std::fabs(r-80.0f/255)<0.001f, "invalid appearance safely restores Original live");
+        RealMapTexture asset{}, assetBright{};
+        Check(TryLoadRealMapFromPath("assets/embervale_realmap_1280.rgba",asset) && TryBuildBrightMap(asset,assetBright),
+            "shipped palette builds the real map color cache at the source resolution");
+        const auto saved=asset.rgba;
+        const auto failAllocation=[](const std::vector<std::uint8_t>&,int,const std::vector<std::uint8_t>&,std::vector<std::uint8_t>&)->bool {
+            throw std::bad_alloc();
+        };
+        Check(!TryBuildBrightMap(asset,assetBright,failAllocation) && !assetBright.loaded && asset.rgba==saved,
+            "optional Bright allocation failure preserves usable Original map");
+        asset.path="missing-map-appearance-test/original.rgba";
+        Check(!TryBuildBrightMap(asset,assetBright) && !assetBright.loaded && asset.rgba==saved,
+            "missing palette clears the derived cache and preserves the original asset");
+        g_realMap={}; g_brightMap={}; RefreshMinimapConfig(nullptr);
+    }
     std::int64_t Fixed(int value) { return static_cast<std::int64_t>(value) * 4294967296LL; }
     std::vector<std::uint8_t> state(DEATH_MAP_ARRAY_OFFSET + 32);
     std::array<std::uint8_t, WORLD_MAP_MARKER_STRIDE * 5> world{};
@@ -895,8 +958,38 @@ namespace
 
 int main(int argc, char** argv)
 {
+    if(argc==3 && std::strcmp(argv[1],"--appearance-preview")==0)
+    {
+        Check(TryLoadRealMapFromPath("assets/embervale_realmap_1280.rgba",g_realMap) && TryBuildBrightMap(g_realMap,g_brightMap),
+            "appearance preview loads original terrain and color-only cache");
+        g_realMap.attempted=true;
+        VulkanMinimapRenderer renderer{};
+        renderer.width=512; renderer.height=320;
+        renderer.fns.cmdClearAttachments=Raster;
+        MinimapFogFrame fog{}; fog.enabled=false;
+        g_minimapMapSampleStep=1;
+        for(int light:{0,55,100})
+        {
+            std::memset(pixels,0,sizeof(pixels)); g_minimapMapLight=light;
+            g_brightMapStyle=false;
+            DrawRealMap(renderer,nullptr,128,160,115,5120,5120,44,0,fog);
+            g_brightMapStyle=true;
+            DrawRealMap(renderer,nullptr,384,160,115,5120,5120,44,0,fog);
+            Check(pixels[160][128].r>0 && pixels[160][384].r>0, "both appearance previews contain rendered terrain");
+            WritePreview((std::string(argv[2])+"-light-"+std::to_string(light)+".bmp").c_str());
+            std::memset(pixels,0,sizeof(pixels));
+            g_brightMapStyle=false;
+            DrawRealMap(renderer,nullptr,128,160,115,2200,2200,2,0,fog);
+            g_brightMapStyle=true;
+            DrawRealMap(renderer,nullptr,384,160,115,2200,2200,2,0,fog);
+            Check(pixels[160][128].r>0 && pixels[160][384].r>0, "both detailed appearance previews contain rendered terrain");
+            WritePreview((std::string(argv[2])+"-detail-light-"+std::to_string(light)+".bmp").c_str());
+        }
+        return 0;
+    }
     std::cout << std::unitbuf;
     CheckToggleNotices();
+    CheckMapAppearance();
     CheckMinimapSizing();
     Check(TryLoadMinimapIconsFromPath("assets/embervale_minimap_icons.bin", g_minimapIcons), "load actual icon atlas");
     g_minimapIcons.attempted = true;

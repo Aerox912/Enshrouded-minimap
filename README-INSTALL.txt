@@ -1,98 +1,15 @@
-Enshrouded Minimap v0.4.46
-==========================
+ESM Minimap 0.5.8
 
-Integrated in-game minimap mod for Enshrouded using Shroudtopia.
+Close Enshrouded. Install the matching Shroudtopia loader/proxy from Optional Files.
+Back up existing shroudtopia.dll and winmm.dll, then extract both beside enshrouded.exe.
+Keep shroudtopia.json and other mods. Resolve any other winmm.dll owner before replacing it.
+Extract the Minimap ZIP into the game folder: mods/minimap_mod/minimap_mod.dll.
+Keep only one minimap_mod folder.
 
-This is not an external overlay. The mod draws the minimap directly inside the
-game frame.
+In shroudtopia.json, merge into the existing mods object:
+"minimap_mod": { "active": true, "map_style": "bright", "position": "top-right" }
+Use map_style "original" for original colors. Do not overwrite other mod settings.
 
-What it does
-------------
-
-- Shows a circular minimap on the right side of the screen.
-- Defaults to the bottom-right corner.
-- Uses the real Embervale map at minimap scale.
-- Shows the player's position and facing direction.
-- Uses real map marker icons extracted from the game's map UI.
-- Shows nearby points of interest visible or detected by the map.
-- Uses fog-of-war and POI data as a fallback when the game does not expose all
-  live markers.
-
-Controls
---------
-
-- + key: zoom in.
-- - key: zoom out.
-- F10 key: toggle minimap on/off without leaving the game.
-
-The numpad +, -, and * keys also work.
-
-Zip installation
-----------------
-
-1. Close Enshrouded.
-2. Extract enshrouded-minimap-v0.4.46.zip.
-3. Copy the full minimap_mod folder to:
-
-   C:\Program Files (x86)\Steam\steamapps\common\Enshrouded\mods\minimap_mod
-
-4. The folder must contain minimap_mod.dll, mod.json, and the .rgba/.bin files.
-5. Start Enshrouded with Shroudtopia.
-
-If you already had an older version installed, replace the whole minimap_mod
-folder with the new one.
-
-Position config
----------------
-
-The minimap position is controlled from Shroudtopia's config file:
-
-   C:\Program Files (x86)\Steam\steamapps\common\Enshrouded\shroudtopia.json
-
-Set mods.minimap_mod.position to one of these values:
-
-- top-right
-- middle-right
-- bottom-right
-
-Example:
-
-   "minimap_mod": {
-     "active": true,
-     "position": "bottom-right",
-     "toggle_key": "F10",
-     "render_camera_fallback": true,
-     "debug_logging": false,
-     "map_sample_step": 2,
-     "max_icons": 64
-   }
-
-The mod also reads mods.minimap_mod.toggle_key every second while active.
-Recommended value: F10. Supported readable values include F1-F24, insert,
-delete, home, end, pageup, pagedown, backspace, and numpad-*.
-
-The mod reads these values directly and refreshes them every second while active.
-If the minimap is not loaded yet, start or restart the game after changing it.
-
-render_camera_fallback is enabled by default. It lets the minimap recover its
-player position from render data when a game update stops the normal UI position
-feed from firing before the minimap draws.
-
-EML compatibility notes
------------------------
-
-This minimap is a native Shroudtopia mod. It is not an EML-native Lua mod and
-EML does not load minimap_mod.dll by itself.
-
-The release includes a no-op src/mod.lua and EML-neutral manifest fields so EML
-setups that scan every folder under mods/ do not treat minimap_mod as an
-incomplete Lua package.
-
-For mixed EML + Shroudtopia setups:
-
-- Keep Shroudtopia installed with winmm.dll and shroudtopia.dll.
-- Keep this mod at mods/minimap_mod.
-- If EML with dbghelp.dll crashes on client startup, try EML's dinput8.dll
-  proxy instead of dbghelp.dll.
-- Do not expect an EML-only setup to load the minimap DLL. Shroudtopia is still
-  required.
+F10: hide/show. Plus/minus: zoom. F9/F11: smaller/larger.
+See README.md for settings, credits and tested scope.
+To roll back: close the game and restore the backed-up mod and loader files.

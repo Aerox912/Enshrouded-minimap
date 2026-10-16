@@ -1,4 +1,8 @@
-# Enshrouded Minimap - Community Edition
+# ESM Minimap
+
+Version **0.5.8** is tested in local gameplay on Enshrouded 1.0 (Steam build 25966634).
+Includes a configurable colored map: Bright by default, or Original.
+See [tested scope and limits](docs/CLIENT-1.0.md).
 
 Community-maintained fork of **elxokker's Enshrouded Minimap**, using Shroudtopia.
 Version **0.5.7** includes the camera/graphics fixes from upstream
@@ -77,10 +81,10 @@ Download the latest zip from the release page:
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.7.zip`
+`enshrouded-minimap-community-v0.5.8.zip`
 
 Requires Windows x64 Enshrouded,
-[Shroudtopia 0.1.1](https://www.nexusmods.com/enshrouded/mods/43), and the
+the [matching Shroudtopia 1.0 compatibility files](https://www.nexusmods.com/enshrouded/mods/143?tab=files), and the
 [Microsoft Visual C++ x64 Redistributable](https://aka.ms/vc14/vc_redist.x64.exe).
 Visual Studio is not needed to use the mod. Install the minimap on each player's
 client; no server component is required.
@@ -88,7 +92,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.7.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.8.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
@@ -119,6 +123,40 @@ replace `shroudtopia.json`, so your existing preferences remain in place.
 
 To uninstall, close the game and remove `mods/minimap_mod`. Leave Shroudtopia
 installed if other mods need it. To roll back, restore your backed-up mod folder.
+
+## Shroudtopia for Enshrouded 1.0
+
+Use the matching Shroudtopia loader/proxy from Optional Files on the Nexus listing.
+A compatible Shroudtopia installation is required; this optional download is for
+players who need the tested pair. EML alone cannot load Minimap.
+
+1. Close Enshrouded.
+2. In Steam, open Enshrouded > Manage > Browse local files.
+3. Back up existing `shroudtopia.dll` and `winmm.dll` outside the game folder.
+4. Extract the loader ZIP there, beside `enshrouded.exe`.
+5. Keep your existing `shroudtopia.json` and mods. If another mod owns `winmm.dll`,
+   resolve that loader conflict before replacing it.
+
+To roll back, close the game and restore the backed-up pair. Keep Shroudtopia
+while another installed mod needs it. Original Shroudtopia: s0T7x / Miguel Oppermann.
+
+## Enable and configure
+
+Merge this entry into the existing `mods` object in `shroudtopia.json`.
+Do not replace the whole file or remove other mod entries.
+
+```json
+"minimap_mod": {
+  "active": true,
+  "position": "top-right",
+  "map_style": "bright",
+  "show_clock": true,
+  "show_weather": true,
+  "show_fog_of_war": true
+}
+```
+
+Use `"original"` instead of `"bright"` for the original map colors.
 
 ## Position Config
 
@@ -157,6 +195,7 @@ Example:
       "show_weather": true,
       "show_fog_of_war": true,
       "map_light": 55,
+      "map_style": "bright",
       "icon_style": "original",
       "heading_smoothing_ms": 55,
       "map_sample_step": 2,
@@ -264,6 +303,15 @@ style by default; set `icon_style` to `"world-map"` to enable gold frames.
 See [display settings and PR #4 feature coverage](docs/pr4-feature-parity.md)
 for `map_light`, `icon_style`, `heading_smoothing_ms`, `show_world_markers`,
 compatibility boundaries and test instructions.
+
+The local color-style candidate adds `map_style`: `"bright"` (default) or
+`"original"`, refreshed live with the other minimap settings. Bright uses a coarse
+color palette from the selected illustration while preserving the original map's
+pixel positions and alpha. Brightness is tone-mapped and colors are replaced,
+so very small tonal or color differences can diminish. It does not use illustrated terrain or
+add new regions. Missing palette data falls back to Original. See
+[color appearance and validation](docs/map-appearance.md). This candidate has not
+been accepted in the updated game.
 
 ## EML Compatibility Notes
 
