@@ -17,7 +17,7 @@ if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Commit tracked source changes befor
 
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $stage = Join-Path $output "stage-v$version"
-$zipPath = Join-Path $output "enshrouded-minimap-community-v$version.zip"
+$zipPath = Join-Path $output "enshrouded-minimap-v$version.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zipPath)) {
   throw 'Release staging/output already exists. Use a new output directory.'
 }
