@@ -38,7 +38,8 @@ $buildInfo = [ordered]@{
   repository = 'https://github.com/Aerox912/Enshrouded-minimap'
   commit = $commit
   platform = 'Windows x64'
-  testedClientDataRevision = 1076226
+  testedSteamClientBuild = 25966634
+  testedClientSha256 = '4d6d43ea4a91e71c82d60b045dde932179c99e32e40657efe374688b2933589a'
   dllSha256 = (Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash
 }
 $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding utf8

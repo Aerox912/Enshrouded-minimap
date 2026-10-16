@@ -1,7 +1,7 @@
 {
   "id": "minimap_mod",
-  "version": "0.5.7",
-  "name": "Enshrouded Minimap - Community Edition",
+  "version": "0.5.8",
+  "name": "ESM Minimap",
   "description": "Community-maintained in-game minimap with live fog of war, a weather clock, players, pings, waypoints and death markers.",
   "author": "elxokker; community maintenance by Aerox912",
   "authors": [
@@ -22,6 +22,7 @@
       "show_world_markers": true,
       "show_death_markers": true,
       "map_light": 55,
+      "map_style": "bright",
       "icon_style": "original",
       "heading_smoothing_ms": 55,
       "map_sample_step": 2,

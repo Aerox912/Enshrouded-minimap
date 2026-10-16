@@ -1,0 +1,13 @@
+{
+  "purpose": "Bright color reference for ESM Minimap; not terrain or biome data",
+  "source": "User-selected AI color concept; HD-map-inspired",
+  "referenceSha256": "f8ffda92c90dbf34eda10ac714e55a307e4925689ad04ec9281c4ea17f111465",
+  "paletteSha256": "504004a9c3a8faa8b6266bea2df1088e0e300fea474ab796b509f0619bde8293",
+  "format": "RGB8",
+  "width": 32,
+  "height": 32,
+  "sampling": "area-average; normalized coordinates; no terrain resampling",
+  "geographySource": "Original minimap RGBA only",
+  "newRegionCoverage": false,
+  "runtimeValidated": false
+}

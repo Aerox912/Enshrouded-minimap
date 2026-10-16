@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "live_markers.h"
 #include "toggle_notice.h"
+#include "map_appearance.h"
+#include "client_1_0_profile.h"
 #pragma comment(lib, "gdi32.lib")
 
 #include <shroudtopia.h>
@@ -24,6 +26,14 @@
 
 namespace
 {
+    bool g_client10 = false;
+    std::atomic<bool> g_runtimeCallbacksActive{false};
+    // Covers submission and the original present consuming its wait semaphores.
+    std::mutex g_presentCallbackMutex;
+    std::size_t ClientOffset(std::size_t legacy, std::size_t current) { return g_client10 ? current : legacy; }
+    std::size_t VulkanSlot(std::size_t legacy) {
+        return g_client10 && legacy >= 0x570 && legacy <= 0x590 ? legacy + 0x10 : legacy;
+    }
     constexpr uintptr_t RVA_LOCAL_PLAYER_UI_RENDER_SETUP = 0x300390;
     constexpr uintptr_t RVA_PLAYER_WAYPOINTS_UI = 0x29CFF0;
     constexpr uintptr_t RVA_KNOWLEDGE_QUERY_MAPMARKER_VISIBILITY = 0x381350;
@@ -1186,8 +1196,8 @@ namespace
 
     ModMetaData g_metaData = {
         "minimap_mod",
-        "Community-maintained in-game minimap with a world clock, players, pings, waypoints and death markers.",
-        "0.5.7",
+        "ESM Minimap: in-game map with a world clock, players, pings, waypoints and death markers.",
+        "0.5.8",
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,
@@ -1311,6 +1321,9 @@ namespace
     bool g_vulkanFunctionOffsetsLogged = false;
     std::atomic<uintptr_t> g_vulkanDeviceTable{ 0 };
     std::atomic<uintptr_t> g_patchedVulkanDeviceTable{ 0 };
+    std::atomic<uintptr_t> g_patchedVulkanDevice{ 0 };
+    bool g_patchedVulkanCurrentProfile = false; // Protected by g_vulkanHookMutex.
+    bool g_callbackModulePinned = false;
     std::atomic<uintptr_t> g_originalQueuePresent{ 0 };
     std::atomic<uintptr_t> g_originalCreateSwapchain{ 0 };
     std::atomic<uintptr_t> g_originalGetSwapchainImages{ 0 };
@@ -1330,6 +1343,8 @@ namespace
     VulkanMinimapRenderer g_renderer;
     std::mutex g_realMapMutex;
     RealMapTexture g_realMap;
+    RealMapTexture g_brightMap; // Same pixels/coordinates as g_realMap; color only.
+    std::atomic<bool> g_brightMapStyle{ true };
     std::mutex g_staticPoiMutex;
     StaticPoiCatalog g_staticPois;
     std::mutex g_fogOfWarMutex;
@@ -1421,8 +1436,10 @@ namespace
         0x48, 0x89, 0x7C, 0x24, 0x18
     };
 
-    bool TryInstallVulkanTableHooks(uintptr_t table);
-    void RestoreVulkanTableHooks();
+    bool TryInstallVulkanTableHooks(uintptr_t table, uintptr_t presentingDevice = 0);
+    bool WritePointer(uintptr_t address, uintptr_t value);
+    using PointerWriter = bool(*)(uintptr_t,uintptr_t);
+    bool RestoreVulkanTableHooks(PointerWriter writer = WritePointer);
     bool TryReadMinimapConfigStringFromFile(ModContext* modContext, const char* key, std::string& outValue, std::string& outSource);
     void LogRendererThrottled(const std::string& message);
 
@@ -1698,7 +1715,7 @@ namespace
         }
 
         std::string configuredMapLight = "55", configuredSmoothing = "55", ignoredSource;
-        std::string configuredIconStyle = "original";
+        std::string configuredIconStyle = "original", configuredMapStyle = "bright";
         const auto readOption = [&](const char* key, std::string& value) {
             if (!TryReadMinimapConfigStringFromFile(modContext, key, value, ignoredSource) &&
                 modContext != nullptr && modContext->config.GetString)
@@ -1725,6 +1742,9 @@ namespace
         readOption("map_light", configuredMapLight);
         readOption("heading_smoothing_ms", configuredSmoothing);
         readOption("icon_style", configuredIconStyle);
+        readOption("map_style", configuredMapStyle);
+        const bool brightStyle = NormalizeConfigValue(configuredMapStyle) == "bright";
+        const bool previousBrightStyle = g_brightMapStyle.exchange(brightStyle);
         const int mapLight = ParseConfigInteger(configuredMapLight, 55, 0, 100);
         const int smoothing = ParseConfigInteger(configuredSmoothing, 55, 0, 250);
         const bool worldMapStyle = configuredIconStyle != "original";
@@ -1760,7 +1780,7 @@ namespace
         const bool previousPlayers = g_showOtherPlayers.exchange(showPlayers);
         const bool previousPings = g_showPings.exchange(showPings);
         const bool previousWaypoints = g_showWaypoints.exchange(showWaypoints);
-        if (!forceLog && !hotkeysChanged && !scaleChanged &&
+        if (!forceLog && !hotkeysChanged && !scaleChanged && previousBrightStyle == brightStyle &&
             previous == static_cast<int>(placement) &&
             previousToggleKey == toggleKey &&
             previousRenderFallback == renderFallback &&
@@ -1799,6 +1819,7 @@ namespace
             << " | show_fog_of_war=" << showFog
             << " | show_world_markers=" << showWorld
             << " | map_light=" << mapLight
+            << " | map_style=" << (brightStyle ? "bright" : "original")
             << " | icon_style=" << (worldMapStyle ? "world-map" : "original")
             << " | heading_smoothing_ms=" << smoothing
             << " | scale_percent=" << g_minimapScalePercent.load();
@@ -2060,7 +2081,7 @@ namespace
         for (int i = 0; i < 8; ++i)
             code.push_back(0x00);
 
-        append({ 0x48, 0x8D, 0x4D, 0xB8 });               // lea rcx, [rbp-48h]
+        append({ 0x48, 0x8D, 0x4D, static_cast<std::uint8_t>(g_client10 ? 0xE7 : 0xB8) }); // verified record base
         append({ 0x4C, 0x89, 0xF2 });                     // mov rdx, r14
         append({ 0xFF, 0xD0 });                           // call rax
         append({ 0x48, 0x8B, 0x4C, 0x24, 0x20 });         // mov rcx, [rsp+20h]
@@ -2106,6 +2127,9 @@ namespace
 
     Mem::Detour* InstallMapMarkerVisibilityLoopHook(uintptr_t rva, void* handler)
     {
+        const std::array<std::uint8_t,6> currentExpected={0x41,0xB8,0x50,0,0,0};
+        const auto* expected=g_client10 ? currentExpected.data() : g_mapMarkerVisibilityLoopExpected.data();
+        const auto size=g_client10 ? currentExpected.size() : g_mapMarkerVisibilityLoopExpected.size();
         if (rva == 0)
         {
             Log("[Minimap] hook unavailable for map_marker_visibility_loop");
@@ -2113,21 +2137,21 @@ namespace
         }
 
         const uintptr_t address = g_exeBase + rva;
-        if (!ValidatePrologue(address, g_mapMarkerVisibilityLoopExpected.data(), g_mapMarkerVisibilityLoopExpected.size(), "map_marker_visibility_loop"))
+        if (!ValidatePrologue(address, expected, size, "map_marker_visibility_loop"))
             return nullptr;
 
         std::vector<std::uint8_t> shellcode = BuildMapMarkerVisibilityLoopHookShellcode(
-            g_mapMarkerVisibilityLoopExpected.data(),
-            g_mapMarkerVisibilityLoopExpected.size()
+            expected,
+            size
         );
-        auto* detour = new Mem::Detour(address, shellcode.data(), shellcode.size(), false, g_mapMarkerVisibilityLoopExpected.size() - 5);
+        auto* detour = new Mem::Detour(address, shellcode.data(), shellcode.size(), false, size - 5);
 
         const std::size_t handlerImmediateOffset = 26;
         const std::size_t jumpImmediateOffset = shellcode.size() - 4;
         detour->shellcode->updateValue<std::uint64_t>(handlerImmediateOffset, reinterpret_cast<std::uint64_t>(handler));
 
         const uintptr_t jumpSource = detour->shellcode->data->address + jumpImmediateOffset + sizeof(std::uint32_t);
-        const uintptr_t jumpTarget = address + g_mapMarkerVisibilityLoopExpected.size();
+        const uintptr_t jumpTarget = address + size;
         detour->shellcode->updateValue<std::uint32_t>(
             jumpImmediateOffset,
             static_cast<std::uint32_t>(jumpTarget - jumpSource)
@@ -2875,6 +2899,16 @@ namespace
             SafeRead(descriptor[0], actual, length) && std::memcmp(actual, name, length) == 0;
     }
 
+    #include "client_1_0_guards.h"
+
+    bool NamedClient10() {
+        return IsNamedSystemAt(0x1e01010,"player_camera_transform",0x2b26a0) &&
+            IsNamedSystemAt(0x1e0af80,"player_waypoints_ui",0x30e650);
+    }
+    bool Iterators10() {
+        return reinterpret_cast<uintptr_t>(g_iterInit)==g_exeBase+0x9ba5a0 &&
+            reinterpret_cast<uintptr_t>(g_iterNext)==g_exeBase+0x9b5490;
+    }
     // Entire instructions before the iterator call; no relative operands copied.
     const std::array<std::uint8_t, 17> g_daytimeUiExpected = {
         0x41, 0x56, 0x48, 0x83, 0xEC, 0x60, 0x41, 0xB8, 0x28, 0, 0, 0,
@@ -2883,6 +2917,7 @@ namespace
 
     bool HasVerifiedWorldClockLayout()
     {
+        if (g_client10) return Iterators10() && IsNamedSystemAt(0x1e011e0,"player_daytime_ui",0x2b2e80) && IsNamedSystemAt(0x1e051a0,"client_update_daytime",0x3022f0) && MatchClock10();
         const std::uint8_t iterator[] = { 0xE8, 0x27, 0x3E, 0x67, 0,
             0x48, 0x8B, 0x4C, 0x24, 0x40, 0xE8, 0x6D, 0xCD, 0xA5, 0 };
         // isDaytime reads sunrise +28, sunset +30 and current solar time +48.
@@ -3017,6 +3052,19 @@ namespace
 
     bool HasVerifiedWorldWeatherLayout()
     {
+        if (g_client10) {
+            if (!IsNamedSystemAt(0x1e020e0,"ambient_effects",0x2fd4e0) || !MatchWeather10()) return false;
+            const char* names[]={"Clear","Rain","Snow","Blizzard"};
+            for (std::uint64_t i=0;i<4;++i) {
+                uintptr_t name=0;std::uint64_t value=99;char actual[9]{};
+                const uintptr_t entry=g_exeBase+0x1bbcb00+i*0x28;
+                const auto length=std::strlen(names[i])+1;
+                if (!SafeReadValue(entry,name) || name<g_exeBase || name-g_exeBase+length>g_exeImageSize ||
+                    !SafeReadValue(entry+0x10,value) || value!=i || !SafeRead(name,actual,length) ||
+                    std::memcmp(actual,names[i],length)) return false;
+            }
+            return true;
+        }
         const std::uint8_t localPlayer[] = {0x8B,0x7F,0x04,0x8B,0xD7,0xE8,0xA9,0x2D,0x62,0x00,
             0x84,0xC0,0x0F,0x84,0x3E,0x07,0x00,0x00};
         const std::uint8_t query[] = {0x4C,0x8B,0xC8,0x0F,0x29,0x44,0x24,0x60,
@@ -3211,6 +3259,7 @@ namespace
 
     bool HasVerifiedLiveFogLayout()
     {
+        if (g_client10) return IsNamedSystemAt(0x1e074e0,"fog_of_war",0x306d20) && MatchFog10();
         const std::uint8_t owner[] = {0x48,0x8B,0xD3,0x8B,0x08,0xE8,0x24,0x2E,0x09,0x00,
             0x84,0xC0,0x74,0x59};
         const std::uint8_t object[] = {0x48,0x8B,0x4C,0x24,0x48};
@@ -3233,6 +3282,7 @@ namespace
 
     bool HasVerifiedWorldMapLayout()
     {
+        if (g_client10) return Iterators10() && IsNamedSystemAt(0x1e02f50,"clear_map_markers_for_ui",0x2feb20) && IsNamedSystemAt(0x1e05f90,"custom_map_markers_ui",0x302ea0) && IsNamedSystemAt(0x1e0c4f0,"replicate_map_markers_for_ui",0x3107f0) && MatchWorld10();
         const std::uint8_t init[] = { 0xE8, 0x8C, 0xC9, 0x63, 0x00 };
         const std::uint8_t clear[] = { 0x48, 0x89, 0x88, 0x08, 0xC1, 0x01, 0x00,
             0x48, 0x89, 0x88, 0x30, 0xC1, 0x03, 0x00 };
@@ -3253,6 +3303,7 @@ namespace
 
     bool HasVerifiedDeathMarkerLayout()
     {
+        if (g_client10) return HasVerifiedWorldMapLayout() && MatchDeath10();
         // replicate_map_markers_for_ui routes tombstones into a separate list.
         // Its allocator uses the same 0x80-byte entries and position/key writes.
         // Keep this gate separate so a changed death list cannot disable POIs.
@@ -3276,11 +3327,11 @@ namespace
             return false;
         if (count == 0) return true; // A valid empty frame removes old markers.
         if (!IsLikelyRuntimePointer(entries)) return false;
-        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(count) * WORLD_MAP_MARKER_STRIDE);
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(count) * ClientOffset(WORLD_MAP_MARKER_STRIDE,0xA0));
         if (!SafeRead(entries, bytes.data(), bytes.size())) return false;
         for (std::size_t i = 0; i < count; ++i)
         {
-            const auto* entry = bytes.data() + i * WORLD_MAP_MARKER_STRIDE;
+            const auto* entry = bytes.data() + i * ClientOffset(WORLD_MAP_MARKER_STRIDE,0xA0);
             CapturedWorldMapMarker marker{};
             std::memcpy(&marker.x, entry + 0x10, sizeof(marker.x));
             std::memcpy(&marker.y, entry + 0x18, sizeof(marker.y));
@@ -3296,13 +3347,13 @@ namespace
     void CaptureWorldMapMarkers(uintptr_t state, DWORD now)
     {
         std::vector<CapturedWorldMapMarker> markers;
-        const bool valid = ReadWorldMapArray(state, CUSTOM_MAP_ARRAY_OFFSET, true, markers) &&
-            ReadWorldMapArray(state, WORLD_MAP_ARRAY_OFFSET, false, markers);
+        const bool valid = ReadWorldMapArray(state, ClientOffset(CUSTOM_MAP_ARRAY_OFFSET,0x396A28), true, markers) &&
+            ReadWorldMapArray(state, ClientOffset(WORLD_MAP_ARRAY_OFFSET,0x36EA00), false, markers);
         if (!valid) markers.clear();
         const auto count = markers.size();
         std::vector<CapturedWorldMapMarker> deaths;
         const bool deathsValid = g_deathMarkerLayoutSupported &&
-            ReadWorldMapArray(state, DEATH_MAP_ARRAY_OFFSET, false, deaths, DEATH_MAP_MAX_ENTRIES);
+            ReadWorldMapArray(state, ClientOffset(DEATH_MAP_ARRAY_OFFSET,0x3BEA50), false, deaths, DEATH_MAP_MAX_ENTRIES);
         if (!deathsValid) deaths.clear();
         const auto deathCount = deaths.size();
         {
@@ -3367,6 +3418,7 @@ namespace
 
     bool HasVerifiedLiveMarkerLayout()
     {
+        if (g_client10) return NamedClient10() && Iterators10() && IsNamedSystemAt(0x1e10980,"update_ui_data",0x3179c0) && MatchMarkers10();
         // Pin the record size, lookup arguments/targets and BasicPlayerInfos
         // slot layout as well as the named systems. Fail closed after updates.
         const std::uint8_t recordSize[] = { 0x41, 0xB8, 0x98, 0x00, 0x00, 0x00 };
@@ -3466,7 +3518,7 @@ namespace
                 const auto index = static_cast<std::uint32_t>(privateContext[1]);
                 if (index == 0 || index > 256 || record[3] == 0)
                     return false;
-                const auto entities = *reinterpret_cast<uintptr_t*>(privateContext[0] + 0x7E0);
+                const auto entities = *reinterpret_cast<uintptr_t*>(privateContext[0] + ClientOffset(0x7E0,0x828));
                 const auto id = *reinterpret_cast<std::uint32_t*>(entities + (index - 1) * 0x10);
                 // Same local-player filter used by player_camera_transform.
                 if (id == *reinterpret_cast<std::uint32_t*>(record[3] + 4))
@@ -4070,7 +4122,7 @@ namespace
                 return false;
             for (std::uint32_t id = 1; id <= 1023 && count < MinimapLive::MaxPlayers; ++id)
             {
-                if (id == localId || *reinterpret_cast<const std::uint32_t*>(record[1] + (id - 1) * 0x60) != id)
+                if (id == localId || *reinterpret_cast<const std::uint32_t*>(record[1] + (id - 1) * ClientOffset(0x60,0xA0)) != id)
                     continue;
                 uintptr_t result[2] = {};
                 g_lookupComponent(result, world, record[6], id);
@@ -4112,9 +4164,51 @@ namespace
         g_remotePlayers.assign(markers, markers + count);
     }
 
+    bool ReadPingEvents10(uintptr_t list, std::uint32_t excludedSender, DWORD now,
+        std::vector<MinimapLive::Marker>& output)
+    {
+        output.clear();
+        std::uint32_t count=0; std::uint16_t index=0; uintptr_t arena=0; std::uint64_t capacity=0;
+        if (!list || !SafeReadValue(list+0x18,count) || count>1024) return false;
+        if (count==0) return true;
+        if (!SafeReadValue(list+0x30,arena) || !arena || !SafeReadValue(list+0x38,capacity) ||
+            !capacity || !SafeReadValue(list+0x40,index) || !index) return false;
+        if (capacity>(UINTPTR_MAX-arena)/0x800) return false;
+        std::array<std::uint16_t,22> visited{}; size_t blocks=0, offset=0;
+        uintptr_t block=0;
+        auto selectBlock=[&]() {
+            if (!index || index>capacity || blocks>=visited.size() || std::find(visited.begin(),visited.begin()+blocks,index)!=visited.begin()+blocks) return false;
+            const uintptr_t displacement=static_cast<uintptr_t>(index-1)*0x800;
+            if (arena>UINTPTR_MAX-displacement-0x800) return false;
+            visited[blocks++]=index; block=arena+displacement;offset=0; return true;
+        };
+        if (!selectBlock()) return false;
+        std::vector<MinimapLive::Marker> pending;
+        for (std::uint32_t i=0;i<count;++i) {
+            if (offset+0x28>0x7F8 && (!SafeReadValue(block+2,index) || !selectBlock())) return false;
+            std::array<std::uint8_t,0x28> event{};
+            if (!SafeRead(block+8+offset,event.data(),event.size())) return false;
+            offset+=event.size();
+            MinimapLive::Marker ping{}; std::int64_t xyz[3]{};
+            std::memcpy(&ping.id,event.data()+8,4);std::memcpy(xyz,event.data()+0x10,sizeof(xyz));
+            if (!ping.id || ping.id>1023 || ping.id==excludedSender ||
+                !IsOnMapWorldPosition(FixedToWorld(xyz[0]),FixedToWorld(xyz[1]),FixedToWorld(xyz[2]))) continue;
+            ping.x=xyz[0];ping.y=xyz[1];ping.z=xyz[2];ping.updated=now;pending.push_back(ping);
+        }
+        output=std::move(pending);return true;
+    }
+
     void CapturePingEvents(void* list, std::uint32_t excludedSender, DWORD now)
     {
         const uintptr_t address = reinterpret_cast<uintptr_t>(list);
+        if (g_client10) {
+            std::vector<MinimapLive::Marker> pending;
+            if (!ReadPingEvents10(address,excludedSender,now,pending)) return;
+            std::lock_guard<std::mutex> lock(g_liveMarkerMutex);
+            MinimapLive::Prune(g_pings,now,MinimapLive::PingLifetimeMs);
+            for (const auto& ping:pending) MinimapLive::UpsertPing(g_pings,ping);
+            return;
+        }
         uintptr_t entries = 0;
         std::uint32_t count = 0;
         if (!address || !SafeReadValue(address + 0x18, entries) ||
@@ -4372,25 +4466,29 @@ namespace
             SafeReadValue(reinterpret_cast<uintptr_t>(renderContext) + 0x28, graphicsContext);
         }
 
+        // The current profile discovers ownership from a presenting context,
+        // after native table initialization. A loader-entry pointer is not ready.
+        if (g_client10 && !TryInstallVulkanTableHooks(table,device)) return;
+        if (g_client10) g_vulkanDeviceTable.store(table);
         g_lastRenderContext.store(reinterpret_cast<uintptr_t>(renderContext));
         g_lastVulkanDevice.store(device);
         g_lastGraphicsContext.store(graphicsContext);
         g_lastSwapchainState.store(reinterpret_cast<uintptr_t>(swapchainState));
 
-        if (table != 0)
+        if (table != 0 && !g_client10)
             TryInstallVulkanTableHooks(table);
 
         if (graphicsContext != 0)
         {
-            SafeReadValue(graphicsContext + 0xD98, queueState);
-            SafeReadValue(graphicsContext + 0xDFC, queueIndex);
+            SafeReadValue(graphicsContext + ClientOffset(0xD98,0xDD0), queueState);
+            SafeReadValue(graphicsContext + ClientOffset(0xDFC,0xE34), queueIndex);
             g_lastVulkanQueueFamilyIndex.store(queueIndex);
         }
 
         if (swapchainState != nullptr)
         {
-            SafeReadValue(reinterpret_cast<uintptr_t>(swapchainState) + 0x120, presentCount);
-            SafeReadValue(reinterpret_cast<uintptr_t>(swapchainState) + 0x118, presentSwapchains);
+            SafeReadValue(reinterpret_cast<uintptr_t>(swapchainState) + ClientOffset(0x120,0x16E0), presentCount);
+            SafeReadValue(reinterpret_cast<uintptr_t>(swapchainState) + ClientOffset(0x118,0x16D8), presentSwapchains);
         }
 
         if (!g_debugLoggingEnabled.load())
@@ -4415,7 +4513,7 @@ namespace
         outValue = 0;
         if (table == 0)
             return false;
-        return SafeReadValue(table + offset, outValue);
+        return SafeReadValue(table + VulkanSlot(offset), outValue);
     }
 
     bool IsReadablePage(DWORD protect)
@@ -6110,6 +6208,43 @@ namespace
         return true;
     }
 
+    // Caller holds g_realMapMutex. Missing/invalid palettes keep Original usable.
+    using BrightPixelBuilder = bool (*)(const std::vector<std::uint8_t>&, int,
+        const std::vector<std::uint8_t>&, std::vector<std::uint8_t>&);
+    bool TryBuildBrightMap(const RealMapTexture& original, RealMapTexture& bright,
+        BrightPixelBuilder buildPixels = minimap::BuildBrightMapPixels)
+    {
+        bright = {};
+        try
+        {
+            const auto separator = original.path.find_last_of("/\\");
+            const std::string path = (separator == std::string::npos ? "" : original.path.substr(0,separator+1)) + "embervale_bright_palette.rgb";
+            std::ifstream file(path,std::ios::binary|std::ios::ate);
+            if (!file || file.tellg()!=minimap::ColorPaletteBytes) return false;
+            std::vector<std::uint8_t> palette(minimap::ColorPaletteBytes);
+            file.seekg(0,std::ios::beg);
+            if (!file.read(reinterpret_cast<char*>(palette.data()),palette.size()) ||
+                !original.loaded || original.width!=original.height ||
+                !buildPixels(original.rgba,original.width,palette,bright.rgba)) return false;
+            bright.loaded=bright.attempted=true;
+            bright.width=original.width; bright.height=original.height; bright.path=path;
+            return true;
+        }
+        catch (const std::exception&)
+        {
+            // This optional allocation must not prevent Original from loading.
+            bright = {};
+            return false;
+        }
+    }
+
+    const RealMapTexture& ActiveRealMapLocked()
+    {
+        return g_brightMapStyle.load() && g_brightMap.loaded &&
+            g_brightMap.width==g_realMap.width && g_brightMap.height==g_realMap.height &&
+            g_brightMap.rgba.size()==g_realMap.rgba.size() ? g_brightMap : g_realMap;
+    }
+
     void EnsureRealMapLoaded()
     {
         std::lock_guard<std::mutex> lock(g_realMapMutex);
@@ -6140,6 +6275,8 @@ namespace
         {
             if (TryLoadRealMapFromPath(path, g_realMap))
             {
+                if (!TryBuildBrightMap(g_realMap,g_brightMap))
+                    Log("[Minimap] bright color palette unavailable; Original appearance remains active");
                 std::ostringstream oss;
                 oss << "[Minimap] loaded real Embervale map texture"
                     << " | path=" << path
@@ -6929,18 +7066,19 @@ namespace
     bool SampleRealMapColor(float worldX, float worldZ, float& red, float& green, float& blue)
     {
         std::lock_guard<std::mutex> lock(g_realMapMutex);
-        if (!g_realMap.loaded || g_realMap.rgba.empty())
+        const RealMapTexture& map = ActiveRealMapLocked();
+        if (!map.loaded || map.rgba.empty())
             return false;
 
         const float u = ClampValue(worldX / REAL_MAP_WORLD_SIZE, 0.0f, 1.0f);
         const float v = ClampValue(1.0f - (worldZ / REAL_MAP_WORLD_SIZE), 0.0f, 1.0f);
-        const int x = ClampValue(static_cast<int>(u * static_cast<float>(g_realMap.width - 1)), 0, g_realMap.width - 1);
-        const int y = ClampValue(static_cast<int>(v * static_cast<float>(g_realMap.height - 1)), 0, g_realMap.height - 1);
-        const std::size_t offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(g_realMap.width) + static_cast<std::size_t>(x)) * 4;
+        const int x = ClampValue(static_cast<int>(u * static_cast<float>(map.width - 1)), 0, map.width - 1);
+        const int y = ClampValue(static_cast<int>(v * static_cast<float>(map.height - 1)), 0, map.height - 1);
+        const std::size_t offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(map.width) + static_cast<std::size_t>(x)) * 4;
 
-        red = static_cast<float>(g_realMap.rgba[offset + 0]) / 255.0f;
-        green = static_cast<float>(g_realMap.rgba[offset + 1]) / 255.0f;
-        blue = static_cast<float>(g_realMap.rgba[offset + 2]) / 255.0f;
+        red = static_cast<float>(map.rgba[offset + 0]) / 255.0f;
+        green = static_cast<float>(map.rgba[offset + 1]) / 255.0f;
+        blue = static_cast<float>(map.rgba[offset + 2]) / 255.0f;
         return true;
     }
 
@@ -7395,7 +7533,17 @@ namespace
         bool copied = false;
         __try
         {
-            record = *recordPtr;
+            if (g_client10) {
+                uintptr_t current[10]{};
+                if (!SafeRead(reinterpret_cast<uintptr_t>(recordPtr),current,sizeof(current))) {
+                    RegisterVisibleMapMarkerCaptureFault(); return;
+                }
+                record.marker=reinterpret_cast<std::uint8_t*>(current[1]);
+                record.visibilityState=reinterpret_cast<std::uint8_t*>(current[2]);
+                record.refCounter=reinterpret_cast<void*>(current[7]);
+                record.knowledge=reinterpret_cast<void*>(current[8]);
+                record.entity=reinterpret_cast<void*>(current[9]);
+            } else record = *recordPtr;
             copied = true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -7788,7 +7936,8 @@ namespace
         const float cosHeading = std::cos(headingRadians);
         const float sinHeading = std::sin(headingRadians);
         std::lock_guard<std::mutex> lock(g_realMapMutex);
-        const bool hasMap = g_realMap.loaded && !g_realMap.rgba.empty();
+        const RealMapTexture& map = ActiveRealMapLocked();
+        const bool hasMap = map.loaded && !map.rgba.empty();
         const int sampleStep = ClampValue(g_minimapMapSampleStep.load(), 1, 4);
         const int mapLight = g_minimapMapLight.load();
         const auto quantizeColor = [mapLight](float value) -> float
@@ -7838,19 +7987,19 @@ namespace
                     const float worldZ = centerZ - northUpY * unitsPerPixel;
                     const float u = ClampValue(worldX / REAL_MAP_WORLD_SIZE, 0.0f, 1.0f);
                     const float v = ClampValue(1.0f - (worldZ / REAL_MAP_WORLD_SIZE), 0.0f, 1.0f);
-                    const float mapFx = u * static_cast<float>(g_realMap.width - 1);
-                    const float mapFy = v * static_cast<float>(g_realMap.height - 1);
-                    const int x0 = ClampValue(static_cast<int>(std::floor(mapFx)), 0, g_realMap.width - 1);
-                    const int y0 = ClampValue(static_cast<int>(std::floor(mapFy)), 0, g_realMap.height - 1);
-                    const int x1 = ClampValue(x0 + 1, 0, g_realMap.width - 1);
-                    const int y1 = ClampValue(y0 + 1, 0, g_realMap.height - 1);
+                    const float mapFx = u * static_cast<float>(map.width - 1);
+                    const float mapFy = v * static_cast<float>(map.height - 1);
+                    const int x0 = ClampValue(static_cast<int>(std::floor(mapFx)), 0, map.width - 1);
+                    const int y0 = ClampValue(static_cast<int>(std::floor(mapFy)), 0, map.height - 1);
+                    const int x1 = ClampValue(x0 + 1, 0, map.width - 1);
+                    const int y1 = ClampValue(y0 + 1, 0, map.height - 1);
                     const float tx = mapFx - static_cast<float>(x0);
                     const float ty = mapFy - static_cast<float>(y0);
 
                     const auto sampleChannel = [&](int x, int y, int channel) -> float
                     {
-                        const std::size_t offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(g_realMap.width) + static_cast<std::size_t>(x)) * 4;
-                        return static_cast<float>(g_realMap.rgba[offset + static_cast<std::size_t>(channel)]) / 255.0f;
+                        const std::size_t offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(map.width) + static_cast<std::size_t>(x)) * 4;
+                        return static_cast<float>(map.rgba[offset + static_cast<std::size_t>(channel)]) / 255.0f;
                     };
 
                     const float redTop = sampleChannel(x0, y0, 0) * (1.0f - tx) + sampleChannel(x1, y0, 0) * tx;
@@ -8872,7 +9021,7 @@ namespace
 
     bool TrySubmitVulkanMinimap(void* queue, const VkPresentInfoKHR& info, uintptr_t firstSwapchain, std::uint32_t imageIndex, VkPresentInfoKHR& adjustedInfo, const void** adjustedWaitSemaphore)
     {
-        if (queue == nullptr || firstSwapchain == 0 || info.waitSemaphoreCount > 8)
+        if (!g_runtimeCallbacksActive.load() || queue == nullptr || firstSwapchain == 0 || info.waitSemaphoreCount > 8)
             return false;
 
         TryRefreshPlayerPositionFromCachedCamera();
@@ -8897,6 +9046,8 @@ namespace
             return false;
 
         std::lock_guard<std::mutex> lock(g_rendererMutex);
+        // Deactivation clears the flag before acquiring this same renderer lock.
+        if (!g_runtimeCallbacksActive.load()) return false;
         if (!BuildVulkanMinimapRendererLocked(snapshot))
             return false;
 
@@ -9074,12 +9225,12 @@ namespace
 
     std::int32_t __fastcall HookCreateSwapchain(void* device, const VkSwapchainCreateInfoKHR* createInfo, const void* allocator, void** swapchain)
     {
-        if (device != nullptr)
-            g_lastVulkanDevice.store(reinterpret_cast<uintptr_t>(device));
-
+        std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
         const uintptr_t original = g_originalCreateSwapchain.load();
         auto* originalFn = reinterpret_cast<CreateSwapchainFn>(original);
         const std::int32_t result = originalFn != nullptr ? originalFn(device, createInfo, allocator, swapchain) : -1;
+        if (!g_runtimeCallbacksActive.load()) return result;
+        if (device != nullptr) g_lastVulkanDevice.store(reinterpret_cast<uintptr_t>(device));
         void* swapchainHandle = swapchain != nullptr ? *swapchain : nullptr;
         RememberSwapchainCreate(device, createInfo, swapchainHandle, result);
         LogVulkanSwapchainCreate(device, createInfo, swapchainHandle, result);
@@ -9088,12 +9239,12 @@ namespace
 
     std::int32_t __fastcall HookGetSwapchainImages(void* device, void* swapchain, std::uint32_t* count, void* images)
     {
-        if (device != nullptr)
-            g_lastVulkanDevice.store(reinterpret_cast<uintptr_t>(device));
-
+        std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
         const uintptr_t original = g_originalGetSwapchainImages.load();
         auto* originalFn = reinterpret_cast<GetSwapchainImagesFn>(original);
         const std::int32_t result = originalFn != nullptr ? originalFn(device, swapchain, count, images) : -1;
+        if (!g_runtimeCallbacksActive.load()) return result;
+        if (device != nullptr) g_lastVulkanDevice.store(reinterpret_cast<uintptr_t>(device));
         RememberSwapchainImages(device, swapchain, count, images, result);
 
         const DWORD now = GetTickCount();
@@ -9119,14 +9270,16 @@ namespace
 
     std::int32_t __fastcall HookQueuePresent(void* queue, const void* presentInfo)
     {
-        UpdateMinimapRuntimeControls(g_modContext);
-        TryScanVulkanDeviceFunctions();
-        LogVulkanPresentInfo(queue, presentInfo);
-
+        std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
         const uintptr_t original = g_originalQueuePresent.load();
         auto* originalFn = reinterpret_cast<QueuePresentFn>(original);
         if (originalFn == nullptr)
             return -1;
+        if (!g_runtimeCallbacksActive.load()) return originalFn(queue,presentInfo);
+
+        UpdateMinimapRuntimeControls(g_modContext);
+        TryScanVulkanDeviceFunctions();
+        LogVulkanPresentInfo(queue, presentInfo);
 
         VkPresentInfoKHR info{};
         uintptr_t firstSwapchain = 0;
@@ -9144,7 +9297,7 @@ namespace
 
     bool HookVulkanTableFunction(uintptr_t table, std::size_t offset, void* hook, std::atomic<uintptr_t>& original, const char* label)
     {
-        const uintptr_t slot = table + offset;
+        const uintptr_t slot = table + VulkanSlot(offset);
         uintptr_t current = 0;
         if (!SafeReadValue(slot, current) || current == 0)
             return false;
@@ -9168,12 +9321,65 @@ namespace
         return true;
     }
 
-    bool TryInstallVulkanTableHooks(uintptr_t table)
+    bool TryInstallVulkanTableHooks(uintptr_t table, uintptr_t presentingDevice)
     {
         if (table == 0)
             return false;
 
         std::lock_guard<std::mutex> lock(g_vulkanHookMutex);
+        // A dispatch can select our callback before restoration and enter later.
+        // Pin its code and retain forwarding originals until process termination.
+        if (!g_callbackModulePinned) {
+            HMODULE self=nullptr;
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                reinterpret_cast<LPCWSTR>(&HookQueuePresent),&self)) return false;
+            g_callbackModulePinned=true;
+        }
+        if (g_client10) {
+            uintptr_t device=0;
+            if (!presentingDevice || !SafeReadValue(table+8,device) || device!=presentingDevice) return false;
+            const uintptr_t owner=g_patchedVulkanDeviceTable.load();
+            // One table/device owns the callback originals for this module lifetime.
+            // Refuse another device instead of reusing the first device's originals.
+            if (owner && (owner!=table || g_patchedVulkanDevice.load()!=device)) return false;
+            const auto resolver=GetTableVulkanGetDeviceProcAddr(table);
+            if (!resolver) return false;
+            const struct { size_t slot;const char* name;void* hook;std::atomic<uintptr_t>* original; } functions[]={
+                {0x580,"vkCreateSwapchainKHR",reinterpret_cast<void*>(&HookCreateSwapchain),&g_originalCreateSwapchain},
+                {0x590,"vkGetSwapchainImagesKHR",reinterpret_cast<void*>(&HookGetSwapchainImages),&g_originalGetSwapchainImages},
+                {0x5A0,"vkQueuePresentKHR",reinterpret_cast<void*>(&HookQueuePresent),&g_originalQueuePresent},
+            };
+            // Validate the complete table before the first pointer write.
+            std::array<uintptr_t,3> resolvedValues{};size_t resolvedIndex=0;
+            for (const auto& function:functions) {
+                uintptr_t current=0;
+                const auto resolved=ResolveDeviceFunctionPtr(resolver,reinterpret_cast<void*>(device),function.name);
+                const uintptr_t address=reinterpret_cast<uintptr_t>(resolved);
+                if (!resolved || !SafeReadValue(table+function.slot,current)) return false;
+                if (owner) {
+                    if (function.original->load()!=address ||
+                        (current!=address && current!=reinterpret_cast<uintptr_t>(function.hook))) return false;
+                } else if (current!=address) return false;
+                resolvedValues[resolvedIndex++]=address;
+            }
+            g_patchedVulkanDevice.store(device);
+            g_patchedVulkanDeviceTable.store(table);
+            g_patchedVulkanCurrentProfile=true;
+            for(size_t i=0;i<resolvedValues.size();++i) functions[i].original->store(resolvedValues[i]);
+            for(const auto& function:functions) {
+                if (!WritePointer(table+function.slot,reinterpret_cast<uintptr_t>(function.hook))) {
+                    // Undo only slots still owned by us. Retain originals for an
+                    // in-flight callback and for a later attempt on this same pair.
+                    for(const auto& undo:functions) {
+                        uintptr_t current=0;
+                        if (SafeReadValue(table+undo.slot,current) && current==reinterpret_cast<uintptr_t>(undo.hook))
+                            WritePointer(table+undo.slot,undo.original->load());
+                    }
+                    return false;
+                }
+            }
+            return true;
+        }
         if (g_patchedVulkanDeviceTable.load() == table &&
             g_originalQueuePresent.load() != 0 &&
             g_originalCreateSwapchain.load() != 0 &&
@@ -9224,31 +9430,37 @@ namespace
         return createOk && imagesOk && presentOk;
     }
 
-    void RestoreVulkanTableFunction(uintptr_t table, std::size_t offset, void* hook, std::atomic<uintptr_t>& original)
+    bool RestoreVulkanTableFunction(uintptr_t table, std::size_t offset, void* hook,
+        std::atomic<uintptr_t>& original, PointerWriter writer)
     {
         const uintptr_t originalValue = original.load();
         if (table == 0 || originalValue == 0)
-            return;
+            return table==0 && originalValue==0;
 
-        const uintptr_t slot = table + offset;
+        const uintptr_t slot = table + (g_patchedVulkanCurrentProfile && offset>=0x570 && offset<=0x590 ? offset+0x10 : offset);
         uintptr_t current = 0;
         if (!SafeReadValue(slot, current))
-            return;
+            return false;
 
         if (current == reinterpret_cast<uintptr_t>(hook))
-            WritePointer(slot, originalValue);
-
-        original.store(0);
+            return writer(slot, originalValue);
+        return true; // A later direct slot owner is preserved; it may still chain us.
     }
 
-    void RestoreVulkanTableHooks()
+    bool RestoreVulkanTableHooks(PointerWriter writer)
     {
         std::lock_guard<std::mutex> lock(g_vulkanHookMutex);
-        const uintptr_t table = g_patchedVulkanDeviceTable.load();
-        RestoreVulkanTableFunction(table, VULKAN_TABLE_CREATE_SWAPCHAIN_OFFSET, reinterpret_cast<void*>(&HookCreateSwapchain), g_originalCreateSwapchain);
-        RestoreVulkanTableFunction(table, VULKAN_TABLE_GET_SWAPCHAIN_IMAGES_OFFSET, reinterpret_cast<void*>(&HookGetSwapchainImages), g_originalGetSwapchainImages);
-        RestoreVulkanTableFunction(table, VULKAN_TABLE_QUEUE_PRESENT_OFFSET, reinterpret_cast<void*>(&HookQueuePresent), g_originalQueuePresent);
-        g_patchedVulkanDeviceTable.store(0);
+        uintptr_t table = g_patchedVulkanDeviceTable.load();
+        if (g_patchedVulkanCurrentProfile && table) {
+            uintptr_t device=0;
+            if (!SafeReadValue(table+8,device) || device!=g_patchedVulkanDevice.load()) return false;
+        }
+        const bool create=RestoreVulkanTableFunction(table, VULKAN_TABLE_CREATE_SWAPCHAIN_OFFSET, reinterpret_cast<void*>(&HookCreateSwapchain), g_originalCreateSwapchain,writer);
+        const bool images=RestoreVulkanTableFunction(table, VULKAN_TABLE_GET_SWAPCHAIN_IMAGES_OFFSET, reinterpret_cast<void*>(&HookGetSwapchainImages), g_originalGetSwapchainImages,writer);
+        const bool present=RestoreVulkanTableFunction(table, VULKAN_TABLE_QUEUE_PRESENT_OFFSET, reinterpret_cast<void*>(&HookQueuePresent), g_originalQueuePresent,writer);
+        // Neither successful restoration nor an unreadable/foreign slot proves
+        // that every already-selected or chained callback has finished.
+        return create && images && present;
     }
 
     bool LooksLikeVulkanDeviceTable(uintptr_t candidate, uintptr_t vulkanModule, uintptr_t vkGetInstanceProcAddr)
@@ -9264,8 +9476,8 @@ namespace
             !SafeReadValue(candidate + 0x18, getInstanceProcAddr) || getInstanceProcAddr != vkGetInstanceProcAddr ||
             !SafeReadValue(candidate + 0x20, createInstance) ||
             !SafeReadValue(candidate + 0x78, getDeviceProcAddr) ||
-            !SafeReadValue(candidate + VULKAN_TABLE_CREATE_SWAPCHAIN_OFFSET, createSwapchain) ||
-            !SafeReadValue(candidate + VULKAN_TABLE_QUEUE_PRESENT_OFFSET, queuePresent))
+            !SafeReadValue(candidate + VulkanSlot(VULKAN_TABLE_CREATE_SWAPCHAIN_OFFSET), createSwapchain) ||
+            !SafeReadValue(candidate + VulkanSlot(VULKAN_TABLE_QUEUE_PRESENT_OFFSET), queuePresent))
         {
             return false;
         }
@@ -9285,7 +9497,7 @@ namespace
         // blocking configuration reloads (including first-person switching).
         if (g_vulkanScanCursor < minimum || g_vulkanScanCursor >= maximum)
             g_vulkanScanCursor = minimum;
-        constexpr std::size_t TABLE_MIN_SIZE = VULKAN_TABLE_QUEUE_PRESENT_OFFSET + sizeof(uintptr_t);
+        const std::size_t TABLE_MIN_SIZE = VulkanSlot(VULKAN_TABLE_QUEUE_PRESENT_OFFSET) + sizeof(uintptr_t);
         const auto started = std::chrono::steady_clock::now();
         const auto expired = [&]() { return std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(2); };
         std::size_t candidates = 0, regions = 0;
@@ -9376,6 +9588,7 @@ namespace
 
     void ProbeVulkanTable()
     {
+        if (g_client10) return; // Present supplies the verified current table/device pair.
         if (g_vulkanDeviceTable.load() == 0)
         {
             const DWORD now = GetTickCount();
@@ -9428,11 +9641,13 @@ namespace
 
     void __fastcall CaptureVulkanDeviceTableInitHook(void* table, void*, void*, void*)
     {
+        if (g_client10) return; // Table slots are uninitialized at this entry point.
         if (table == nullptr)
             return;
 
         const uintptr_t previous = g_vulkanDeviceTable.exchange(reinterpret_cast<uintptr_t>(table));
-        TryInstallVulkanTableHooks(reinterpret_cast<uintptr_t>(table));
+        // Entry runs before the native loader fills the table. Install after it is ready.
+        if (!g_client10) TryInstallVulkanTableHooks(reinterpret_cast<uintptr_t>(table));
         if (previous != reinterpret_cast<uintptr_t>(table))
         {
             std::ostringstream oss;
@@ -9442,11 +9657,84 @@ namespace
         }
     }
 
+    bool LoadVerifiedClient10(ModContext* context)
+    {
+        g_iterInit=reinterpret_cast<IterInitFn>(g_exeBase+0x9ba5a0);
+        g_iterNext=reinterpret_cast<IterNextFn>(g_exeBase+0x9b5490);
+        if (!NamedClient10() || !MatchCamera10() || !MatchRenderer10()) {
+            context->Log("[ESM Minimap] 1.0 core code changed; no hooks installed");
+            g_iterInit=nullptr;g_iterNext=nullptr;return false;
+        }
+        const std::array<std::uint8_t,18> camera={0x40,0x55,0x57,0x48,0x8d,0xac,0x24,0xb8,0xfe,0xff,0xff,0x48,0x81,0xec,0x48,0x02,0,0};
+        const std::array<std::uint8_t,10> waypoint={0x48,0x89,0x5c,0x24,0x18,0x48,0x89,0x6c,0x24,0x20};
+        const std::array<std::uint8_t,5> ui={0x48,0x89,0x4c,0x24,0x08};
+        const std::array<std::uint8_t,15> present={0x4c,0x89,0x44,0x24,0x18,0x48,0x89,0x54,0x24,0x10,0x48,0x89,0x4c,0x24,0x08};
+        const std::array<std::uint8_t,16> dispatch={0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8b,0xec};
+        // Verify optional contracts before any entry hooks alter their code.
+        g_liveMarkerLayoutSupported=HasVerifiedLiveMarkerLayout();
+        g_clockLayoutSupported=HasVerifiedWorldClockLayout();
+        g_weatherLayoutSupported=HasVerifiedWorldWeatherLayout();
+        g_liveFogLayoutSupported=HasVerifiedLiveFogLayout();
+        g_worldMapLayoutSupported=HasVerifiedWorldMapLayout();
+        g_deathMarkerLayoutSupported=HasVerifiedDeathMarkerLayout();
+        const bool visibility=IsNamedSystemAt(0x1de72a0,"knowledge_query_mapmarker_visibility",0x414800) && MatchVisibility10();
+        g_playerCameraTransformHook=InstallEntryHook(0x2b26a0,camera,reinterpret_cast<void*>(&CapturePlayerCameraTransformHook),"1.0 local camera");
+        g_directCameraTrackingSupported=g_playerCameraTransformHook!=nullptr;
+        if (g_liveMarkerLayoutSupported) {
+            g_getEcsWorld=reinterpret_cast<GetEcsWorldFn>(g_exeBase+0x9b2a20);
+            g_lookupComponent=reinterpret_cast<LookupComponentFn>(g_exeBase+0x9a5860);
+            g_playerWaypointsUiHook=InstallEntryHook(0x30e650,waypoint,reinterpret_cast<void*>(&CaptureWaypointsHook),"1.0 waypoints and pings");
+            g_playerUiDataHook=InstallEntryHook(0x3179c0,ui,reinterpret_cast<void*>(&CapturePlayerUiDataHook),"1.0 remote players");
+            g_liveMarkerLayoutSupported=g_playerWaypointsUiHook && g_playerUiDataHook;
+            if (!g_liveMarkerLayoutSupported) {
+                // These entry detours are still disabled. Never activate half a pair
+                // or let a current callback fall through to the legacy reader.
+                delete g_playerWaypointsUiHook;g_playerWaypointsUiHook=nullptr;
+                delete g_playerUiDataHook;g_playerUiDataHook=nullptr;
+                g_getEcsWorld=nullptr;g_lookupComponent=nullptr;
+            }
+        }
+        if (g_clockLayoutSupported) {
+            g_daytimeUiHook=InstallEntryHook(0x2b2e80,g_daytimeUiExpected,reinterpret_cast<void*>(&CaptureDaytimeUiHook),"1.0 world clock");
+            g_clockLayoutSupported=g_daytimeUiHook!=nullptr;
+        }
+        if (g_weatherLayoutSupported) {
+            g_weatherSampleHook=InstallWeatherSampleHook(0x2fd858,0xa9b420);
+            g_weatherLayoutSupported=g_weatherSampleHook!=nullptr;
+        }
+        if (g_liveFogLayoutSupported) {
+            g_fogUpdateHook=InstallVerifiedCallHook(0x306de4,0x39bf70,reinterpret_cast<uintptr_t>(&CaptureFogUpdate));
+            g_liveFogLayoutSupported=g_fogUpdateHook!=nullptr;
+            if (g_liveFogLayoutSupported) g_updateFog=reinterpret_cast<UpdateFogFn>(g_exeBase+0x39bf70);
+        }
+        if (g_worldMapLayoutSupported) {
+            g_clearMapMarkersHook=InstallEntryHook(0x2feb20,g_clearMapMarkersExpected,reinterpret_cast<void*>(&CaptureWorldMapHook),"1.0 world map");
+            g_worldMapLayoutSupported=g_clearMapMarkersHook!=nullptr;
+            g_deathMarkerLayoutSupported=g_deathMarkerLayoutSupported && g_worldMapLayoutSupported;
+        }
+        if (visibility) g_mapMarkerVisibilityHook=InstallMapMarkerVisibilityLoopHook(0x414a62,reinterpret_cast<void*>(&CaptureMapMarkerVisibilityRecordHook));
+        g_renderPresentFrameHook=InstallEntryHook(0xfd13d0,present,reinterpret_cast<void*>(&CaptureRenderPresentFrameHook),"1.0 render present");
+        g_vulkanDeviceTableInitHook=InstallEntryHook(0xfdd960,dispatch,reinterpret_cast<void*>(&CaptureVulkanDeviceTableInitHook),"1.0 Vulkan dispatch");
+        std::ostringstream message;
+        message<<"[ESM Minimap] client 25966634 | camera="<<g_directCameraTrackingSupported
+            <<" | markers="<<g_liveMarkerLayoutSupported<<" | clock="<<g_clockLayoutSupported
+            <<" | weather="<<g_weatherLayoutSupported<<" | fog="<<g_liveFogLayoutSupported
+            <<" | world="<<g_worldMapLayoutSupported<<" | deaths="<<g_deathMarkerLayoutSupported
+            <<" | visibility="<<(g_mapMarkerVisibilityHook!=nullptr)
+            <<" | render="<<(g_renderPresentFrameHook!=nullptr)<<" | dispatch="<<(g_vulkanDeviceTableInitHook!=nullptr);
+        context->Log(message.str().c_str());
+        return g_directCameraTrackingSupported && g_renderPresentFrameHook && g_vulkanDeviceTableInitHook;
+    }
+
     class MinimapMod : public Mod
     {
+        // Shroudtopia owns and overwrites Mod::loaded, even after a rejected Load.
+        bool profileReady = false;
     public:
         void Load(ModContext* modContext) override
         {
+            g_runtimeCallbacksActive.store(false);
+            profileReady = false;
             if (!modContext->game.isClient)
             {
                 modContext->Log("[Minimap] client-only mod; skipping load on server");
@@ -9459,6 +9747,19 @@ namespace
             g_exeBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
             g_exeImageSize = GetImageSize(g_exeBase);
 
+            wchar_t executable[32768] = {};
+            const DWORD pathLength=GetModuleFileNameW(nullptr,executable,32768);
+            g_client10=pathLength>0 && pathLength<32768 && MinimapClient10::MatchesFile(executable);
+            if (g_client10) {
+                loaded=profileReady=LoadVerifiedClient10(modContext);
+                if (!profileReady) Unload(modContext);
+                return;
+            }
+            if (!IsNamedSystemAt(0x1D43630,"player_camera_transform",0x2662A0) ||
+                !IsNamedSystemAt(0x1D4B0B0,"player_waypoints_ui",0x2A8370)) {
+                modContext->Log("[ESM Minimap] unsupported client; no hooks installed");
+                return;
+            }
             const bool namedClient = IsNamedSystemAt(0x1D43630, "player_camera_transform", 0x2662A0) &&
                 IsNamedSystemAt(0x1D4B0B0, "player_waypoints_ui", 0x2A8370);
             const uintptr_t uiRenderSetupRva = ResolvePatternRvaNear(
@@ -9652,10 +9953,14 @@ namespace
                 << " | vulkan_probe=" << (g_vulkanDeviceTableInitHook != nullptr ? "ready" : "missing");
             modContext->Log(oss.str().c_str());
             loaded = true;
+            profileReady = true;
         }
 
         void Unload(ModContext* modContext) override
         {
+            g_runtimeCallbacksActive.store(false);
+            std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
+            profileReady = false;
             g_liveFogLayoutSupported = false;
             DestroyCallSiteHook(g_fogUpdateHook);
             g_updateFog = nullptr;
@@ -9687,7 +9992,8 @@ namespace
                 std::lock_guard<std::mutex> lock(g_rendererMutex);
                 DestroyVulkanMinimapRendererLocked();
             }
-            RestoreVulkanTableHooks();
+            if (!RestoreVulkanTableHooks())
+                modContext->Log("[ESM Minimap] dispatch restoration incomplete; inactive forwarding retained until process exit");
 
             if (g_playerCameraTransformHook != nullptr)
             {
@@ -9781,13 +10087,15 @@ namespace
             g_lookupComponent = nullptr;
             ClearLiveMarkers();
             g_modContext = nullptr;
+            g_client10 = false;
             active = false;
             loaded = false;
-            modContext->Log("[Minimap] unloaded");
+            modContext->Log("[Minimap] inactive; callback code and originals remain available until process exit");
         }
 
         void Activate(ModContext* modContext) override
         {
+            if (!profileReady) { modContext->Log("[ESM Minimap] activation skipped: unsupported or incomplete client profile");return; }
             RefreshMinimapConfig(modContext, true);
             const bool cameraOk = ActivateHook(g_playerCameraTransformHook);
             ActivateHook(g_playerUiDataHook);
@@ -9802,7 +10110,10 @@ namespace
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
             const bool renderOk = ActivateHook(g_renderPresentFrameHook);
             const bool vulkanOk = ActivateHook(g_vulkanDeviceTableInitHook);
-            active = cameraOk || uiOk || waypointOk || markerVisibilityOk || renderOk || vulkanOk;
+            active = g_client10 ? (cameraOk && renderOk && vulkanOk) :
+                (cameraOk || uiOk || waypointOk || markerVisibilityOk || renderOk || vulkanOk);
+            if (g_client10 && !active) { Deactivate(modContext);return; }
+            g_runtimeCallbacksActive.store(active);
             // Let the normal init hook capture the table first. A late-loaded
             // mod can use the bounded fallback from Update after this grace period.
             g_vulkanScanAttempts = 0;
@@ -9828,6 +10139,8 @@ namespace
 
         void Deactivate(ModContext* modContext) override
         {
+            g_runtimeCallbacksActive.store(false);
+            std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
             g_toggleNotice.clear();
             if (g_fogUpdateHook != nullptr)
             {
@@ -9889,7 +10202,7 @@ namespace
 
         void Update(ModContext* modContext) override
         {
-            if (active)
+            if (profileReady && g_runtimeCallbacksActive.load() && active)
             {
                 UpdateMinimapRuntimeControls(modContext);
                 PollGameSessionLog();
