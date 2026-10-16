@@ -77,11 +77,11 @@ game launch. Changed configuration values apply live. F10 also shows a brief On/
 
 Download the latest zip from the release page:
 
-[Community Edition v0.5.7](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.7)
+[Minimap v0.5.7](https://github.com/Aerox912/Enshrouded-minimap/releases/tag/v0.5.7)
 
 Release asset:
 
-`enshrouded-minimap-community-v0.5.8.zip`
+`enshrouded-minimap-v0.5.8.zip`
 
 Requires Windows x64 Enshrouded,
 the [matching Shroudtopia 1.0 compatibility files](https://www.nexusmods.com/enshrouded/mods/143?tab=files), and the
@@ -92,7 +92,7 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Install Shroudtopia if needed and download `enshrouded-minimap-community-v0.5.8.zip`.
+2. Install Shroudtopia if needed and download `enshrouded-minimap-v0.5.8.zip`.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
 4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
 
