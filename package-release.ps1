@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $manifest = Get-Content -LiteralPath (Join-Path $root 'assets\mod.json') -Raw | ConvertFrom-Json
 $version = $manifest.version
-if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a numeric release version.' }
+if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Expected a semantic version, optionally with a prerelease suffix.' }
 $dll = Get-Item -LiteralPath $DllPath -ErrorAction Stop
 if ($dll.PSIsContainer -or $dll.Name -ne 'minimap_mod.dll') { throw 'Expected the built minimap_mod.dll.' }
 $commit = (& git -C $root rev-parse HEAD).Trim()
@@ -17,7 +17,7 @@ if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Commit tracked source changes befor
 
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $stage = Join-Path $output "stage-v$version"
-$zipPath = Join-Path $output "enshrouded-minimap-v$version.zip"
+$zipPath = Join-Path $output "Sparkweave-Minimap-$version.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zipPath)) {
   throw 'Release staging/output already exists. Use a new output directory.'
 }
@@ -31,6 +31,7 @@ foreach ($name in @('README.md', 'CREDITS.md', 'LICENSE')) {
   Copy-Item -LiteralPath (Join-Path $root $name) -Destination $stage
 }
 Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination $stage -Recurse
+Copy-Item -LiteralPath (Join-Path $root 'branding') -Destination $stage -Recurse
 New-Item -ItemType Directory -Path (Join-Path $stage 'tests') | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'tests\README.md') -Destination (Join-Path $stage 'tests\README.md')
 $buildInfo = [ordered]@{
@@ -38,8 +39,10 @@ $buildInfo = [ordered]@{
   repository = 'https://github.com/Aerox912/Enshrouded-minimap'
   commit = $commit
   platform = 'Windows x64'
-  testedSteamClientBuild = 25966634
-  testedClientSha256 = '4d6d43ea4a91e71c82d60b045dde932179c99e32e40657efe374688b2933589a'
+  testedSteamClientBuild = $null
+  testedClientSha256 = $null
+  liveGameAcceptance = 'not performed'
+  fpsClaim = 'none'
   dllSha256 = (Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash
 }
 $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'build-info.json') -Encoding utf8

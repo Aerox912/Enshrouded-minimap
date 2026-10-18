@@ -1,0 +1,10 @@
+{
+  "source": "Nick supplied embervale-realmap.png",
+  "author": "Nick (map owner; inclusion confirmed by Nick on 2026-10-18)",
+  "license": "Copyright Nick. Owner-authorized for inclusion in Aerox912/Enshrouded-minimap. Not covered by the repository MIT license; all other rights reserved.",
+  "source_sha256": "01e0d0e4b0a8814981e494117ab2c922a5c4b9938851cb51dccfe64ac7fa4d11",
+  "converted_sha256": "0eee1318166a336c30ff83d6a0d572640db58cd4ab41f9fb11875a6321df80be",
+  "conversion": "RGBA, 2048x2048 Lanczos, no crop/warp/recolour",
+  "world_bounds": "Existing 0..10240 north-up mapping retained; isolated-landmark comparisons support gross alignment, live alignment still unverified",
+  "styles": "Default: supplied HD map. Original: retained released map. Legacy bright settings select Default."
+}

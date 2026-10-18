@@ -144,3 +144,37 @@ region while searching for space. Native tests intermittently faulted in ntdll,
 sometimes during process exit. It now reserves only free addresses within rel32
 reach without changing occupied regions. Thirty consecutive native test runs
 passed after the fix; twelve sanitizer runs had also passed during diagnosis.
+
+## 0.5.11-local-r2 menu callsite ownership regression
+
+`control_test.cpp` exercises the production `ActivateMenuCallsiteOnce` and
+`ActivateMenuDetourWithCompareExchange` with a real `Mem::Detour`/`Mem::Patch`
+on isolated synthetic buffers. It verifies pre-activation rejection, then
+injects a completed foreign call after relay preparation and immediately before
+the aligned eight-byte compare/exchange; the foreign bytes remain unchanged
+and the hook stays inactive. A valid synthetic install preserves the three
+neighboring bytes in that aligned word. Later foreign replacement or altered
+relay bytes fail ownership without another patch write. The test also invokes
+the retained wrapper directly to verify one original-renderer forward for a
+late call. It never executes the synthetic call instruction or reads/writes
+the game process. The compare/exchange closes the completed-write gap tested
+here; it does not establish thread rendezvous or live instruction-fetch
+quiescence. First-install behavior in a running game remains unverified.
+
+The post-CAS finalization regression forces instruction-cache finalization to
+report failure after publishing the real synthetic relay and restoring page
+protection. The retained callsite remains owned for forwarding, but repeated
+activation stays capture-disabled because publication readiness was never
+recorded. The normal successful path and foreign-write rejection run beside it.
+
+## 0.5.11-local-r3 north-up default
+
+`map_features_test.cpp` exercises the production config refresh and orientation
+parser. It checks the initial north-up state, the missing-key fallback, explicit
+`rotating`, and north-up fallback for empty and unrecognized values. Existing
+projection and arrow tests continue to cover both orientation modes.
+## 0.5.12-local-r1 all-size GPU candidate
+
+The sealed local gate on 2026-10-18 built the runtime DLL and all 11 native test projects. All 11 test executables exited 0 with 2,777 PASS markers, no FAIL markers and empty stderr logs. Independent offline Vulkan acceptance covered full-frame rendering at all seven widget sizes, sample steps 1–4, north-up and rotating orientations, SDR/scRGB/PQ formats, production widget cases, CPU fallback comparisons, fog initialization/update/reset/stale-session paths, and literal Minimap r3 compatibility checks. The exact source manifest and build receipts are linked in the repository's candidate evidence record.
+
+These are offline checks. They do not confirm live-game behavior, physical HDR display output, long-session stability or FPS improvement. The GPU performance verifier was not included in the accepted build receipt.

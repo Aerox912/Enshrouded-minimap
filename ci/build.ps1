@@ -4,7 +4,8 @@ Set-Location $root
 $common=@('/p:Configuration=Release','/p:Platform=x64','/p:PlatformToolset=v143','/m','/nologo')
 & MSBuild ./minimap_mod.vcxproj @common
 if($LASTEXITCODE) { throw 'Minimap build failed' }
-foreach($name in @('tracking','renderer','markers','map_features')) {
+# Fixture-free suites run in public CI; fixture-backed client/profile checks stay in the sealed local gate.
+foreach($name in @('control','frame_failure','hdr','map_features','markers','renderer','terrain','tracking')) {
   & MSBuild "tests/$($name)_test.vcxproj" @common
   if($LASTEXITCODE) { throw "Test build failed: $name" }
   $test=Get-ChildItem ./build -Recurse -Filter "$($name)_test.exe" | Select-Object -First 1
