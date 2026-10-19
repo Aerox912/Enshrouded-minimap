@@ -1,6 +1,15 @@
 // Exercise the production submission path with delayed GPU completion.
+#include <Windows.h>
+static bool forceGameplayCursor = false;
+static BOOL WINAPI RendererTestGetCursorInfo(PCURSORINFO info) {
+    if (!forceGameplayCursor) return GetCursorInfo(info);
+    info->flags=0; return TRUE;
+}
+#define GetCursorInfo RendererTestGetCursorInfo
 #include "../src/dllmain.cpp"
+#undef GetCursorInfo
 #include <iostream>
+#include <future>
 
 namespace
 {
@@ -18,6 +27,15 @@ namespace
     const void* gameSemaphore = reinterpret_cast<void*>(0x500);
     VkPresentInfoKHR present{}, adjusted{};
     const void* adjustedSemaphore = nullptr;
+    std::promise<void>* sessionBoundaryEntered = nullptr;
+    std::shared_future<void>* sessionBoundaryResume = nullptr;
+    QueueSubmitFn sessionOriginalSubmit = nullptr;
+    int sessionBoundaryStage = 0;
+
+    void PauseSessionBoundary() {
+        sessionBoundaryEntered->set_value();
+        sessionBoundaryResume->wait();
+    }
 
     void Check(bool ok, const char* description)
     {
@@ -103,6 +121,45 @@ namespace
     bool Submit(std::uint32_t index = 0)
     {
         return SubmitVulkanMinimapFrameLocked(reinterpret_cast<void*>(0x2), present, index, adjusted, &adjustedSemaphore);
+    }
+
+    void CheckSessionSubmissionBoundary()
+    {
+        bool coherent = true;
+        for (int stage=0; stage<2; ++stage) {
+            Setup(); forceGameplayCursor=true; g_runtimeCallbacksActive=true; g_minimapVisible=true;
+            g_playerCameraAddress=0; g_playerPosition.valid=true; g_playerPosition.lastUpdateTick=GetTickCount();
+            g_renderer.swapchain=0x900;g_renderer.swapchainGeneration=1;
+            g_renderer.width=800;g_renderer.height=600;g_renderer.format=37;
+            SwapchainRuntimeInfo swapchain{};swapchain.handle=0x900;swapchain.device=g_renderer.device;
+            swapchain.width=800;swapchain.height=600;swapchain.format=37;swapchain.generation=1;
+            g_swapchains={swapchain};
+            std::promise<void> entered,resume;
+            auto resumed=resume.get_future().share();
+            sessionBoundaryEntered=&entered;sessionBoundaryResume=&resumed;sessionBoundaryStage=stage;
+            g_renderer.fns.beginCommandBuffer=[](void*,const VkCommandBufferBeginInfo*)->std::int32_t {
+                g_minimapVisible=false; // Keep this test focused on the real submission boundary.
+                if(sessionBoundaryStage==0) PauseSessionBoundary();
+                return VK_SUCCESS;
+            };
+            sessionOriginalSubmit=g_renderer.fns.queueSubmit;
+            g_renderer.fns.queueSubmit=[](void* queue,std::uint32_t count,const VkSubmitInfo* info,void* fence)->std::int32_t {
+                if(sessionBoundaryStage==1) PauseSessionBoundary();
+                return sessionOriginalSubmit(queue,count,info,fence);
+            };
+            const auto generation=g_worldSessionGeneration.load();
+            auto frame=std::async(std::launch::async,[]{return TrySubmitVulkanMinimap(reinterpret_cast<void*>(2),present,0x900,0,adjusted,&adjustedSemaphore);});
+            entered.get_future().wait();
+            auto reset=std::async(std::launch::async,[]{ResetWorldSessionFromLog();});
+            const bool blocked=reset.wait_for(std::chrono::milliseconds(100))==std::future_status::timeout;
+            coherent &= blocked && g_worldSessionGeneration.load()==generation;
+            resume.set_value();
+            Check(frame.get(),"session boundary fixture completes queue submission");
+            reset.get();
+            Check(g_worldSessionGeneration.load()==generation+1,"session reset proceeds after frame commit returns");
+        }
+        forceGameplayCursor=false;g_runtimeCallbacksActive=false;
+        Check(coherent,"session generation cannot change during frame preparation or queue submission");
     }
 
     void CheckVulkanFallbackScan()
@@ -260,5 +317,6 @@ int main()
     DestroyVulkanMinimapRendererLocked();
     Check(gpu.destroyedFences == 1 && !gpu.destroyedBeforeIdle && !g_renderer.submissionFailed,
         "partial fence allocation cleans up valid handles and clears failure state");
+    CheckSessionSubmissionBoundary();
     return 0;
 }

@@ -9,71 +9,91 @@ namespace
         if (!ok) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
         std::cout << "PASS: " << message << '\n';
     }
+    void CheckMapOrientationConfig()
+    {
+        static bool requested = false;
+        static bool present = true;
+        static std::string fallbackSeen;
+        static std::string selected = "north-up";
+        ModContext config{};
+        config.config.GetString = [](const char*, const char* key, std::string fallback) {
+            if (std::strcmp(key, "map_orientation") == 0) {
+                requested = true;
+                fallbackSeen = fallback;
+                return present ? selected : fallback;
+            }
+            return fallback;
+        };
+        RefreshMinimapConfig(&config, true);
+        Check(requested && fallbackSeen == "north-up", "map orientation config is read with a north-up default");
+        Check(g_minimapOrientation == MinimapOrientation::NorthUp, "north-up config selects north-up orientation");
+        selected = "rotating";
+        RefreshMinimapConfig(&config, true);
+        Check(g_minimapOrientation == MinimapOrientation::Rotating, "explicit rotating config remains selectable");
+        selected = "";
+        RefreshMinimapConfig(&config, true);
+        Check(g_minimapOrientation == MinimapOrientation::NorthUp, "empty map orientation falls back to north-up");
+        selected = "unknown";
+        RefreshMinimapConfig(&config, true);
+        Check(g_minimapOrientation == MinimapOrientation::NorthUp, "unknown map orientation falls back to north-up");
+        present = false;
+        RefreshMinimapConfig(&config, true);
+        Check(requested && fallbackSeen == "north-up", "missing map orientation uses the north-up config fallback");
+        Check(g_minimapOrientation == MinimapOrientation::NorthUp, "missing map orientation selects north-up");
+    }
+    void CheckMapOrientationProjection()
+    {
+        int x = 0, y = 0;
+        bool clipped = false;
+        constexpr float eastHeading = 1.5707963f;
+        const auto northUp = ResolveMinimapOrientationAngles(MinimapOrientation::NorthUp, eastHeading, true);
+        Check(std::fabs(northUp.mapHeading) < 0.0001f && std::fabs(northUp.playerArrowHeading - eastHeading) < 0.0001f,
+            "north-up holds terrain north and rotates the local arrow with player heading");
+        ProjectWorldToMinimap(100, 110, 100, 100, 1, northUp.mapHeading, 160, 160, 130, x, y, clipped);
+        Check(!clipped && x == 160 && y == 150, "north-up keeps a northward marker above the player");
+        const auto rotating = ResolveMinimapOrientationAngles(MinimapOrientation::Rotating, eastHeading, true);
+        Check(std::fabs(rotating.mapHeading - eastHeading) < 0.0001f && std::fabs(rotating.playerArrowHeading) < 0.0001f,
+            "rotating keeps terrain and player arrow aligned to the existing view-up behavior");
+        ProjectWorldToMinimap(100, 110, 100, 100, 1, rotating.mapHeading, 160, 160, 130, x, y, clipped);
+        Check(!clipped && x == 150 && y == 160, "rotating keeps the player's heading at the top");
+
+        float sourceX = 0.0f, sourceY = 0.0f;
+        RotateArrowSample(10.0f, 0.0f, northUp.playerArrowHeading, sourceX, sourceY);
+        Check(std::fabs(sourceX) < 0.0001f && std::fabs(sourceY + 10.0f) < 0.0001f,
+            "north-up arrow rotation maps its up-pointing source to the player's eastward heading");
+    }
     template<class T> void Put(void* data, std::size_t offset, T value)
     { std::memcpy(static_cast<std::uint8_t*>(data) + offset, &value, sizeof(value)); }
     void CheckMapAppearance()
     {
-        std::vector<std::uint8_t> source(64 * 64 * 4), palette(32 * 32 * 3), bright;
-        for (std::size_t i=0;i<palette.size();i+=3) { palette[i]=70; palette[i+1]=150; palette[i+2]=35; }
-        for (std::size_t i=0;i<source.size();i+=4) {
-            const auto value=static_cast<std::uint8_t>((i/4)%256);
-            source[i]=source[i+1]=source[i+2]=value; source[i+3]=static_cast<std::uint8_t>((i/4)%251);
-        }
-        const auto unchanged=source;
-        Check(minimap::BuildBrightMapPixels(source,64,palette,bright), "bright appearance builds from original map pixels");
-        Check(source==unchanged && bright.size()==source.size(), "bright appearance keeps the source and pixel grid unchanged");
-        bool alpha=true, tone=true, bounded=true;
-        for(std::size_t i=0;i<source.size();i+=4) {
-            alpha &= bright[i+3]==source[i+3];
-            const float y=(0.2126f*bright[i]+0.7152f*bright[i+1]+0.0722f*bright[i+2])/255.0f;
-            tone &= std::fabs(y-std::pow(source[i]/255.0f,0.78f))<0.005f;
-            if(source[i]>0 && source[i]<255) bounded &= y>0 && y<1;
-        }
-        Check(alpha && tone && bounded, "bright colors preserve alpha and tone-map original brightness without terrain masks");
-        std::vector<std::uint8_t> sameTone(4*4*4,100), field(32*32*3), colored;
-        for(int y=0;y<32;++y) for(int x=0;x<32;++x) {
-            const auto i=(y*32+x)*3; field[i]=x<16?180:30; field[i+1]=30; field[i+2]=x<16?30:180;
-        }
-        Check(minimap::BuildBrightMapPixels(sameTone,4,field,colored) && colored[0]>colored[2] && colored[12]<colored[14],
-            "reference colors keep east/west orientation without moving terrain pixels");
-        palette.pop_back();
-        Check(!minimap::BuildBrightMapPixels(source,64,palette,bright) && bright.empty(), "truncated color palette is rejected");
-        palette.push_back(35); source.pop_back();
-        Check(!minimap::BuildBrightMapPixels(source,64,palette,bright), "malformed original map is rejected");
         RefreshMinimapConfig(nullptr);
-        Check(g_brightMapStyle, "Bright appearance is the default");
+        Check(g_defaultMapStyle, "HD Default is selected when unset");
         ModContext config{};
-        config.config.GetString=[](const char*,const char* key,std::string fallback) {
-            return !std::strcmp(key,"map_style") ? std::string(" BRIGHT ") : fallback;
-        };
-        RefreshMinimapConfig(&config);
-        Check(g_brightMapStyle, "Bright appearance can be selected through live settings");
-        g_realMap={}; g_realMap.loaded=g_realMap.attempted=true; g_realMap.width=g_realMap.height=2; g_realMap.rgba.assign(16,80);
-        g_brightMap={};
-        float r=0,g=0,b=0; SampleRealMapColor(0,10240,r,g,b);
-        Check(std::fabs(r-80.0f/255)<0.001f, "missing Bright colors fall back to Original");
-        g_brightMap=g_realMap; g_brightMap.rgba.assign(16,160);
-        SampleRealMapColor(0,10240,r,g,b);
-        Check(std::fabs(r-160.0f/255)<0.001f && g_realMap.rgba[0]==80, "Bright samples its color cache without overwriting Original");
-        config.config.GetString=[](const char*,const char* key,std::string fallback) {
-            return !std::strcmp(key,"map_style") ? std::string("unknown") : fallback;
-        };
-        RefreshMinimapConfig(&config); SampleRealMapColor(0,10240,r,g,b);
-        Check(!g_brightMapStyle && std::fabs(r-80.0f/255)<0.001f, "invalid appearance safely restores Original live");
-        RealMapTexture asset{}, assetBright{};
-        Check(TryLoadRealMapFromPath("assets/embervale_realmap_1280.rgba",asset) && TryBuildBrightMap(asset,assetBright),
-            "shipped palette builds the real map color cache at the source resolution");
-        const auto saved=asset.rgba;
-        const auto failAllocation=[](const std::vector<std::uint8_t>&,int,const std::vector<std::uint8_t>&,std::vector<std::uint8_t>&)->bool {
-            throw std::bad_alloc();
-        };
-        Check(!TryBuildBrightMap(asset,assetBright,failAllocation) && !assetBright.loaded && asset.rgba==saved,
-            "optional Bright allocation failure preserves usable Original map");
-        asset.path="missing-map-appearance-test/original.rgba";
-        Check(!TryBuildBrightMap(asset,assetBright) && !assetBright.loaded && asset.rgba==saved,
-            "missing palette clears the derived cache and preserves the original asset");
-        g_realMap={}; g_brightMap={}; RefreshMinimapConfig(nullptr);
+        for (const auto style : {"default", " BRIGHT ", "unknown", "original"}) {
+            static std::string selected;
+            selected = style;
+            config.config.GetString=[](const char*,const char* key,std::string fallback) {
+                return !std::strcmp(key,"map_style") ? selected : fallback;
+            };
+            RefreshMinimapConfig(&config);
+            Check(g_defaultMapStyle == (selected != "original"), "Default, legacy Bright and Original settings");
+        }
+        RealMapTexture original{}, hd{};
+        Check(TryLoadRealMapFromPath("assets/embervale_realmap_1280.rgba",original) &&
+            TryLoadDefaultMap(original,hd) && hd.width==2048, "HD replacement loads independently of original resolution");
+        g_realMap=original; g_defaultMap=hd; g_defaultMapStyle=true;
+        Check(&ActiveRealMapLocked()==&g_defaultMap, "Default selects HD texture");
+        g_defaultMapStyle=false;
+        Check(&ActiveRealMapLocked()==&g_realMap, "Original selects original texture");
+        g_defaultMapStyle=true; g_defaultMap.rgba.pop_back();
+        Check(&ActiveRealMapLocked()==&g_realMap, "Malformed HD texture falls back to Original");
+        original.path="missing-map-test/original.rgba";
+        Check(!TryLoadDefaultMap(original,hd) && !hd.loaded, "Missing HD asset clears cache");
+        g_defaultMap={};
+        Check(&ActiveRealMapLocked()==&g_realMap, "Missing HD map keeps Original usable");
+        g_realMap={}; g_defaultMap={}; RefreshMinimapConfig(nullptr);
     }
+
     std::int64_t Fixed(int value) { return static_cast<std::int64_t>(value) * 4294967296LL; }
     std::vector<std::uint8_t> state(DEATH_MAP_ARRAY_OFFSET + 32);
     std::array<std::uint8_t, WORLD_MAP_MARKER_STRIDE * 5> world{};
@@ -84,6 +104,59 @@ namespace
         Put(data, offset + 0x10, Fixed(x)); Put(data, offset + 0x18, Fixed(200));
         Put(data, offset + 0x20, Fixed(z)); Put(data, offset + 0x30, key);
     }
+    void CheckClient10DeathCategory()
+    {
+        const auto wasClient10 = g_client10;
+        const auto wasDeathSupported = g_deathMarkerLayoutSupported.load();
+        const auto wasWorldSupported = g_worldMapLayoutSupported.load();
+        const auto wasShown = g_showDeathMarkers.load();
+        std::vector<std::uint8_t> ui(0x3E6A90);
+        std::array<std::uint8_t, 0xA0> alternate{};
+        std::array<std::uint8_t, 0xA0 * 2> tombstones{};
+        const auto entry = [](void* data, std::size_t offset, int x, int z, std::uint32_t key) {
+            Put(data, offset + 0x10, Fixed(x)); Put(data, offset + 0x18, Fixed(200));
+            Put(data, offset + 0x20, Fixed(z)); Put(data, offset + 0x30, key);
+        };
+        entry(alternate.data(), 0, 2769, 1425, 0x4ECE72CC);
+        entry(tombstones.data(), 0, 1020, 1000, 0x1AD8F96E);
+        entry(tombstones.data(), 0xA0, 1000, 1040, 0x1AD8F96E);
+        // Literal native categories keep this fixture independent of the reader's selected offset.
+        Put(ui.data(), 0x3BEA50, reinterpret_cast<uintptr_t>(alternate.data()));
+        Put(ui.data(), 0x3BEA58, std::uint64_t{1});
+        Put(ui.data(), 0x3E6A78, reinterpret_cast<uintptr_t>(tombstones.data()));
+        Put(ui.data(), 0x3E6A80, std::uint64_t{2});
+        g_client10 = true; g_worldMapLayoutSupported = true;
+        g_deathMarkerLayoutSupported = true; g_showDeathMarkers = true;
+        const auto stateAddress = reinterpret_cast<uintptr_t>(ui.data());
+        constexpr DWORD now = 100;
+        CaptureWorldMapMarkers(stateAddress, now);
+        auto deaths = CopyDeathMarkers(now);
+        Check(g_worldMapValid && deaths.size() == 2 && deaths[0].key == 0x1AD8F96E &&
+            deaths[0].x == Fixed(1020) && deaths[1].z == Fixed(1040),
+            "client 1.0 copies native tombstone category with A0 stride and excludes alternate-list decoy");
+        Check(CopyDeathMarkers(now + 2001).empty(), "client 1.0 tombstones expire without a completed snapshot");
+        Put(ui.data(), 0x3E6A80, std::uint64_t{0});
+        CaptureWorldMapMarkers(stateAddress, now);
+        Check(CopyDeathMarkers(now).empty() && g_worldMapValid,
+            "empty native tombstone list removes deaths even when alternate-category markers remain");
+        Put(ui.data(), 0x3E6A80, std::uint64_t{1025});
+        CaptureWorldMapMarkers(stateAddress, now);
+        Check(CopyDeathMarkers(now).empty() && g_worldMapValid,
+            "oversized native tombstone list clears deaths without invalidating POIs");
+        Put(ui.data(), 0x3E6A80, std::uint64_t{2});
+        Put(ui.data(), 0x3E6A78, uintptr_t{1});
+        CaptureWorldMapMarkers(stateAddress, now);
+        Check(CopyDeathMarkers(now).empty() && g_worldMapValid,
+            "unreadable native tombstone list clears deaths independently of POIs");
+        Put(ui.data(), 0x3E6A78, reinterpret_cast<uintptr_t>(tombstones.data()));
+        g_deathMarkerLayoutSupported = false;
+        CaptureWorldMapMarkers(stateAddress, now);
+        Check(CopyDeathMarkers(now).empty() && g_worldMapValid,
+            "unsupported native death semantics cannot publish a tombstone snapshot");
+        ClearLiveMarkers();
+        g_client10 = wasClient10; g_deathMarkerLayoutSupported = wasDeathSupported;
+        g_worldMapLayoutSupported = wasWorldSupported; g_showDeathMarkers = wasShown;
+    }
     void __fastcall InitMap(void* ctx, void* record, std::uint32_t size)
     {
         if (size != 16) std::exit(2);
@@ -91,6 +164,7 @@ namespace
         static_cast<uintptr_t*>(record)[1] = reinterpret_cast<uintptr_t>(state.data());
     }
     struct Pixel { float r = 0, g = 0, b = 0; } pixels[320][512];
+    bool paintedPixels[320][512]{};
     int clears = 0;
     void CheckToggleNotices()
     {
@@ -117,7 +191,78 @@ namespace
                     int x = rects[i].rect.offset.x + dx, y = rects[i].rect.offset.y + dy;
                     if (x < 0 || x >= 512 || y < 0 || y >= 320) std::exit(3);
                     pixels[y][x] = { a->clearValue.color.float32[0], a->clearValue.color.float32[1], a->clearValue.color.float32[2] };
+                    paintedPixels[y][x] = true;
                 }
+    }
+    bool SamePixel(const Pixel& left, const Pixel& right)
+    {
+        return std::fabs(left.r - right.r) < 0.0001f &&
+            std::fabs(left.g - right.g) < 0.0001f &&
+            std::fabs(left.b - right.b) < 0.0001f;
+    }
+    void CheckPlayerArrowOrientationRaster()
+    {
+        VulkanMinimapRenderer renderer{};
+        renderer.width = 512;
+        renderer.height = 320;
+        renderer.fns.cmdClearAttachments = Raster;
+        constexpr int cx = 256, cy = 160, radius = 104;
+        constexpr float eastHeading = 1.57079632679f;
+        const Pixel gold{0.98f, 0.88f, 0.62f};
+
+        std::memset(pixels, 0, sizeof(pixels));
+        std::memset(paintedPixels, 0, sizeof(paintedPixels));
+        CmdClearPlayerArrow(renderer, nullptr, cx, cy, radius, 0.0f);
+        const Pixel rotatingNorthTip = pixels[cy - 14][cx];
+        const Pixel rotatingEastTip = pixels[cy][cx + 14];
+        Check(SamePixel(rotatingNorthTip, gold) && !SamePixel(rotatingEastTip, gold),
+            "fallback player arrow points up in rotating mode");
+
+        std::memset(pixels, 0, sizeof(pixels));
+        std::memset(paintedPixels, 0, sizeof(paintedPixels));
+        CmdClearPlayerArrow(renderer, nullptr, cx, cy, radius, eastHeading);
+        Check(SamePixel(pixels[cy][cx + 14], gold) && !SamePixel(pixels[cy - 14][cx], gold),
+            "fallback player arrow follows heading in north-up mode");
+
+        RealMapTexture arrow{};
+        Check(TryLoadPlayerArrowFromPath("assets/embervale_player_arrow.rgba", arrow),
+            "premium player arrow test loads its packaged source asset");
+        RealMapTexture savedArrow{};
+        {
+            std::lock_guard<std::mutex> lock(g_playerArrowMutex);
+            savedArrow = g_playerArrow;
+            g_playerArrow = arrow;
+            g_playerArrow.attempted = true;
+        }
+        std::memset(pixels, 0, sizeof(pixels));
+        std::memset(paintedPixels, 0, sizeof(paintedPixels));
+        Check(TryDrawPremiumPlayerArrow(renderer, nullptr, cx, cy, radius, 0.0f),
+            "premium arrow path renders the rotating view");
+        std::vector<Pixel> rotatingPixels;
+        const int size = ClampValue(radius / 4, 26, 34);
+        const int left = cx - size / 2, top = cy - size / 2;
+        rotatingPixels.reserve(static_cast<std::size_t>(size) * size);
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+                rotatingPixels.push_back(paintedPixels[top + y][left + x] ? Pixel{1.0f, 1.0f, 1.0f} : Pixel{});
+
+        std::memset(pixels, 0, sizeof(pixels));
+        std::memset(paintedPixels, 0, sizeof(paintedPixels));
+        Check(TryDrawPremiumPlayerArrow(renderer, nullptr, cx, cy, radius, eastHeading),
+            "premium arrow path renders the north-up view");
+        bool quarterTurnMatches = true;
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+            {
+                const Pixel& source = rotatingPixels[static_cast<std::size_t>(y) * size + x];
+                const Pixel rotated = paintedPixels[top + x][left + (size - 1 - y)] ? Pixel{1.0f, 1.0f, 1.0f} : Pixel{};
+                quarterTurnMatches &= SamePixel(source, rotated);
+            }
+        Check(quarterTurnMatches, "premium player arrow raster rotates with the player heading");
+        {
+            std::lock_guard<std::mutex> lock(g_playerArrowMutex);
+            g_playerArrow = std::move(savedArrow);
+        }
     }
     void WritePreview(const char* path)
     {
@@ -238,7 +383,8 @@ namespace
         g_showWorldMarkers = false; g_minimapMaxDrawnPoints = 8;
         std::memset(pixels, 0, sizeof(pixels)); clears = 0;
         DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
-        Check(clears == 4 && pixels[155][210].r > 0.9f, "death layer renders skulls independently of POI visibility, limits and deduplication");
+        Check(clears == 4 && SamePixel(pixels[155][210], Pixel{1.0f, 0.20f, 0.16f}),
+            "death fallback skull uses pin red without changing draw batches");
         Check(pixels[159][207].r < 0.1f, "skull fallback keeps dark eye sockets");
         g_showDeathMarkers = false; clears = 0;
         DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
@@ -286,6 +432,90 @@ namespace
         Put(state.data(), DEATH_MAP_ARRAY_OFFSET + 8, std::uint64_t{0});
         ClearLiveMarkers();
         g_deathMarkerLayoutSupported = true;
+    }
+
+    void CheckDeathAtlasRedTint(VulkanMinimapRenderer& renderer)
+    {
+        const auto savedAtlas = g_minimapIcons;
+        const bool savedStyle = g_worldMapIconStyle.load();
+        MinimapIcon skull{};
+        skull.key = 0xC0FFEEu;
+        skull.width = skull.height = 5;
+        skull.rgba.assign(5 * 5 * 4, 0);
+        skull.glyph.assign(5 * 5, 0);
+        for (int i = 0; i < 25; ++i)
+        {
+            skull.rgba[i * 4 + 0] = 10;
+            skull.rgba[i * 4 + 1] = 10;
+            skull.rgba[i * 4 + 2] = 10;
+            skull.rgba[i * 4 + 3] = 255;
+        }
+        const int foreground = 12;
+        skull.rgba[foreground * 4 + 0] = 240;
+        skull.rgba[foreground * 4 + 1] = 240;
+        skull.rgba[foreground * 4 + 2] = 240;
+        skull.glyph[foreground] = 1;
+
+        g_minimapIcons = {};
+        g_minimapIcons.attempted = true;
+        g_minimapIcons.loaded = true;
+        g_minimapIcons.icons.push_back(skull);
+        g_worldMapIconStyle = false;
+        constexpr int cx = 256, cy = 160, radius = 40;
+        std::array<Pixel, 25> ordinaryPixels{};
+        std::array<bool, 25> ordinaryCoverage{};
+        std::memset(pixels, 0, sizeof(pixels));
+        std::memset(paintedPixels, 0, sizeof(paintedPixels));
+        Check(TryDrawMinimapRasterIcon(renderer, nullptr, cx, cy, radius, cx, cy, skull.key, false),
+            "ordinary atlas icon fixture reaches the production raster path");
+        for (int i = 0; i < 25; ++i)
+        {
+            const int x = cx - 2 + i % 5;
+            const int y = cy - 2 + i / 5;
+            ordinaryPixels[i] = pixels[y][x];
+            ordinaryCoverage[i] = paintedPixels[y][x];
+        }
+        Check(SamePixel(ordinaryPixels[foreground], Pixel{240.0f / 255.0f, 240.0f / 255.0f, 240.0f / 255.0f}),
+            "ordinary atlas icon keeps its source foreground color");
+
+        std::memset(pixels, 0, sizeof(pixels));
+        std::memset(paintedPixels, 0, sizeof(paintedPixels));
+        DrawDeathMarker(renderer, nullptr, cx, cy, radius, cx, cy, skull.key);
+        bool coveragePreserved = true;
+        bool outlinePreserved = true;
+        for (int i = 0; i < 25; ++i)
+        {
+            const int x = cx - 2 + i % 5;
+            const int y = cy - 2 + i / 5;
+            coveragePreserved &= paintedPixels[y][x] == ordinaryCoverage[i];
+            if (i != foreground)
+                outlinePreserved &= SamePixel(pixels[y][x], ordinaryPixels[i]);
+        }
+        Check(coveragePreserved, "death atlas tint preserves the original alpha coverage and footprint");
+        Check(SamePixel(pixels[cy][cx], Pixel{1.0f, 0.20f, 0.16f}),
+            "death atlas foreground uses the existing custom-pin red");
+        Check(outlinePreserved && SamePixel(pixels[cy][cx - 1], ordinaryPixels[11]),
+            "death atlas tint preserves the original dark outline pixels");
+        g_worldMapIconStyle = savedStyle;
+        g_minimapIcons = savedAtlas;
+    }
+
+    void CheckDeathFallbackRed(VulkanMinimapRenderer& renderer)
+    {
+        const auto savedAtlas = g_minimapIcons;
+        g_minimapIcons = {};
+        g_minimapIcons.attempted = true;
+        g_minimapIcons.loaded = true;
+        constexpr int cx = 256, cy = 160, radius = 40;
+        std::memset(pixels, 0, sizeof(pixels));
+        std::memset(paintedPixels, 0, sizeof(paintedPixels));
+        clears = 0;
+        DrawDeathMarker(renderer, nullptr, cx, cy, radius, cx, cy, 0x1AD8F96E);
+        Check(SamePixel(pixels[cy - 2][cx], Pixel{1.0f, 0.20f, 0.16f}),
+            "fallback skull foreground uses the existing custom-pin red");
+        Check(pixels[cy - 6][cx - 4].r < 0.1f, "fallback skull preserves its dark outline");
+        Check(clears == 2, "fallback skull retains its two clear batches");
+        g_minimapIcons = savedAtlas;
     }
 
     std::array<std::uint8_t, 0x70> daytimeState{};
@@ -661,6 +891,13 @@ namespace
         Check(pixels[160][226].r>0.5f,"fog-off draw reveals the original terrain");
         g_showFogOfWar=true; g_liveFog.reset(); DrawRealMap(renderer,nullptr,256,160,60,256,256,1,0);
         Check(pixels[160][226].r<0.35f && pixels[160][286].r<0.35f,"missing snapshot masks terrain instead of revealing the world");
+        drawFog->tick=GetTickCount()-2001;
+        DrawRealMap(renderer,nullptr,256,160,60,256,256,1,0,{true,drawFog});
+        Check(pixels[160][286].r<0.35f,"CPU fallback rejects a snapshot that expires after frame capture");
+        drawFog->tick=GetTickCount();++g_worldSessionGeneration;
+        std::vector<MinimapWorldPoint> expiredPoints={{400,252,31}};
+        FilterFoggedWorldPoints(expiredPoints,{true,drawFog});
+        Check(expiredPoints.empty(),"icons reject exploration from a session that ended after frame capture");
         float r=.9f,g=.8f,b=.7f; ApplyExplorationFog(r,g,b,1);
         Check(std::fabs(r-.9f)<0.00001f && std::fabs(g-.8f)<0.00001f,"fully explored terrain keeps its original colour");
         ApplyExplorationFog(r,g,b,0);
@@ -722,7 +959,7 @@ namespace
         g_worldMapMarkers={{Fixed(100),0,Fixed(200),0,true},
             {Fixed(100),0,Fixed(200),MAP_MARKER_QUEST_IMPORTANT_KIND,false},
             {Fixed(130),0,Fixed(200),MAP_MARKER_QUEST_KIND,false}};
-        points.clear(); BuildWorldPoints(points,{}, {}, {}); FilterFoggedWorldPoints(points,{true,nullptr});
+        points.clear(); BuildWorldPoints(renderer,points,{}, {}, {}); FilterFoggedWorldPoints(points,{true,nullptr});
         Check(points.size()==2 && points[0].kind==MAP_MARKER_QUEST_IMPORTANT_KIND && points[1].kind==MAP_MARKER_QUEST_KIND,
             "both native quest markers survive fog and a coincident custom pin");
         std::memset(pixels,0,sizeof(pixels)); clears=0;
@@ -785,10 +1022,10 @@ namespace
         g_worldMapLayoutSupported=g_showWorldMarkers=true; g_worldMapValid=true; g_worldMapTick=GetTickCount();
         g_worldMapMarkers={{Fixed(250),0,Fixed(250),0,true},
             {Fixed(250),0,Fixed(250),WORLD_MAP_FLAME_ALTAR,false}};
-        points.clear(); BuildWorldPoints(points,{}, {}, {});
+        points.clear(); BuildWorldPoints(renderer,points,{}, {}, {});
         Check(points.size()==1 && points[0].kind==31 && points[0].customPin,"completed native map lists produce a pinned altar icon");
         g_worldMapMarkers.erase(g_worldMapMarkers.begin());
-        points.clear(); BuildWorldPoints(points,{}, {}, {});
+        points.clear(); BuildWorldPoints(renderer,points,{}, {}, {});
         Check(points.size()==1 && points[0].kind==31 && !points[0].customPin,
             "removing a custom pin clears its outline while preserving the original location");
         FilterFoggedWorldPoints(points,{true,nullptr});
@@ -797,7 +1034,7 @@ namespace
         g_worldMapMarkers={{Fixed(250),0,Fixed(250),WORLD_MAP_FLAME_ALTAR,false},
             {Fixed(300),0,Fixed(250),0xABCDEF01u,false},
             {Fixed(350),0,Fixed(250),0,false}};
-        points.clear(); BuildWorldPoints(points,{}, {}, {}); FilterFoggedWorldPoints(points,{true,nullptr});
+        points.clear(); BuildWorldPoints(renderer,points,{}, {}, {}); FilterFoggedWorldPoints(points,{true,nullptr});
         Check(points.size()==1 && points[0].kind==31 && points[0].navigation,
             "only the placed altar bypasses fog while original world locations and NPCs remain hidden");
         ClearLiveMarkers();
@@ -958,9 +1195,18 @@ namespace
 
 int main(int argc, char** argv)
 {
+    CheckClient10DeathCategory();
+    if (argc == 2 && std::strcmp(argv[1], "--death-color-regression") == 0)
+    {
+        VulkanMinimapRenderer renderer{};
+        renderer.width = 512; renderer.height = 320; renderer.fns.cmdClearAttachments = Raster;
+        CheckDeathAtlasRedTint(renderer);
+        CheckDeathFallbackRed(renderer);
+        return 0;
+    }
     if(argc==3 && std::strcmp(argv[1],"--appearance-preview")==0)
     {
-        Check(TryLoadRealMapFromPath("assets/embervale_realmap_1280.rgba",g_realMap) && TryBuildBrightMap(g_realMap,g_brightMap),
+        Check(TryLoadRealMapFromPath("assets/embervale_realmap_1280.rgba",g_realMap) && TryLoadDefaultMap(g_realMap,g_defaultMap),
             "appearance preview loads original terrain and color-only cache");
         g_realMap.attempted=true;
         VulkanMinimapRenderer renderer{};
@@ -971,16 +1217,16 @@ int main(int argc, char** argv)
         for(int light:{0,55,100})
         {
             std::memset(pixels,0,sizeof(pixels)); g_minimapMapLight=light;
-            g_brightMapStyle=false;
+            g_defaultMapStyle=false;
             DrawRealMap(renderer,nullptr,128,160,115,5120,5120,44,0,fog);
-            g_brightMapStyle=true;
+            g_defaultMapStyle=true;
             DrawRealMap(renderer,nullptr,384,160,115,5120,5120,44,0,fog);
             Check(pixels[160][128].r>0 && pixels[160][384].r>0, "both appearance previews contain rendered terrain");
             WritePreview((std::string(argv[2])+"-light-"+std::to_string(light)+".bmp").c_str());
             std::memset(pixels,0,sizeof(pixels));
-            g_brightMapStyle=false;
+            g_defaultMapStyle=false;
             DrawRealMap(renderer,nullptr,128,160,115,2200,2200,2,0,fog);
-            g_brightMapStyle=true;
+            g_defaultMapStyle=true;
             DrawRealMap(renderer,nullptr,384,160,115,2200,2200,2,0,fog);
             Check(pixels[160][128].r>0 && pixels[160][384].r>0, "both detailed appearance previews contain rendered terrain");
             WritePreview((std::string(argv[2])+"-detail-light-"+std::to_string(light)+".bmp").c_str());
@@ -988,7 +1234,11 @@ int main(int argc, char** argv)
         return 0;
     }
     std::cout << std::unitbuf;
+    Check(g_minimapOrientation == MinimapOrientation::NorthUp, "map orientation starts north-up before config refresh");
     CheckToggleNotices();
+    CheckMapOrientationConfig();
+    CheckMapOrientationProjection();
+    CheckPlayerArrowOrientationRaster();
     CheckMapAppearance();
     CheckMinimapSizing();
     Check(TryLoadMinimapIconsFromPath("assets/embervale_minimap_icons.bin", g_minimapIcons), "load actual icon atlas");
@@ -1012,15 +1262,16 @@ int main(int argc, char** argv)
     CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
     Check(CopyWorldMapMarkers(now).size() == 6, "both completed map lists are captured");
     g_worldMapLayoutSupported = g_liveMarkerLayoutSupported = true;
+    VulkanMinimapRenderer markerRenderer{};
     std::vector<MinimapWorldPoint> points;
-    BuildWorldPoints(points, {}, {}, {});
+    BuildWorldPoints(markerRenderer, points, {}, {}, {});
     Check(points.size() == 5, "world-map mirror excludes the dedicated live ping duplicate");
     const auto countKind = [&](std::uint32_t kind) { return std::count_if(points.begin(), points.end(), [kind](const auto& p) { return p.kind == kind; }); };
     Check(countKind(11) == 1 && countKind(12) == 1 && countKind(31) == 1 && countKind(iconKey) == 1 && countKind(55) == 1,
         "custom pin, NPC fallback, altar, native icon and unknown fallback remain distinct");
     Entry(custom.data(), 0, 1200, 1000, iconKey);
     CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
-    points.clear(); BuildWorldPoints(points, {}, {}, {});
+    points.clear(); BuildWorldPoints(markerRenderer, points, {}, {}, {});
     Check(points.size() == 4 && countKind(11) == 0 && countKind(iconKey) == 1 &&
         std::count_if(points.begin(),points.end(),[&](const auto& p){return p.kind==iconKey && p.customPin;})==1,
         "custom pin decorates the original coincident POI icon");
@@ -1110,6 +1361,7 @@ int main(int argc, char** argv)
         Check(pixels[213][256-120*dpi/96].g>0.5f,"popup border appears at the expected position");
     }
     std::memset(pixels,0,sizeof(pixels));
+    CheckDeathAtlasRedTint(renderer);
     CheckDeaths(renderer);
     CheckWeather(renderer);
     CheckWorldClock(renderer);
@@ -1193,7 +1445,7 @@ int main(int argc, char** argv)
         TryDrawMinimapRasterFrame(renderer, nullptr, 256, 138, previewRadius, previewExtra);
         DrawPingDiamond(renderer, nullptr, 300, 100);
         DrawWaypointDiamond(renderer, nullptr, 212, 173);
-        CmdClearPlayerArrow(renderer, nullptr, 256, 138, previewRadius);
+        CmdClearPlayerArrow(renderer, nullptr, 256, 138, previewRadius, 0.0f);
         clock.minuteOfDay = 12 * 60 + 35; clock.daytime = true;
         const int previewHalf = MinimapRasterVisibleHalfHeight(previewRadius, previewExtra);
         const int previewYOffset = -MaxValue(1, (2 * (previewRadius + previewExtra) + 128) / 256);

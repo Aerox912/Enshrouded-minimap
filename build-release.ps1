@@ -1,8 +1,8 @@
 param(
   [string]$Configuration = "Release",
   [string]$Platform = "x64",
-  [string]$Toolset = "v142",
-  [string]$VCToolsVersion = "14.29.30133"
+  [string]$Toolset = "v143",
+  [string]$VCToolsVersion = ""
 )
 
 $ErrorActionPreference = "Stop"

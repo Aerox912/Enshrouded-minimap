@@ -92,10 +92,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="src\pch.h" />
+    <ClInclude Include="src\terrain_gpu.h" />
     <ClInclude Include="src\live_markers.h" />
     <ClInclude Include="src\map_appearance.h" />
     <ClInclude Include="src\client_1_0_profile.h" />
     <ClInclude Include="src\client_1_0_guards.h" />
+    <ClInclude Include="src\menu_visibility_1_0.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\dllmain.cpp" />
