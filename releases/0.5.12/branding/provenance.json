@@ -1,0 +1,12 @@
+{
+  "kitVersion": "2.0",
+  "sourceManifest": "E:\\Repos\\esm-loader\\docs\\branding\\assets\\manifest.json",
+  "legacyAsset": {
+    "file": "esm-logo-dark-v1.png",
+    "sha256": "320ed017d51c4cc3a63de62bd6d9dcb66d1125c7a28ad5f477a53133030807f4",
+    "role": "historical ESM identity; not current product use",
+    "origin": "Original image generated for Nick with the built-in image generation tool on 2026-10-14"
+  },
+  "currentAssetsManifest": "assets/manifest.json",
+  "note": "Sparkweave source/documentation assets only; none are included in the runtime mod package."
+}
