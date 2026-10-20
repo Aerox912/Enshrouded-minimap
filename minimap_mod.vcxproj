@@ -98,6 +98,7 @@
     <ClInclude Include="src\client_1_0_profile.h" />
     <ClInclude Include="src\client_1_0_guards.h" />
     <ClInclude Include="src\menu_visibility_1_0.h" />
+    <ClInclude Include="src\public_creative_compat.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\dllmain.cpp" />

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "id": "client-1-0-executable",
+      "parameter": "GameExecutableFixture",
+      "fileName": "enshrouded.exe",
+      "lengthBytes": 35327560,
+      "sha256": "82e5020a8736348cd0374f004b2f5e5ef456b5bd27aa5420df34c7dd241cfeeb",
+      "use": "Inert PE test data only; never execute or redistribute."
+    }
+  ],
+  "tests": [
+    { "project": "client_1_0_test" },
+    { "project": "patch_profile_test" },
+    { "project": "menu_visibility_test" },
+    { "project": "renderer_ownership_adapter_test" },
+    { "project": "public_creative_compat_test" }
+  ]
+}

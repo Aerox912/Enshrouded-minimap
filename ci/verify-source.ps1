@@ -10,7 +10,7 @@ foreach ($entry in $manifest.files) {
     $file = Get-Item -LiteralPath $path -ErrorAction Stop
     $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($file.Length -ne $entry.lengthBytes -or $hash -cne $entry.sha256) {
-        throw "Source input differs from accepted 0.5.12: $($entry.path)"
+        throw "Source input differs from accepted $($manifest.version): $($entry.path)"
     }
 }
 $nativePaths = [string[]]@($manifest.nativePaths)

@@ -19,7 +19,10 @@ $reported = @($receipt.tests.name | Sort-Object)
 if (($projects -join ',') -cne ($reported -join ',') -or @($receipt.tests | Where-Object status -notin @('PASSED', 'SKIPPED')).Count) {
     throw 'Build receipt does not account for every native test project.'
 }
-$fixtureTests = @((Get-Content -LiteralPath "$root/releases/0.5.12/BUILD-MANIFEST.json" -Raw | ConvertFrom-Json).tests.project)
+if (-not $receipt.fixtureTestsComplete -or @($receipt.tests | Where-Object status -ne 'PASSED').Count) {
+    throw 'Full release packaging requires every fixture and native test to pass.'
+}
+$fixtureTests = @((Get-Content -LiteralPath "$root/releases/0.5.13/BUILD-MANIFEST.json" -Raw | ConvertFrom-Json).tests.project)
 if (@($receipt.tests | Where-Object { $_.status -eq 'SKIPPED' -and $_.name -notin $fixtureTests }).Count) {
     throw 'Environment-independent native tests cannot be skipped.'
 }
@@ -29,14 +32,14 @@ if ($metadata.version -cne $version) { throw 'Package/source versions differ.' }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $runtime = Join-Path $output 'runtime-stage'
 $source = Join-Path $output 'source-stage'
-$runtimeZip = Join-Path $output "Sparkweave-Minimap-$version.zip"
-$sourceZip = Join-Path $output "Sparkweave-Minimap-$version-source.zip"
+$runtimeZip = Join-Path $output "Shroudweave-Minimap-$version.zip"
+$sourceZip = Join-Path $output "Shroudweave-Minimap-$version-source.zip"
 foreach ($path in @($runtime, $source, $runtimeZip, $sourceZip)) {
     if (Test-Path -LiteralPath $path) { throw "Refusing to replace existing staging/output: $path" }
 }
 New-Item -ItemType Directory -Path $runtime, $source | Out-Null
 $runtimeExpected = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
-$packagePrefix = 'releases/0.5.12/package/'
+$packagePrefix = 'releases/0.5.13/package/'
 foreach ($entry in $inventory.files | Where-Object { $_.path.StartsWith("${packagePrefix}mods/", [StringComparison]::Ordinal) }) {
     $relative = $entry.path.Substring($packagePrefix.Length)
     $target = Join-Path $runtime $relative
@@ -44,15 +47,12 @@ foreach ($entry in $inventory.files | Where-Object { $_.path.StartsWith("${packa
     Copy-Item -LiteralPath (Join-Path $root $entry.path) -Destination $target
     $runtimeExpected.Add($relative, $entry.sha256)
 }
-Copy-Item -LiteralPath "$root/releases/0.5.12/RUNTIME-README.txt" -Destination "$runtime/README.txt"
-$runtimeExpected.Add('README.txt', (Get-FileHash -LiteralPath "$root/releases/0.5.12/RUNTIME-README.txt").Hash.ToLowerInvariant())
+Copy-Item -LiteralPath "$root/releases/0.5.13/RUNTIME-README.txt" -Destination "$runtime/README.txt"
+$runtimeExpected.Add('README.txt', (Get-FileHash -LiteralPath "$root/releases/0.5.13/RUNTIME-README.txt").Hash.ToLowerInvariant())
 $runtimeMod = Join-Path $runtime 'mods/minimap_mod'
 Copy-Item -LiteralPath $dll.FullName -Destination "$runtimeMod/minimap_mod.dll"
 $runtimeExpected.Add('mods/minimap_mod/minimap_mod.dll', $dllHash)
-foreach ($name in @('embervale_minimap_terrain.vert', 'embervale_minimap_terrain.frag', 'embervale_minimap_terrain.vert.spv', 'embervale_minimap_terrain.frag.spv')) {
-    Copy-Item -LiteralPath "$root/assets/$name" -Destination $runtimeMod
-    $runtimeExpected.Add("mods/minimap_mod/$name", (Get-FileHash -LiteralPath "$root/assets/$name").Hash.ToLowerInvariant())
-}
+# Keep the accepted runtime payload; extra terrain shaders would change its rendering route.
 $runtimeFiles = @(Get-ChildItem -LiteralPath $runtime -Recurse -File)
 if ($runtimeFiles.Count -ne $runtimeExpected.Count) { throw 'Runtime staging membership differs from permitted inputs.' }
 foreach ($file in $runtimeFiles) {
@@ -67,7 +67,7 @@ foreach ($entry in $inventory.files) { [void]$sourcePaths.Add($entry.path) }
 foreach ($relative in @('README.md', 'BUILD-TEST.md', 'build-release.ps1', 'package-release.ps1', '.gitattributes', '.github/workflows/release.yml')) {
     [void]$sourcePaths.Add($relative)
 }
-foreach ($name in @('build.ps1', 'verify-source.ps1', 'pipeline-tests.ps1', 'source-inputs.json')) { [void]$sourcePaths.Add("ci/$name") }
+foreach ($name in @('build.ps1', 'verify-source.ps1', 'pipeline-tests.ps1', 'source-inputs.json', 'prepare-shader-compiler.ps1')) { [void]$sourcePaths.Add("ci/$name") }
 $sourceRecords = @()
 foreach ($relative in $sourcePaths | Sort-Object -CaseSensitive) {
     $target = Join-Path $source $relative
