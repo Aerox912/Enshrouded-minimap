@@ -57,12 +57,9 @@ namespace RendererOwnershipAdapter
 
     inline MenuAdmission EvaluateMenuGuards(
         const std::uint8_t* image, std::size_t imageSize,
-        std::uintptr_t expectedBase, const Api* api,
-        const std::uint8_t* ownedCallPrefix = nullptr, std::size_t ownedCallSize = 0,
-        MinimapMenu10::GuardReader reader = nullptr)
+        std::uintptr_t expectedBase, const Api* api)
     {
-        if (MinimapMenu10::MatchGuardsWithRendererPrefix(image, imageSize, nullptr, 0,
-            ownedCallPrefix, ownedCallSize, reader))
+        if (MinimapMenu10::MatchGuards(image, imageSize))
             return MenuAdmission::raw;
 
         if (!image || !expectedBase || reinterpret_cast<std::uintptr_t>(image) != expectedBase ||
@@ -86,7 +83,7 @@ namespace RendererOwnershipAdapter
                 return MenuAdmission::rejected;
 
         return MinimapMenu10::MatchGuardsWithRendererPrefix(
-            image, imageSize, proof.original_prefix, proof.prefix_size, ownedCallPrefix, ownedCallSize, reader)
+            image, imageSize, proof.original_prefix, proof.prefix_size)
             ? MenuAdmission::owned
             : MenuAdmission::rejected;
     }

@@ -15,7 +15,7 @@ update from elxokker. It includes the changes submitted upstream as
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
 Please report problems with this build to the fork's issue tracker.
 
-The local Shroudweave-branded candidate is displayed as **Shroudweave Minimap**.
+The local Sparkweave-branded candidate is displayed as **Sparkweave Minimap**.
 This name does not change the upstream authorship, technical mod ID, or license.
 
 ## Other acknowledgements

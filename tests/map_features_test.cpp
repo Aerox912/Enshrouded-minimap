@@ -41,241 +41,6 @@ namespace
         Check(requested && fallbackSeen == "north-up", "missing map orientation uses the north-up config fallback");
         Check(g_minimapOrientation == MinimapOrientation::NorthUp, "missing map orientation selects north-up");
     }
-    void CheckMinimapPlacementConfig()
-    {
-        static bool positionPresent = true;
-        static std::string selected = "top-left";
-        ModContext config{};
-        config.config.GetString = [](const char*, const char* key, std::string fallback) {
-            if (std::strcmp(key, "position") == 0) return positionPresent ? selected : fallback;
-            if (std::strcmp(key, "scale_percent") == 0) return std::string("100");
-            return fallback;
-        };
-        for (const char* placement : {"top-left", "middle-left", "bottom-left"})
-        {
-            selected = placement;
-            RefreshMinimapConfig(&config, true);
-            Check(g_minimapOrientation == MinimapOrientation::NorthUp && g_minimapScalePercent == 100,
-                "left placement keeps north-up orientation and the 100-percent size default");
-            const bool selectedPlacement = std::strcmp(
-                MinimapPlacementName(static_cast<MinimapPlacement>(g_minimapPlacement.load())), placement) == 0;
-            if (std::strcmp(placement, "top-left") == 0)
-                Check(selectedPlacement, "top-left Shroudtopia config selects the requested placement");
-            else
-                Check(selectedPlacement, "Shroudtopia config selects each remaining left placement");
-        }
-
-        selected = "invalid-position";
-        RefreshMinimapConfig(&config, true);
-        Check(g_minimapPlacement == static_cast<int>(MinimapPlacement::BottomRight),
-            "invalid Shroudtopia position preserves the bottom-right fallback");
-        positionPresent = false;
-        selected = "top-left";
-        RefreshMinimapConfig(&config, true);
-        Check(g_minimapPlacement == static_cast<int>(MinimapPlacement::BottomRight),
-            "missing Shroudtopia position preserves the bottom-right fallback");
-        Check(g_minimapOrientation == MinimapOrientation::NorthUp && g_minimapScalePercent == 100,
-            "missing position preserves north-up orientation and the 100-percent size default");
-    }
-
-    void CheckMinimapOffsetConfig()
-    {
-        static bool offsetRequested = false;
-        static bool offsetPresent = false;
-        static std::string offsetFallback;
-        static std::string selectedOffset;
-        static std::string selectedPosition = "bottom-right";
-        const MinimapPlacement placements[] = {
-            MinimapPlacement::TopRight, MinimapPlacement::MiddleRight, MinimapPlacement::BottomRight,
-            MinimapPlacement::TopLeft, MinimapPlacement::MiddleLeft, MinimapPlacement::BottomLeft
-        };
-        const char* positionNames[] = {"top-right", "middle-right", "bottom-right", "top-left", "middle-left", "bottom-left"};
-        ModContext config{};
-        config.config.GetString = [](const char*, const char* key, std::string fallback) {
-            if (std::strcmp(key, "position") == 0) return selectedPosition;
-            if (std::strcmp(key, "scale_percent") == 0) return std::string("100");
-            if (std::strcmp(key, "offset") == 0)
-            {
-                offsetRequested = true;
-                offsetFallback = fallback;
-                return offsetPresent ? selectedOffset : fallback;
-            }
-            return fallback;
-        };
-        const std::string savedConfigPath = g_shroudtopiaConfigPath;
-        g_shroudtopiaConfigPath.clear();
-        offsetPresent = false;
-        offsetRequested = false;
-        selectedPosition = "bottom-right";
-        RefreshMinimapConfig(&config, true);
-        Check(offsetRequested && offsetFallback == "0" && g_minimapOrientation == MinimapOrientation::NorthUp &&
-            g_minimapScalePercent == 100 && g_minimapPlacement == static_cast<int>(MinimapPlacement::BottomRight) &&
-            ComputeMinimapCenterY(1080, 52, 52, 22, 23) == 976,
-            "missing offset defaults to zero while north-up, 100-percent size and bottom-right stay unchanged");
-
-        offsetPresent = true;
-        selectedOffset = "0";
-        const int legacyY[] = {215, 540, 976, 215, 540, 976};
-        for (std::size_t i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
-        {
-            selectedPosition = positionNames[i];
-            offsetRequested = false;
-            RefreshMinimapConfig(&config, true);
-            Check(offsetRequested && g_minimapPlacement == static_cast<int>(placements[i]) &&
-                ComputeMinimapCenterY(1080, 52, 52, 22, 23) == legacyY[i % 3],
-                "offset zero preserves exact legacy Y for all six selected placements");
-        }
-
-        struct OffsetFixture { std::uint32_t height; int positiveY[3]; int negativeY[3]; };
-        const OffsetFixture fixtures[] = {
-            {1080, {119, 444, 880}, {311, 636, 997}},
-            {1440, {127, 592, 1208}, {383, 848, 1357}},
-            {2160, {143, 888, 1864}, {527, 1272, 2077}}
-        };
-        for (const auto& fixture : fixtures)
-        {
-            selectedOffset = "96";
-            for (std::size_t i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
-            {
-                selectedPosition = positionNames[i];
-                offsetRequested = false;
-                RefreshMinimapConfig(&config, true);
-                Check(offsetRequested && g_minimapPlacement == static_cast<int>(placements[i]) &&
-                    ComputeMinimapCenterY(fixture.height, 52, 52, 22, 23) == fixture.positiveY[i % 3],
-                    "positive reference offset moves every selected row upward across resolutions");
-            }
-            selectedOffset = "-96";
-            for (std::size_t i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
-            {
-                selectedPosition = positionNames[i];
-                offsetRequested = false;
-                RefreshMinimapConfig(&config, true);
-                Check(offsetRequested && g_minimapPlacement == static_cast<int>(placements[i]) &&
-                    ComputeMinimapCenterY(fixture.height, 52, 52, 22, 23) == fixture.negativeY[i % 3],
-                    "negative reference offset moves every selected row downward across resolutions");
-            }
-        }
-
-        selectedOffset = " \t+96 \r\n";
-        selectedPosition = "top-right";
-        RefreshMinimapConfig(&config, true);
-        Check(ComputeMinimapCenterY(1080, 52, 52, 22, 23) == 119,
-            "trimmed leading plus sign remains a valid decimal offset");
-        selectedOffset = "15";
-        selectedPosition = "middle-right";
-        RefreshMinimapConfig(&config, true);
-        Check(ComputeMinimapCenterY(36, 1, 1) == 17, "positive half-pixel offset rounds away from zero");
-        selectedOffset = "-15";
-        RefreshMinimapConfig(&config, true);
-        Check(ComputeMinimapCenterY(36, 1, 1) == 19, "negative half-pixel offset rounds away from zero");
-
-        const char* maximumInputs[] = {"1080", "1081", "2147483647"};
-        for (const char* input : maximumInputs)
-        {
-            selectedOffset = input;
-            for (std::size_t i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
-            {
-                selectedPosition = positionNames[i];
-                RefreshMinimapConfig(&config, true);
-                Check(ComputeMinimapCenterY(1080, 52, 52, 22, 23) == 83,
-                    "valid positive values clamp to the 1080-reference-pixel limit and safe top");
-            }
-        }
-        const char* minimumInputs[] = {"-1080", "-1081", "-2147483648"};
-        for (const char* input : minimumInputs)
-        {
-            selectedOffset = input;
-            for (std::size_t i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
-            {
-                selectedPosition = positionNames[i];
-                RefreshMinimapConfig(&config, true);
-                Check(ComputeMinimapCenterY(1080, 52, 52, 22, 23) == 997,
-                    "valid negative values clamp to the 1080-reference-pixel limit and safe bottom");
-            }
-        }
-
-        for (const char* invalid : {"", "1.5", "1e2", "96px", "+", "--1", "2147483648", "-2147483649"})
-        {
-            selectedOffset = invalid;
-            selectedPosition = "bottom-right";
-            offsetRequested = false;
-            RefreshMinimapConfig(&config, true);
-            Check(offsetRequested && offsetFallback == "0" && ComputeMinimapCenterY(1080, 52, 52, 22, 23) == 976,
-                "empty, malformed or parser-overflow offset uses zero fallback");
-        }
-
-        selectedOffset = "0";
-        selectedPosition = "bottom-right";
-        RefreshMinimapConfig(&config, true);
-        Check(ComputeMinimapCenterY(1080, 208, 52, 142, 46) == 722,
-            "zero offset preserves legacy bottom after the 200-percent clock/footer clamp");
-        selectedOffset = "96";
-        const int largeExpectedY[] = {298, 444, 626, 298, 444, 626};
-        for (std::size_t i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
-        {
-            selectedPosition = positionNames[i];
-            RefreshMinimapConfig(&config, true);
-            Check(ComputeMinimapCenterY(1080, 208, 52, 142, 46) == largeExpectedY[i % 3],
-                "configured offset moves all large-widget rows from their legacy clamped anchors");
-        }
-
-        char tempDirectory[MAX_PATH] = {};
-        char tempConfigPath[MAX_PATH] = {};
-        const DWORD tempDirectoryLength = GetTempPathA(static_cast<DWORD>(sizeof(tempDirectory)), tempDirectory);
-        Check(tempDirectoryLength > 0 && tempDirectoryLength < sizeof(tempDirectory) &&
-            GetTempFileNameA(tempDirectory, "mmc", 0, tempConfigPath) != 0,
-            "create isolated Shroudtopia config fixture for signed offset");
-        {
-            std::ofstream out(tempConfigPath, std::ios::binary | std::ios::trunc);
-            out << "{\"mods\":{\"minimap_mod\":{\"offset\":35}}}";
-            Check(out.good(), "write isolated numeric signed offset config fixture");
-        }
-        g_shroudtopiaConfigPath = tempConfigPath;
-        selectedOffset = "-96";
-        selectedPosition = "top-right";
-        offsetRequested = false;
-        RefreshMinimapConfig(&config, true);
-        Check(!offsetRequested && ComputeMinimapCenterY(1080, 52, 52, 22, 23) == 180,
-            "numeric file offset takes precedence over the config API");
-        DeleteFileA(tempConfigPath);
-        g_shroudtopiaConfigPath = savedConfigPath;
-
-        RefreshMinimapConfig(nullptr, true);
-        Check(g_minimapOrientation == MinimapOrientation::NorthUp && g_minimapScalePercent == 100 &&
-            g_minimapPlacement == static_cast<int>(MinimapPlacement::BottomRight) &&
-            ComputeMinimapCenterY(1080, 52, 52, 22, 23) == 976,
-            "offset default leaves every other minimap setting at its established value");
-    }
-    void CheckMinimapPlacementParsing()
-    {
-        const char* canonical[] = {"top-right", "middle-right", "bottom-right", "top-left", "middle-left", "bottom-left"};
-        const MinimapPlacement placements[] = {
-            MinimapPlacement::TopRight, MinimapPlacement::MiddleRight, MinimapPlacement::BottomRight,
-            MinimapPlacement::TopLeft, MinimapPlacement::MiddleLeft, MinimapPlacement::BottomLeft
-        };
-        for (std::size_t i = 0; i < sizeof(canonical) / sizeof(canonical[0]); ++i)
-        {
-            const auto parsed = ParseMinimapPlacement(canonical[i]);
-            Check(parsed == placements[i] && std::strcmp(MinimapPlacementName(parsed), canonical[i]) == 0,
-                "all six canonical minimap positions round-trip through the production parser and formatter");
-        }
-
-        struct AliasCase { const char* value; MinimapPlacement placement; };
-        const AliasCase rightAliases[] = {
-            {"top", MinimapPlacement::TopRight}, {"tr", MinimapPlacement::TopRight},
-            {"middle", MinimapPlacement::MiddleRight}, {"center", MinimapPlacement::MiddleRight},
-            {"right", MinimapPlacement::MiddleRight}, {"mr", MinimapPlacement::MiddleRight},
-            {"center-right", MinimapPlacement::MiddleRight}
-        };
-        for (const auto& alias : rightAliases)
-            Check(ParseMinimapPlacement(alias.value) == alias.placement,
-                "existing right-side minimap position aliases remain supported");
-
-        Check(ParseMinimapPlacement("") == MinimapPlacement::BottomRight &&
-            ParseMinimapPlacement("unknown-position") == MinimapPlacement::BottomRight &&
-            std::strcmp(MinimapPlacementName(static_cast<MinimapPlacement>(99)), "bottom-right") == 0,
-            "empty, invalid and unknown placement values preserve bottom-right fallback");
-    }
     void CheckMapOrientationProjection()
     {
         int x = 0, y = 0;
@@ -839,150 +604,27 @@ namespace
 
         Check(TryLoadMinimapFrameFromPath("assets/embervale_minimap_frame.rgba", g_minimapFrame), "load actual compass frame for layout bounds");
         g_minimapFrame.attempted = true;
-        struct Viewport { int width; int height; };
-        const Viewport viewports[] = {{1920,1080},{2560,1440},{3440,1440},{1280,800},{320,240}};
-        struct LegacyTopClearanceGap
+        for (int height : {480,720,1080,1439,1440,2160})
         {
-            int width;
-            int height;
-            int scalePercent;
-            int centerY;
-            int frameTop;
-            int frameBottomWithoutClock;
-            int frameBottomWithClock;
-            const char* description;
-        };
-        // Literal baselines independently derived from the accepted frame asset
-        // and the pre-existing right-side placement arithmetic. These cases
-        // retain known gaps; every unlisted top-row case must clear the reserve.
-        const LegacyTopClearanceGap legacyTopClearanceGaps[] = {
-            {2560,1440,50,273,179,365,380,"2560x1440 at 50% retains the exact legacy 1px quest/Journal gap"},
-            {2560,1440,150,459,179,735,780,"2560x1440 at 150% retains the exact legacy 1px quest/Journal gap"},
-            {3440,1440,50,273,179,365,380,"3440x1440 at 50% retains the exact legacy 1px quest/Journal gap"},
-            {3440,1440,150,459,179,735,780,"3440x1440 at 150% retains the exact legacy 1px quest/Journal gap"},
-            {320,240,75,120,8,230,253,"320x240 at 75% retains the exact legacy undersized-viewport clearance gap"},
-            {320,240,100,157,8,304,334,"320x240 at 100% retains the exact legacy undersized-viewport clearance gap"},
-            {320,240,125,194,8,378,415,"320x240 at 125% retains the exact legacy undersized-viewport clearance gap"},
-            {320,240,150,232,8,453,498,"320x240 at 150% retains the exact legacy undersized-viewport clearance gap"},
-            {320,240,175,269,8,526,579,"320x240 at 175% retains the exact legacy undersized-viewport clearance gap"},
-            {320,240,200,306,8,600,660,"320x240 at 200% retains the exact legacy undersized-viewport clearance gap"},
-        };
-        const MinimapPlacement rightRows[] = {
-            MinimapPlacement::TopRight, MinimapPlacement::MiddleRight, MinimapPlacement::BottomRight
-        };
-        const MinimapPlacement leftRows[] = {
-            MinimapPlacement::TopLeft, MinimapPlacement::MiddleLeft, MinimapPlacement::BottomLeft
-        };
-        for (const auto viewport : viewports)
-        {
-            const int width = viewport.width;
-            const int height = viewport.height;
-            const int radius = ClampValue(MinValue(width, height) / 11, 104, 142);
+            const int radius = ClampValue(height / 11, 104, 142);
             const int extra = MinimapRasterFrameExtra(radius);
             const int half = MinimapRasterVisibleHalfHeight(radius, extra);
             const int yOffset = -MaxValue(1, (2 * (radius + extra) + 128) / 256);
             const int topExtra = half - yOffset - radius;
             const int bottomExtra = half + yOffset - radius;
             const int footer = bottomExtra + CLOCK_FRAME_GAP + 2 * CLOCK_PANEL_HALF_HEIGHT;
-            const int marginX = MaxValue(58, width / 58);
-            const int marginY = MaxValue(52, height / 42);
-            for (int percent : {50,75,100,125,150,175,200})
+            for (auto placement : {MinimapPlacement::TopRight,MinimapPlacement::MiddleRight,MinimapPlacement::BottomRight})
             {
-                const float scale = percent / 100.0f;
-                const auto scaled = [scale](int value) { return static_cast<int>(std::lround(value * scale)); };
-                const int scaledRadius = scaled(radius);
-                const int scaledHalf = scaled(half);
-                const int scaledYOffset = scaled(yOffset);
-                const int scaledTopExtra = scaled(topExtra);
-                const int scaledBottomExtra = scaled(bottomExtra);
-                const int scaledFooter = scaled(footer);
-                const int edgeReserve = MaxValue(marginX, scaled(half - radius) + 8);
-                const int widestPanelHalf = scaled(124); // max plate width: 74 base + 50 time/weather expansion
-                const int horizontalExtent = MaxValue(scaledHalf, widestPanelHalf);
-                const bool fitsWidth = width >= 2 * (horizontalExtent + 8);
-                const bool fitsHeight = height >= 2 * (scaledRadius + MaxValue(scaledTopExtra, scaledFooter) + 8);
-
-                for (int offsetReferencePixels : {0, 96, -96})
+                g_minimapPlacement = static_cast<int>(placement);
+                for (bool showClock : {false, true})
                 {
-                for (std::size_t row = 0; row < sizeof(rightRows) / sizeof(rightRows[0]); ++row)
-                {
-                    const auto rightPlacement = rightRows[row];
-                    const auto leftPlacement = leftRows[row];
-                    const int rightX = ComputeMinimapCenterX(width, radius, marginX, half, scale, rightPlacement);
-                    const int leftX = ComputeMinimapCenterX(width, radius, marginX, half, scale, leftPlacement);
-                    const int expectedRightX = width - edgeReserve - scaledRadius;
-                    const int expectedLeftX = edgeReserve + scaledRadius;
-                    Check(rightX == expectedRightX && leftX == expectedLeftX && leftX + rightX == width,
-                        "left and right X anchors mirror while preserving the existing right-edge formula");
-
-                    for (bool showClock : {false, true})
-                    {
-                        const int footerHeight = scaled(showClock ? footer : bottomExtra);
-                        const int rightY = ComputeMinimapCenterY(height, scaledRadius, marginY,
-                            footerHeight, scaledTopExtra, rightPlacement, offsetReferencePixels);
-                        const int leftY = ComputeMinimapCenterY(height, scaledRadius, marginY,
-                            footerHeight, scaledTopExtra, leftPlacement, offsetReferencePixels);
-                        const int safeTop = scaledRadius + scaledTopExtra + 8;
-                        const int safeBottom = MaxValue(safeTop,
-                            height - scaledRadius - 8 - MaxValue(footerHeight, scaledTopExtra));
-                        const int legacyY = ComputeMinimapCenterY(height, scaledRadius, marginY,
-                            footerHeight, scaledTopExtra, rightPlacement, 0);
-                        const int offsetPixels = static_cast<int>(std::lround(
-                            static_cast<double>(offsetReferencePixels) * height / 1080.0));
-                        const std::int64_t shiftedLegacyY = static_cast<std::int64_t>(legacyY) - offsetPixels;
-                        const int requestedY = static_cast<int>(ClampValue<std::int64_t>(
-                            shiftedLegacyY, safeTop, safeBottom));
-                        Check(rightY == leftY && rightY == requestedY,
-                            "signed reference offset moves equal-row left/right anchors with existing viewport clamping");
-
-                        const int frameTop = rightY - scaledHalf + scaledYOffset;
-                        const int frameBottom = rightY + scaledRadius + (showClock ? scaledFooter : scaledBottomExtra);
-                        const int leftFrameTop = leftY - scaledHalf + scaledYOffset;
-                        const int leftFrameBottom = leftY + scaledRadius + (showClock ? scaledFooter : scaledBottomExtra);
-                        if (row == 0 && offsetReferencePixels == 0)
-                        {
-                            const auto legacyGap = std::find_if(std::begin(legacyTopClearanceGaps),
-                                std::end(legacyTopClearanceGaps), [&](const LegacyTopClearanceGap& item) {
-                                    return item.width == width && item.height == height && item.scalePercent == percent;
-                                });
-                            if (legacyGap != std::end(legacyTopClearanceGaps))
-                            {
-                                const int expectedFrameBottom = showClock
-                                    ? legacyGap->frameBottomWithClock : legacyGap->frameBottomWithoutClock;
-                                Check(rightY == legacyGap->centerY && leftY == legacyGap->centerY &&
-                                    frameTop == legacyGap->frameTop && leftFrameTop == legacyGap->frameTop &&
-                                    frameBottom == expectedFrameBottom && leftFrameBottom == expectedFrameBottom &&
-                                    frameTop < MaxValue(marginY, height / 9 + 20),
-                                    legacyGap->description);
-                            }
-                            else
-                                Check(frameTop >= MaxValue(marginY, height / 9 + 20) &&
-                                    leftFrameTop >= MaxValue(marginY, height / 9 + 20),
-                                    "top-left and top-right frames clear the localized quest title and Journal reserve");
-                        }
-                        if (fitsHeight)
-                        {
-                            Check(frameTop >= 8 && frameBottom <= height - 8,
-                                "scaled frame and optional clock stay within fitting viewport bounds");
-                        }
-                        else
-                        {
-                            Check(radius == 104 && rightY == ClampValue(requestedY, safeTop, safeBottom),
-                                "an undersized viewport retains the existing minimum radius and vertical clamp behavior");
-                        }
-
-                        if (fitsWidth)
-                            Check(leftX - horizontalExtent >= 8 && leftX + horizontalExtent <= width - 8 &&
-                                rightX - horizontalExtent >= 8 && rightX + horizontalExtent <= width - 8,
-                                "scaled frame and widest clock panel fit both mirrored horizontal anchors");
-                        else
-                            Check(radius == 104 && leftX == expectedLeftX && rightX == expectedRightX,
-                                "an undersized viewport retains the existing radius and anchored horizontal geometry");
-                    }
+                    const int cy = ComputeMinimapCenterY(height, radius, MaxValue(52,height/42), showClock ? footer : bottomExtra, topExtra);
+                    Check(cy - half + yOffset >= 8 && cy + radius + (showClock ? footer : bottomExtra) <= height - 8,
+                        "complete frame and optional clock fit every placement and screen height");
+                    if (placement == MinimapPlacement::TopRight)
+                        Check(cy - half + yOffset >= height / 9 + 20, "top-right frame leaves the localized quest title and Journal region clear");
                 }
             }
-            }
-
             Check(CLOCK_FRAME_GAP < 0 && CLOCK_FRAME_GAP >= -8 && bottomExtra + CLOCK_FRAME_GAP >= 8,
                 "clock slightly overlaps the ornament while staying outside the map circle");
             // The measured circular bound includes every opaque pixel at every
@@ -1595,9 +1237,6 @@ int main(int argc, char** argv)
     Check(g_minimapOrientation == MinimapOrientation::NorthUp, "map orientation starts north-up before config refresh");
     CheckToggleNotices();
     CheckMapOrientationConfig();
-    CheckMinimapPlacementConfig();
-    CheckMinimapOffsetConfig();
-    CheckMinimapPlacementParsing();
     CheckMapOrientationProjection();
     CheckPlayerArrowOrientationRaster();
     CheckMapAppearance();

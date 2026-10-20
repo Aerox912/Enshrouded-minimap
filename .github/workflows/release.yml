@@ -1,4 +1,4 @@
-name: Minimap public checks
+name: Build and release
 on:
   push:
     branches: [main]
@@ -10,22 +10,78 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+          submodules: recursive
+      - uses: microsoft/setup-msbuild@v2
       - name: Prepare pinned shader compiler
         shell: pwsh
-        run: ./ci/prepare-shader-compiler.ps1
-      - name: Check pipeline rejection and archive exclusion contracts
+        run: |
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'minimap-glslang-16.6.0'
+          $archive = "$toolRoot.zip"
+          Invoke-WebRequest 'https://github.com/KhronosGroup/glslang/releases/download/16.6.0/glslang-16.6.0-windows-x86_64-release.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive).Hash -ine '82bf434e69b9bb4829de7e2b4bc2c5e7a7861e53d66cf75e5cc70f5f694a8d9b') { throw 'Shader compiler archive hash mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $toolRoot
+          $compiler = @(Get-ChildItem -LiteralPath $toolRoot -Recurse -File -Filter glslang.exe)
+          if ($compiler.Count -ne 1) { throw 'Expected one shader compiler' }
+          "MINIMAP_GLSLANG=$($compiler[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Check pipeline input validation
         shell: pwsh
         run: ./ci/pipeline-tests.ps1
-      - name: Build and run public checks without proprietary fixtures
+      - name: Build, test and package
         shell: pwsh
         run: ./ci/build.ps1 -AllowMissingFixture
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: minimap-public-checks-${{ github.sha }}
-          path: dist/BUILD-RECEIPT.json
+          name: minimap
+          path: |
+            dist/*.zip
+            dist/*.json
+            dist/SHA256SUMS.txt
           if-no-files-found: error
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $receipt = Get-Content ./dist/BUILD-RECEIPT.json -Raw | ConvertFrom-Json
+          if ($env:GITHUB_REF_NAME -cne "v$($receipt.version)" -or -not $receipt.matchesAcceptedRuntime) {
+            throw 'Tag or rebuilt DLL differs from accepted release identity; candidate requires review before publication'
+          }
+          $assets=@(Get-ChildItem ./dist -File | Where-Object { $_.Extension -in @('.zip', '.json') -or $_.Name -eq 'SHA256SUMS.txt' } | ForEach-Object FullName)
+          gh release create $env:GITHUB_REF_NAME --draft --title $env:GITHUB_REF_NAME --generate-notes @assets
+          if ($LASTEXITCODE) { throw 'Release upload failed' }
+          gh release edit $env:GITHUB_REF_NAME --draft=false
+          if ($LASTEXITCODE) { throw 'Release publication failed' }
+
+  notify-packages:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') && vars.RELEASE_APP_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: Aerox912
+          repositories: |
+            enshrouded-client-installer
+          permission-contents: write
+      - name: Notify only affected packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          $body=@{event_type='component-released';client_payload=@{component='minimap';tag=$env:GITHUB_REF_NAME}} | ConvertTo-Json -Compress
+          $body | Set-Content ./dispatch.json -Encoding utf8
+          foreach($repo in @('enshrouded-client-installer')) {
+            gh api --method POST "repos/Aerox912/$repo/dispatches" --input ./dispatch.json
+            if($LASTEXITCODE){throw 'Package notification failed'}
+          }

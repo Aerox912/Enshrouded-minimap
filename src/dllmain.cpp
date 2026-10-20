@@ -4,7 +4,6 @@
 #include "client_1_0_profile.h"
 #include "menu_visibility_1_0.h"
 #include "renderer_ownership_adapter.h"
-#include "public_creative_compat.h"
 #pragma comment(lib, "gdi32.lib")
 
 #include <shroudtopia.h>
@@ -19,7 +18,6 @@
 #include <cstring>
 #include <cwchar>
 #include <fstream>
-#include <limits>
 #include <mutex>
 #include <memory>
 #include <sstream>
@@ -1282,8 +1280,8 @@ namespace
 
     ModMetaData g_metaData = {
         "minimap_mod",
-        "Shroudweave Minimap: in-game map with a world clock, players, pings, waypoints and death markers.",
-            "0.5.13-public-creative-compat-r1",
+        "Sparkweave Minimap: in-game map with a world clock, players, pings, waypoints and death markers.",
+            "0.5.12-local-r3",
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,
@@ -1457,10 +1455,6 @@ namespace
     std::atomic<DWORD> g_lastWorldDataTick{ 0 };
     std::atomic<int> g_minimapZoomStep{ 0 };
     std::atomic<int> g_minimapScalePercent{ 100 };
-    constexpr int MINIMAP_OFFSET_REFERENCE_HEIGHT = 1080;
-    constexpr int MINIMAP_DEFAULT_OFFSET_REFERENCE_PIXELS = 0;
-    constexpr int MINIMAP_MAX_OFFSET_REFERENCE_PIXELS = 1080;
-    std::atomic<int> g_minimapOffsetReferencePixels{ MINIMAP_DEFAULT_OFFSET_REFERENCE_PIXELS };
     int g_configuredScalePercent = -1;
     std::atomic<int> g_minimapSizeDecreaseKey{ VK_F9 }, g_minimapSizeIncreaseKey{ VK_F11 };
     bool g_sizeDecreaseDown = false, g_sizeIncreaseDown = false;
@@ -1492,10 +1486,7 @@ namespace
     {
         TopRight = 0,
         MiddleRight = 1,
-        BottomRight = 2,
-        TopLeft = 3,
-        MiddleLeft = 4,
-        BottomLeft = 5
+        BottomRight = 2
     };
 
     enum class MinimapOrientation : int
@@ -1648,15 +1639,6 @@ namespace
             return MinimapPlacement::MiddleRight;
         }
 
-        if (normalized == "topleft")
-            return MinimapPlacement::TopLeft;
-
-        if (normalized == "middleleft")
-            return MinimapPlacement::MiddleLeft;
-
-        if (normalized == "bottomleft")
-            return MinimapPlacement::BottomLeft;
-
         return MinimapPlacement::BottomRight;
     }
 
@@ -1668,12 +1650,6 @@ namespace
             return "top-right";
         case MinimapPlacement::MiddleRight:
             return "middle-right";
-        case MinimapPlacement::TopLeft:
-            return "top-left";
-        case MinimapPlacement::MiddleLeft:
-            return "middle-left";
-        case MinimapPlacement::BottomLeft:
-            return "bottom-left";
         case MinimapPlacement::BottomRight:
         default:
             return "bottom-right";
@@ -1778,45 +1754,6 @@ namespace
         return ClampValue(parsed, low, high);
     }
 
-    int ParseSignedConfigInteger(const std::string& value, int fallback, int low, int high)
-    {
-        const auto first = value.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos)
-            return fallback;
-        const auto last = value.find_last_not_of(" \t\r\n");
-
-        std::size_t index = first;
-        bool negative = false;
-        if (value[index] == '+' || value[index] == '-')
-        {
-            negative = value[index] == '-';
-            if (++index > last)
-                return fallback;
-        }
-
-        const std::uint64_t limit = negative ? 2147483648ULL : 2147483647ULL;
-        std::uint64_t magnitude = 0;
-        for (; index <= last; ++index)
-        {
-            const char ch = value[index];
-            if (ch < '0' || ch > '9')
-                return fallback;
-            const std::uint64_t digit = static_cast<std::uint64_t>(ch - '0');
-            if (magnitude > (limit - digit) / 10)
-                return fallback;
-            magnitude = magnitude * 10 + digit;
-        }
-
-        int parsed = 0;
-        if (negative)
-            parsed = magnitude == 2147483648ULL
-                ? (std::numeric_limits<int>::min)()
-                : -static_cast<int>(magnitude);
-        else
-            parsed = static_cast<int>(magnitude);
-        return ClampValue(parsed, low, high);
-    }
-
     std::string MinimapToggleKeyName(int key)
     {
         if (key >= VK_F1 && key <= VK_F24)
@@ -1868,15 +1805,6 @@ namespace
         {
             configuredPosition = modContext->config.GetString("minimap_mod", "position", configuredPosition);
             positionSource = "shroudtopia_config_api";
-        }
-
-        std::string configuredOffset = std::to_string(MINIMAP_DEFAULT_OFFSET_REFERENCE_PIXELS);
-        std::string offsetSource = "default";
-        if (!TryReadMinimapConfigStringFromFile(modContext, "offset", configuredOffset, offsetSource) &&
-            modContext != nullptr && modContext->config.GetString)
-        {
-            configuredOffset = modContext->config.GetString("minimap_mod", "offset", configuredOffset);
-            offsetSource = "shroudtopia_config_api";
         }
 
         std::string configuredToggleKey = "F10";
@@ -1969,16 +1897,12 @@ namespace
         const bool previousWorld = g_showWorldMarkers.exchange(showWorld);
 
         const MinimapPlacement placement = ParseMinimapPlacement(configuredPosition);
-        const int offsetReferencePixels = ParseSignedConfigInteger(configuredOffset,
-            MINIMAP_DEFAULT_OFFSET_REFERENCE_PIXELS,
-            -MINIMAP_MAX_OFFSET_REFERENCE_PIXELS, MINIMAP_MAX_OFFSET_REFERENCE_PIXELS);
         const int toggleKey = ParseMinimapToggleKey(configuredToggleKey);
         const bool renderFallback = ParseConfigBoolean(configuredRenderFallback, true);
         const bool debugLogging = ParseConfigBoolean(configuredDebugLogging, false);
         const int mapSampleStep = ParseConfigInteger(configuredMapSampleStep, MINIMAP_DEFAULT_MAP_SAMPLE_STEP, 1, 4);
         const int maxIcons = ParseConfigInteger(configuredMaxIcons, MINIMAP_DEFAULT_MAX_DRAWN_POINTS, 8, 128);
         const int previous = g_minimapPlacement.exchange(static_cast<int>(placement));
-        const int previousOffset = g_minimapOffsetReferencePixels.exchange(offsetReferencePixels);
         const int previousToggleKey = g_minimapToggleKey.exchange(toggleKey);
         const bool previousRenderFallback = g_renderCameraFallbackEnabled.exchange(renderFallback);
         const bool previousDebugLogging = g_debugLoggingEnabled.exchange(debugLogging);
@@ -2001,7 +1925,6 @@ namespace
         if (!forceLog && !hotkeysChanged && !scaleChanged && previousDefaultStyle == defaultStyle &&
             previousMapOrientation == mapOrientation &&
             previous == static_cast<int>(placement) &&
-            previousOffset == offsetReferencePixels &&
             previousToggleKey == toggleKey &&
             previousRenderFallback == renderFallback &&
             previousDebugLogging == debugLogging &&
@@ -2019,9 +1942,6 @@ namespace
             << " | position=" << MinimapPlacementName(placement)
             << " | raw=" << configuredPosition
             << " | position_source=" << positionSource
-            << " | offset=" << offsetReferencePixels
-            << " | offset_raw=" << configuredOffset
-            << " | offset_source=" << offsetSource
             << " | toggle_key=" << MinimapToggleKeyName(toggleKey)
             << " | toggle_raw=" << configuredToggleKey
             << " | toggle_source=" << toggleKeySource
@@ -2050,35 +1970,7 @@ namespace
         Log(oss.str());
     }
 
-    int ComputeMinimapCenterX(std::uint32_t width, int radius, int marginX, int frameHalf, float scale, MinimapPlacement placement)
-    {
-        const auto scaled = [scale](int value) { return static_cast<int>(std::lround(value * scale)); };
-        const int edgeReserve = MaxValue(marginX, scaled(frameHalf - radius) + 8);
-        const int scaledRadius = scaled(radius);
-        if (placement == MinimapPlacement::TopLeft || placement == MinimapPlacement::MiddleLeft || placement == MinimapPlacement::BottomLeft)
-            return edgeReserve + scaledRadius;
-        return static_cast<int>(width) - edgeReserve - scaledRadius;
-    }
-
-    int ComputeMinimapOffsetPixels(std::uint32_t height, int referencePixels)
-    {
-        const int boundedReferencePixels = ClampValue(referencePixels,
-            -MINIMAP_MAX_OFFSET_REFERENCE_PIXELS, MINIMAP_MAX_OFFSET_REFERENCE_PIXELS);
-        const std::int64_t product = static_cast<std::int64_t>(height) * boundedReferencePixels;
-        const std::int64_t half = MINIMAP_OFFSET_REFERENCE_HEIGHT / 2;
-        const std::int64_t scaled = product < 0
-            ? -((-product + half) / MINIMAP_OFFSET_REFERENCE_HEIGHT)
-            : (product + half) / MINIMAP_OFFSET_REFERENCE_HEIGHT;
-        if (scaled > (std::numeric_limits<int>::max)())
-            return (std::numeric_limits<int>::max)();
-        if (scaled < (std::numeric_limits<int>::min)())
-            return (std::numeric_limits<int>::min)();
-        return static_cast<int>(scaled);
-    }
-
-    int ComputeMinimapCenterY(std::uint32_t height, int radius, int marginY, int footerHeight = 0, int frameExtra = 0,
-        MinimapPlacement placement = static_cast<MinimapPlacement>(g_minimapPlacement.load()),
-        int offsetReferencePixels = g_minimapOffsetReferencePixels.load())
+    int ComputeMinimapCenterY(std::uint32_t height, int radius, int marginY, int footerHeight = 0, int frameExtra = 0)
     {
         const int screenHeight = static_cast<int>(height);
         // Reserve the quest title and Journal prompt above the entire frame.
@@ -2089,20 +1981,20 @@ namespace
         const int safeTop = radius + frameExtra + 8;
         const int safeBottom = MaxValue(safeTop, screenHeight - radius - 8 - MaxValue(footerHeight, frameExtra));
 
-        int legacyY = 0;
-        if (placement == MinimapPlacement::TopRight || placement == MinimapPlacement::TopLeft)
-            legacyY = ClampValue(top, safeTop, safeBottom);
-        else if (placement == MinimapPlacement::MiddleRight || placement == MinimapPlacement::MiddleLeft)
-            legacyY = ClampValue(screenHeight / 2, safeTop, safeBottom);
-        else
-            legacyY = ClampValue(bottom, safeTop, safeBottom);
+        MinimapPlacement placement = MinimapPlacement::BottomRight;
+        const int rawPlacement = g_minimapPlacement.load();
+        if (rawPlacement == static_cast<int>(MinimapPlacement::TopRight))
+            placement = MinimapPlacement::TopRight;
+        else if (rawPlacement == static_cast<int>(MinimapPlacement::MiddleRight))
+            placement = MinimapPlacement::MiddleRight;
 
-        if (offsetReferencePixels == 0)
-            return legacyY;
+        int cy = bottom;
+        if (placement == MinimapPlacement::TopRight)
+            cy = top;
+        else if (placement == MinimapPlacement::MiddleRight)
+            cy = screenHeight / 2;
 
-        const int offsetPixels = ComputeMinimapOffsetPixels(height, offsetReferencePixels);
-        const std::int64_t shiftedY = static_cast<std::int64_t>(legacyY) - offsetPixels;
-        return static_cast<int>(ClampValue<std::int64_t>(shiftedY, safeTop, safeBottom));
+        return ClampValue(cy, safeTop, safeBottom);
     }
 
     bool SafeRead(uintptr_t address, void* buffer, std::size_t size)
@@ -2558,27 +2450,55 @@ namespace
     {
         g_menuVisibilityCaptureEpoch.fetch_add(1, std::memory_order_acq_rel);
         g_menuVisibilitySnapshot.Clear();
-        PublicCreativeCompat::ForgetIdentity();
     }
 
-    bool TryReadCurrentHudScreenType(std::uint8_t& screen, std::array<uintptr_t,4>* chain = nullptr)
+    bool TryReadCurrentHudScreenType(std::uint8_t& screen)
     {
-        using PublicCreativeCompat::Copy;
-        using PublicCreativeCompat::Range;
-        uintptr_t context = 0, holder = 0, state = 0, play = 0;
-        if (!g_exeBase || MinimapMenu10::UiContextRva > g_exeImageSize ||
-            sizeof(context) > g_exeImageSize - MinimapMenu10::UiContextRva ||
-            !Range(g_exeBase, g_exeImageSize) ||
-            !Copy(g_exeBase + MinimapMenu10::UiContextRva, &context, sizeof(context)) ||
-            !Range(context, MinimapMenu10::HolderOffset + sizeof(holder)) ||
-            !Copy(context + MinimapMenu10::HolderOffset, &holder, sizeof(holder)) ||
-            !Copy(holder, &state, sizeof(state)) ||
-            !Range(state, MinimapMenu10::PlayStateOffset + sizeof(play)) ||
-            !Copy(state + MinimapMenu10::PlayStateOffset, &play, sizeof(play)) ||
-            !Range(play, MinimapMenu10::ScreenOffset + sizeof(screen)) ||
-            !Copy(play + MinimapMenu10::ScreenOffset, &screen, sizeof(screen))) return false;
-        if (chain) *chain = {context, holder, state, play};
-        return true;
+        uintptr_t context = 0;
+        uintptr_t holder = 0;
+        uintptr_t state = 0;
+        uintptr_t play = 0;
+        if (g_exeBase == 0 ||
+            !SafeReadValue(g_exeBase + MinimapMenu10::UiContextRva, context) || context == 0 ||
+            !SafeReadValue(context + MinimapMenu10::HolderOffset, holder) || holder == 0 ||
+            !SafeReadValue(holder, state) || state == 0 ||
+            !SafeReadValue(state + MinimapMenu10::PlayStateOffset, play) || play == 0)
+        {
+            return false;
+        }
+
+        return SafeReadValue(play + MinimapMenu10::ScreenOffset, screen);
+    }
+
+    void CaptureCurrentHudScreenType()
+    {
+        if (!g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
+            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
+        const std::uint64_t epoch = g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire);
+        std::uint8_t screen = 0;
+        const bool readSucceeded = TryReadCurrentHudScreenType(screen);
+        const std::uint64_t now = GetTickCount64();
+        if (epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
+            !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
+            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
+        {
+            g_menuVisibilitySnapshot.Clear();
+            return;
+        }
+
+        g_menuVisibilitySnapshot.Capture(screen, now, readSucceeded);
+        // A session reset or deactivation can race the scalar publication. Fence
+        // any in-flight callback so an old screen cannot repopulate the snapshot.
+        if (epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
+            !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
+            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
+        {
+            g_menuVisibilitySnapshot.Clear();
+        }
     }
 
     bool CurrentProfileAllowsMinimapGameplay()
@@ -3440,76 +3360,44 @@ namespace
             std::memcmp(actual, expected, sizeof(expected)) == 0;
     }
 
-    bool IsRetainedCurrentMenuCallsiteOwned(Mem::Detour* hook);
-
-    struct MenuOwnershipSample
-    {
-        RendererOwnershipAdapter::MenuAdmission admission = RendererOwnershipAdapter::MenuAdmission::rejected;
-        unsigned kind = 0; // 1 raw,2 private ABI,3 public near,4 public absolute
-        PublicCreativeCompat::Digest identity{}; // Owned scalar digest; never a foreign pointer.
-    };
-
-    bool SampleCurrentMenuOwnership(MenuOwnershipSample& sample, bool retained)
-    {
-        using RendererOwnershipAdapter::MenuAdmission;
-        sample = {};
-        const auto* image = reinterpret_cast<const std::uint8_t*>(g_exeBase);
-        if (!g_exeBase || g_exeImageSize <= RVA_MENU_RENDERER_CALL_1_0 + 10 ||
-            g_exeImageSize <= MinimapMenu10::RendererRva + 18 ||
-            !PublicCreativeCompat::Range(g_exeBase, g_exeImageSize)) return false;
-
-        std::uint8_t callPrefix[5]{};
-        const std::uint8_t* ownedCall = nullptr;
-        if (retained) {
-            if (!IsRetainedCurrentMenuCallsiteOwned(g_menuVisibilityCallHook) ||
-                !MakeDirectCallOpcode(g_exeBase + RVA_MENU_RENDERER_CALL_1_0,
-                    g_exeBase + MinimapMenu10::RendererRva, callPrefix)) return false;
-            ownedCall = callPrefix;
-        }
-        const auto guards = [&](const std::uint8_t* prefix, std::size_t size) {
-            return MinimapMenu10::MatchGuardsWithRendererPrefix(image, g_exeImageSize, prefix, size,
-                ownedCall, ownedCall ? 5 : 0, PublicCreativeCompat::GuardCopy);
-        };
-        std::array<std::uint8_t,18> entry{};
-        if (!PublicCreativeCompat::Copy(g_exeBase + MinimapMenu10::RendererRva, entry.data(), entry.size(), true))
-            return false;
-        if (guards(nullptr, 0)) {
-            PublicCreativeCompat::ForgetIdentity();
-            sample.admission = MenuAdmission::raw; sample.kind = 1;
-            std::copy(entry.begin(), entry.end(), sample.identity.begin());
-            return true;
-        }
-
-        PublicCreativeCompat::Proof publicProof{};
-        if (PublicCreativeCompat::Inspect(g_exeBase + MinimapMenu10::RendererRva, publicProof) &&
-            guards(PublicCreativeCompat::Original, sizeof(PublicCreativeCompat::Original))) {
-            sample.admission = MenuAdmission::owned; sample.kind = publicProof.kind + 2;
-            sample.identity = publicProof.digest; return true;
-        }
-
-        HMODULE provider = nullptr;
-        if (!GetModuleHandleExW(0, L"native_ui_host.dll", &provider)) return false;
-        struct ModuleReference { HMODULE value; ~ModuleReference() { FreeLibrary(value); } } reference{provider};
-        using namespace native_ui_host::renderer_ownership;
-        const auto getter = reinterpret_cast<decltype(&NativeUiHost_GetRendererOwnershipApi)>(
-            GetProcAddress(provider, "NativeUiHost_GetRendererOwnershipApi"));
-        if (!getter) return false;
-        const Api* api = getter(abi_version); // Existing explicit private ownership ABI, never a Creative helper.
-        sample.admission = RendererOwnershipAdapter::EvaluateMenuGuards(image, g_exeImageSize, g_exeBase,
-            api, ownedCall, ownedCall ? 5 : 0, PublicCreativeCompat::GuardCopy);
-        if (!RendererOwnershipAdapter::IsAdmitted(sample.admission)) return false;
-        PublicCreativeCompat::Hash hash;
-        const auto providerIdentity = reinterpret_cast<uintptr_t>(provider);
-        if (!hash.Add(entry.data(), entry.size()) || !hash.Add(&providerIdentity, sizeof(providerIdentity)) ||
-            !hash.Finish(sample.identity)) { sample = {}; return false; }
-        sample.kind = 2; return true;
-    }
-
     RendererOwnershipAdapter::MenuAdmission EvaluateCurrentMenuAdmission()
     {
-        MenuOwnershipSample sample{};
-        SampleCurrentMenuOwnership(sample, false);
-        return sample.admission;
+        using RendererOwnershipAdapter::MenuAdmission;
+        const auto* image = reinterpret_cast<const std::uint8_t*>(g_exeBase);
+        if (!g_exeBase || g_exeImageSize <= RVA_MENU_RENDERER_CALL_1_0 + 5 ||
+            g_exeImageSize <= MinimapMenu10::RendererRva)
+            return MenuAdmission::rejected;
+
+        if (MinimapMenu10::MatchGuards(image, g_exeImageSize))
+            return IsCallsiteCalling(g_exeBase + RVA_MENU_RENDERER_CALL_1_0,
+                g_exeBase + MinimapMenu10::RendererRva)
+                ? MenuAdmission::raw
+                : MenuAdmission::rejected;
+
+        HMODULE provider = nullptr;
+        if (!GetModuleHandleExW(0, L"native_ui_host.dll", &provider))
+            return MenuAdmission::rejected;
+        struct ModuleReference
+        {
+            HMODULE value;
+            ~ModuleReference() { if (value) FreeLibrary(value); }
+        } providerReference{provider};
+
+        using namespace native_ui_host::renderer_ownership;
+        const auto getter = reinterpret_cast<decltype(&NativeUiHost_GetRendererOwnershipApi)>(
+            GetProcAddress(providerReference.value, "NativeUiHost_GetRendererOwnershipApi"));
+        if (!getter)
+            return MenuAdmission::rejected;
+
+        const Api* api = getter(abi_version);
+        const auto admission = RendererOwnershipAdapter::EvaluateMenuGuards(
+            image, g_exeImageSize, g_exeBase, api);
+        if (!RendererOwnershipAdapter::IsAdmitted(admission))
+            return admission;
+        return IsCallsiteCalling(g_exeBase + RVA_MENU_RENDERER_CALL_1_0,
+            g_exeBase + MinimapMenu10::RendererRva)
+            ? admission
+            : MenuAdmission::rejected;
     }
 
     bool IsRetainedMenuCallsiteOwned(
@@ -5063,45 +4951,14 @@ namespace
 
     void CaptureMenuVisibilityCallsiteHook()
     {
-        // Retained relay forwarding is independent of current capture admission.
-        // Stage only local scalar/context identity; never publish before original.
-        const auto epoch = g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire);
-        MenuOwnershipSample before{};
-        std::array<uintptr_t,4> contextBefore{};
-        std::uint8_t initialScreen = 0;
-        const bool staged = g_client10 && g_runtimeCallbacksActive.load(std::memory_order_acquire) &&
-            g_menuVisibilityHookActive.load(std::memory_order_acquire) &&
-            SampleCurrentMenuOwnership(before, true) && TryReadCurrentHudScreenType(initialScreen, &contextBefore);
-        const bool preservePriorGameplay = staged && initialScreen == 1 &&
-            g_menuVisibilitySnapshot.AllowsGameplay(GetTickCount64());
-        if (!preservePriorGameplay) g_menuVisibilitySnapshot.Clear();
-
+        // This call-site shim runs on the verified UI thread. The transient
+        // context is read only around the original renderer call and never kept.
+        CaptureCurrentHudScreenType();
         const auto original = reinterpret_cast<MenuRendererFn>(g_originalMenuRenderer.load(std::memory_order_acquire));
-        if (original == nullptr) { g_menuVisibilitySnapshot.Clear(); return; }
-        original(); // Fixed native game entry, exactly once; no foreign callable retained.
-
-        if (!staged || epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) || !g_client10 ||
-            !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
-            !g_menuVisibilityHookActive.load(std::memory_order_acquire)) {
-            g_menuVisibilitySnapshot.Clear();
-            return;
-        }
-        std::uint8_t screen = 0;
-        std::array<uintptr_t,4> contextAfter{};
-        MenuOwnershipSample after{};
-        if (!TryReadCurrentHudScreenType(screen, &contextAfter) || contextBefore != contextAfter ||
-            !SampleCurrentMenuOwnership(after, true) || before.kind != after.kind || before.identity != after.identity ||
-            epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) || !g_client10 ||
-            !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
-            !g_menuVisibilityHookActive.load(std::memory_order_acquire)) {
-            g_menuVisibilitySnapshot.Clear();
-            return;
-        }
-        g_menuVisibilitySnapshot.Capture(screen, GetTickCount64(), true);
-        if (epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
-            !g_client10 ||
-            !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
-            !g_menuVisibilityHookActive.load(std::memory_order_acquire)) g_menuVisibilitySnapshot.Clear();
+        if (original == nullptr)
+            return; // The call site is patched only after its exact target is validated.
+        original();
+        CaptureCurrentHudScreenType();
     }
 
     void __fastcall CaptureRenderPresentFrameHook(void* renderContext, void*, void* swapchainState, void*)
@@ -9653,16 +9510,13 @@ namespace
         const bool showPanel = showClock || weather.valid;
         const int frameHalf = hasRasterFrame ? MinimapRasterVisibleHalfHeight(radius, frameExtra) : radius + 26;
         const int frameYOffset = hasRasterFrame ? -MaxValue(1, (2 * (radius + frameExtra) + 128) / 256) : 0;
-        const MinimapPlacement placement = static_cast<MinimapPlacement>(g_minimapPlacement.load());
-        const int offsetReferencePixels = g_minimapOffsetReferencePixels.load();
-        const int cx = ComputeMinimapCenterX(renderer.width, radius, marginX, frameHalf, scale, placement);
+        const int cx = static_cast<int>(renderer.width) - MaxValue(marginX, scaled(frameHalf - radius) + 8) - scaled(radius);
         const int frameTopExtra = frameHalf - frameYOffset - radius;
         const int frameBottomExtra = frameHalf + frameYOffset - radius;
         // Use the visible ornament, not the padded texture, for clock spacing.
         const int clockFooter = frameBottomExtra + CLOCK_FRAME_GAP + 2 * CLOCK_PANEL_HALF_HEIGHT;
         const int cy = ComputeMinimapCenterY(renderer.height, scaled(radius), marginY,
-            scaled(showPanel ? clockFooter : frameBottomExtra), scaled(frameTopExtra), placement,
-            offsetReferencePixels);
+            scaled(showPanel ? clockFooter : frameBottomExtra), scaled(frameTopExtra));
         MinimapScaleScope widgetScale(renderer, scale, cx, cy);
         const int zoomStep = ClampValue(g_minimapZoomStep.load(), MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
         const float zoom = std::pow(1.32f, static_cast<float>(zoomStep));

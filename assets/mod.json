@@ -1,8 +1,8 @@
 {
   "id": "minimap_mod",
-  "version": "0.5.13",
-  "name": "Shroudweave Minimap",
-  "description": "In-game minimap with normal-startup compatibility for unchanged original Creative Mode 2.1.4. Local single-player coexistence verified; other loader combinations and multiplayer remain unverified.",
+  "version": "0.5.12",
+  "name": "Sparkweave Minimap",
+  "description": "Community-maintained in-game minimap and weather clock; GPU terrain rendering with CPU fallback.",
   "author": "Aerox912; original minimap by elxokker",
   "authors": [
     "elxokker",
@@ -13,7 +13,6 @@
     "default": {
       "active": true,
       "position": "bottom-right",
-      "offset": 0,
       "toggle_key": "F10",
       "render_camera_fallback": true,
       "debug_logging": false,
