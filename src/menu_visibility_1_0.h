@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -15,13 +16,16 @@ namespace MinimapMenu10
     constexpr std::uint64_t MaxAgeMs = 500;
     constexpr std::uint64_t MaxTick = UINT64_MAX >> 8;
 
+    using GuardReader = bool (*)(const std::uint8_t*, void*, std::size_t);
+
     namespace detail
     {
         using namespace std::literals;
         struct Guard { std::size_t rva; std::string_view bytes; };
         inline bool MatchGuardTable(
             const std::uint8_t* image, std::size_t imageSize,
-            const std::uint8_t* rendererPrefix, std::size_t rendererPrefixSize)
+            const std::uint8_t* rendererPrefix, std::size_t rendererPrefixSize,
+            const std::uint8_t* callPrefix, std::size_t callPrefixSize, GuardReader reader)
         {
             constexpr Guard guards[] = {
             {0xc4e0c0, "\x4c\x8b\xdc\x55\x49\x8d\xab\xe8\xfd\xff\xff\x48\x81\xec\x10\x03\x00\x00"sv},
@@ -47,29 +51,42 @@ namespace MinimapMenu10
                     return false;
             }
 
+            if (callPrefix || callPrefixSize) {
+                // Only the independently proved retained CALL's original5B can
+                // be overlaid. Its following CALL remains an ordinary guard.
+                if (!callPrefix || callPrefixSize != 5) return false;
+                for (const auto& guard : guards)
+                    if (guard.rva == 0xbc093a && std::memcmp(callPrefix, guard.bytes.data(), 5)) return false;
+            }
             for (const auto& guard : guards)
             {
                 if (rendererPrefix && guard.rva == RendererRva) continue;
-                if (guard.rva > imageSize || guard.bytes.size() > imageSize - guard.rva ||
-                    std::memcmp(image + guard.rva, guard.bytes.data(), guard.bytes.size()) != 0)
+                if (guard.rva > imageSize || guard.bytes.size() > imageSize - guard.rva || guard.bytes.size() > 64)
                     return false;
+                std::array<std::uint8_t,64> actual{};
+                if (reader) {
+                    if (!reader(image + guard.rva, actual.data(), guard.bytes.size())) return false;
+                } else std::memcpy(actual.data(), image + guard.rva, guard.bytes.size());
+                if (callPrefix && guard.rva == 0xbc093a) std::memcpy(actual.data(), callPrefix, 5);
+                if (std::memcmp(actual.data(), guard.bytes.data(), guard.bytes.size())) return false;
             }
             return true;
         }
     }
 
     // Check after exact-profile admission and before patching; the UI context is stack-local.
-    inline bool MatchGuards(const std::uint8_t* image, std::size_t imageSize)
+    inline bool MatchGuards(const std::uint8_t* image, std::size_t imageSize, GuardReader reader = nullptr)
     {
-        return detail::MatchGuardTable(image, imageSize, nullptr, 0);
+        return detail::MatchGuardTable(image, imageSize, nullptr, 0, nullptr, 0, reader);
     }
 
     // Only the exact original 18-byte renderer entry may be replaced after ownership proof.
     inline bool MatchGuardsWithRendererPrefix(
         const std::uint8_t* image, std::size_t imageSize,
-        const std::uint8_t* rendererPrefix, std::size_t rendererPrefixSize)
+        const std::uint8_t* rendererPrefix, std::size_t rendererPrefixSize,
+        const std::uint8_t* ownedCallPrefix = nullptr, std::size_t ownedCallSize = 0, GuardReader reader = nullptr)
     {
-        return detail::MatchGuardTable(image, imageSize, rendererPrefix, rendererPrefixSize);
+        return detail::MatchGuardTable(image, imageSize, rendererPrefix, rendererPrefixSize, ownedCallPrefix, ownedCallSize, reader);
     }
 
     class Snapshot

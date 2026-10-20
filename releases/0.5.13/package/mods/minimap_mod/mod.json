@@ -1,0 +1,45 @@
+{
+  "id": "minimap_mod",
+  "version": "0.5.13",
+  "name": "Shroudweave Minimap",
+  "description": "In-game minimap with normal-startup compatibility for unchanged original Creative Mode 2.1.4. Local single-player coexistence verified; other loader combinations and multiplayer remain unverified.",
+  "author": "Aerox912; original minimap by elxokker",
+  "authors": [
+    "elxokker",
+    "Aerox912"
+  ],
+  "capabilities": [],
+  "shroudtopia": {
+    "default": {
+      "active": true,
+      "position": "bottom-right",
+      "offset": 0,
+      "toggle_key": "F10",
+      "render_camera_fallback": true,
+      "debug_logging": false,
+      "show_other_players": true,
+      "show_pings": true,
+      "show_waypoints": true,
+      "show_world_markers": true,
+      "show_death_markers": true,
+      "map_light": 55,
+      "map_style": "default",
+      "map_orientation": "north-up",
+      "icon_style": "original",
+      "heading_smoothing_ms": 55,
+      "map_sample_step": 2,
+      "max_icons": 64,
+      "show_clock": true,
+      "show_weather": true,
+      "show_fog_of_war": true,
+      "toggle_key_secondary": "0x6A",
+      "zoom_in_key": "0xBB",
+      "zoom_in_key_secondary": "0x6B",
+      "zoom_out_key": "0xBD",
+      "zoom_out_key_secondary": "0x6D",
+      "scale_percent": 100,
+      "size_decrease_key": "F9",
+      "size_increase_key": "F11"
+    }
+  }
+}
