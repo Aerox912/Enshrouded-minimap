@@ -84,10 +84,14 @@ try {
         }
         $test = Get-ChildItem -LiteralPath "$root/build" -Recurse -File -Filter "$name.exe" | Select-Object -First 1
         if (-not $test) { throw "Missing test executable: $name" }
-        $arguments = if ($name -in $fixtureTests) { @($fixture.FullName) }
-            elseif ($name -eq 'frame_failure_test') { @($frameFailureFixtureRoot) }
-            else { @() }
-        & $test.FullName @arguments
+        $testPath = $test.FullName
+        if ($name -eq 'frame_failure_test') {
+            & $testPath $frameFailureFixtureRoot
+        } elseif ($name -in $fixtureTests) {
+            & $testPath $fixture.FullName
+        } else {
+            & $testPath
+        }
         if ($LASTEXITCODE) { throw "Test failed: $name" }
         $results += [ordered]@{ name = $name; status = 'PASSED' }
     }

@@ -4,7 +4,7 @@
   "sourceInputPurpose": "Frozen tested Minimap implementation snapshot, normalized to release version metadata in this source tree.",
   "candidateSourceZipSha256": "b6275d104963ce169a389b168f960b4f5bae9f30d49a22f578292a8954f014d2",
   "baselineSourceZipSha256": "56a31365f1873d517b091d0d4e8670060c5bbf6684a33aab7880e49fed31bb05",
-  "acceptedNativeSourceTreeSha256": "7c498363fe338a21417a7f4291662fc64c93ffccce5616ad9cf607b00dd4b9ce",
+  "acceptedNativeSourceTreeSha256": "61e63b07e1005817f968262bce0c583ec21ddf9674745932a85d77445f1ce6dc",
   "nativePaths": [
     ".github/workflows/release.yml",
     "assets/embervale_bright_palette.json",
@@ -236,8 +236,8 @@
     },
     {
       "path": "ci/build.ps1",
-      "lengthBytes": 7040,
-      "sha256": "d8c0fe470eb997e42cfb275238e54fbd7293a011da6c8b0cf1d16e3e24bd9de1"
+      "lengthBytes": 7088,
+      "sha256": "8de2fe088e6dd4f08ab5bf00c2a0740a11f8cf0990c31072c75257d0c217ab90"
     },
     {
       "path": "ci/pipeline-tests.ps1",
