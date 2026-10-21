@@ -12,7 +12,7 @@ namespace {
     std::array<unsigned char,64> mapped{};
 
     void Check(bool ok, const char* text) {
-        if (!ok) { std::cerr << "FAIL: " << text << '\n'; std::exit(1); }
+        if (!ok) { std::cerr << "FAIL: stage=" << failure << " mode=" << failureMode << " hits=" << hits << " calls=" << calls << ": " << text << '\n'; std::exit(1); }
         std::cout << "PASS: " << text << '\n';
     }
     std::int32_t Create(const char* stage, void** handle) {
