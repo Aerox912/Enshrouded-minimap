@@ -1,21 +1,19 @@
-name: Build and release
+name: Build Minimap 0.5.15
+
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build:
     runs-on: windows-2022
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: microsoft/setup-msbuild@v2
       - name: Prepare pinned shader compiler
         shell: pwsh
@@ -28,60 +26,19 @@ jobs:
           $compiler = @(Get-ChildItem -LiteralPath $toolRoot -Recurse -File -Filter glslang.exe)
           if ($compiler.Count -ne 1) { throw 'Expected one shader compiler' }
           "MINIMAP_GLSLANG=$($compiler[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Check pipeline input validation
+      - name: Check source inventory and workflow inputs
         shell: pwsh
         run: ./ci/pipeline-tests.ps1
-      - name: Build, test and package
+      - name: Build, run focused tests, and package
         shell: pwsh
-        run: ./ci/build.ps1 -AllowMissingFixture
+        run: ./ci/build.ps1 -OutputDirectory ./dist
       - uses: actions/upload-artifact@v4
         with:
-          name: minimap
+          name: shroudweave-minimap-v0.5.15-${{ github.sha }}
           path: |
             dist/*.zip
-            dist/*.json
+            dist/*.sha256
+            dist/BUILD-RECEIPT.json
             dist/SHA256SUMS.txt
           if-no-files-found: error
-      - name: Publish tagged release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $receipt = Get-Content ./dist/BUILD-RECEIPT.json -Raw | ConvertFrom-Json
-          if ($env:GITHUB_REF_NAME -cne "v$($receipt.version)" -or -not $receipt.matchesAcceptedRuntime) {
-            throw 'Tag or rebuilt DLL differs from accepted release identity; candidate requires review before publication'
-          }
-          $assets=@(Get-ChildItem ./dist -File | Where-Object { $_.Extension -in @('.zip', '.json') -or $_.Name -eq 'SHA256SUMS.txt' } | ForEach-Object FullName)
-          gh release create $env:GITHUB_REF_NAME --draft --title $env:GITHUB_REF_NAME --generate-notes @assets
-          if ($LASTEXITCODE) { throw 'Release upload failed' }
-          gh release edit $env:GITHUB_REF_NAME --draft=false
-          if ($LASTEXITCODE) { throw 'Release publication failed' }
-
-  notify-packages:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') && vars.RELEASE_APP_ID != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/create-github-app-token@v2
-        id: app
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          owner: Aerox912
-          repositories: |
-            enshrouded-client-installer
-          permission-contents: write
-      - name: Notify only affected packages
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          $body=@{event_type='component-released';client_payload=@{component='minimap';tag=$env:GITHUB_REF_NAME}} | ConvertTo-Json -Compress
-          $body | Set-Content ./dispatch.json -Encoding utf8
-          foreach($repo in @('enshrouded-client-installer')) {
-            gh api --method POST "repos/Aerox912/$repo/dispatches" --input ./dispatch.json
-            if($LASTEXITCODE){throw 'Package notification failed'}
-          }
+          retention-days: 90

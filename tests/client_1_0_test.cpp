@@ -120,7 +120,7 @@ void CheckReaders10()
         Put10(entries.data(),i*0xA0+0x20,WorldToFixed(1200));
         Put10(entries.data(),i*0xA0+0x30,std::uint32_t{WORLD_MAP_FLAME_ALTAR});
     }
-    std::vector<unsigned char> state(0x3E6A90);
+    std::vector<unsigned char> state(0x3BEA68);
     Put10(state.data(),0x36EA00,reinterpret_cast<uintptr_t>(entries.data()));Put10(state.data(),0x36EA08,std::uint64_t{2});
     g_worldMapLayoutSupported=true;g_deathMarkerLayoutSupported=true;
     CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()),100);
@@ -157,6 +157,7 @@ void CheckReaders10()
 int main(int argc,char** argv)
 {
     Check10(argc>=2,"client fixture supplied");
+    g_clientProfile = MinimapClient10::IdentifyFile(argv[1]);
     Check10(MinimapClient10::MatchesFile(argv[1]),"exact current executable SHA256 is accepted");
     if(argc>2) Check10(!MinimapClient10::MatchesFile(argv[2]),"old executable cannot select current ABI");
     std::ifstream in(argv[1],std::ios::binary|std::ios::ate);
@@ -172,48 +173,32 @@ int main(int argc,char** argv)
         std::memcpy(image.data()+s.VirtualAddress,file.data()+s.PointerToRawData,s.SizeOfRawData);
     }
     g_exeBase=reinterpret_cast<uintptr_t>(image.data());g_exeImageSize=image.size();
-    for(auto rva:{0x1e02290,0x1e0c200,0x1e02460,0x1e06420,0x1e03360,0x1e08760,0x1e041d0,0x1e07210,0x1e0d770,0x1e11c00,0x1de8520})
+    for(auto rva:{ClientRva(0x1e02290),ClientRva(0x1e0c200),ClientRva(0x1e02460),ClientRva(0x1e06420),ClientRva(0x1e03360),ClientRva(0x1e08760),ClientRva(0x1e041d0),ClientRva(0x1e07210),ClientRva(0x1e0d770),ClientRva(0x1e11c00),ClientRva(0x1de8520)})
         for(int word:{0,2}) { auto* p=reinterpret_cast<uintptr_t*>(image.data()+rva+word*8);*p=*p-nt->OptionalHeader.ImageBase+g_exeBase; }
-    for(int i=0;i<4;++i) { auto* p=reinterpret_cast<uintptr_t*>(image.data()+0x1bbb4d0+i*0x28);*p=*p-nt->OptionalHeader.ImageBase+g_exeBase; }
-    g_iterInit=reinterpret_cast<IterInitFn>(g_exeBase+0x9bab60);
-    g_iterNext=reinterpret_cast<IterNextFn>(g_exeBase+0x9b5a50);
+    for(int i=0;i<4;++i) { auto* p=reinterpret_cast<uintptr_t*>(image.data()+ClientRva(0x1bbb4d0)+i*0x28);*p=*p-nt->OptionalHeader.ImageBase+g_exeBase; }
+    g_iterInit=reinterpret_cast<IterInitFn>(g_exeBase+ClientRva(0x9bab60));
+    g_iterNext=reinterpret_cast<IterNextFn>(g_exeBase+ClientRva(0x9b5a50));
     g_client10=true;
     Check10(NamedClient10() && MatchCamera10() && MatchRenderer10(),"named camera and Vulkan contracts match current executable");
     Check10(HasVerifiedWorldMapLayout(),"current 1.0 world map contract is accepted");
     Check10(HasVerifiedDeathMarkerLayout() && HasVerifiedWorldClockLayout() && HasVerifiedWorldWeatherLayout() && HasVerifiedLiveFogLayout() && HasVerifiedLiveMarkerLayout(),"all optional current feature contracts match");
-    Check10(IsNamedSystemAt(0x1de8520,"knowledge_query_mapmarker_visibility",0x414dc0) && MatchVisibility10(),"visibility is tied to the actual named system");
-    for(auto rva:{0x2b29c0,0x9bab60,0x9b5a50,0x9b2e40,0x3b4e40}) {
+    Check10(IsNamedSystemAt(ClientRva(0x1de8520),"knowledge_query_mapmarker_visibility",ClientRva(0x414dc0)) && MatchVisibility10(),"visibility is tied to the actual named system");
+    for(auto rva:{ClientRva(0x2b29c0),ClientRva(0x9bab60),ClientRva(0x9b5a50),ClientRva(0x9b2e40),ClientRva(0x3b4e40)}) {
         image[rva]^=1;Check10(!MatchCamera10(),"changed camera ABI is rejected");image[rva]^=1;
     }
-    for(auto rva:{0xfd1a10,0xfd2663,0xfddfa0,0xfe0fb3,0xfe1d54}) {
+    for(auto rva:{ClientRva(0xfd1a10),ClientRva(0xfd2663),ClientRva(0xfddfa0),ClientRva(0xfe0fb3),ClientRva(0xfe1d54)}) {
         image[rva]^=1;Check10(!MatchRenderer10(),"changed renderer ABI is rejected");image[rva]^=1;
     }
-    // Mutate the private PE mapping, then execute real gate/capture/copy behavior.
-    for(const auto rva : {0x150ADE0, 0x310C6A, 0x310C67, 0xD8DF3F, 0xD8DF73,
-        0xD8DFAB, 0xD8DFDA, 0x1D6DE20}) {
-        image[rva] ^= 1;
-        Check10(!HasVerifiedDeathMarkerLayout() && HasVerifiedWorldMapLayout(),
-            "changed tombstone category, selector, consumer or diagnostic disables only death semantics");
-        std::vector<unsigned char> ui(0x3E6A90), poi(0xA0), death(0xA0);
-        Put10(poi.data(), 0x10, WorldToFixed(1000));Put10(poi.data(), 0x18, WorldToFixed(200));
-        Put10(poi.data(), 0x20, WorldToFixed(1200));Put10(poi.data(), 0x30, std::uint32_t{WORLD_MAP_FLAME_ALTAR});
-        Put10(death.data(), 0x10, WorldToFixed(1020));Put10(death.data(), 0x18, WorldToFixed(200));
-        Put10(death.data(), 0x20, WorldToFixed(1000));Put10(death.data(), 0x30, std::uint32_t{0x1AD8F96E});
-        Put10(ui.data(), 0x36EA00, reinterpret_cast<uintptr_t>(poi.data()));Put10(ui.data(), 0x36EA08, std::uint64_t{1});
-        Put10(ui.data(), 0x3E6A78, reinterpret_cast<uintptr_t>(death.data()));Put10(ui.data(), 0x3E6A80, std::uint64_t{1});
-        g_worldMapLayoutSupported=HasVerifiedWorldMapLayout();g_deathMarkerLayoutSupported=HasVerifiedDeathMarkerLayout();
-        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(ui.data()),100);
-        const auto markers=CopyWorldMapMarkers(100);
-        Check10(g_worldMapValid && markers.size()==1 && markers[0].key==WORLD_MAP_FLAME_ALTAR && CopyDeathMarkers(100).empty(),
-            "death-only semantic rejection preserves real POI capture and suppresses death publication");
-        image[rva] ^= 1;
-        Check10(HasVerifiedDeathMarkerLayout(), "restored semantic evidence admits tombstones again");
-    }
-    ClearLiveMarkers();
-    image[0x307104]^=1;Check10(!HasVerifiedLiveFogLayout() && HasVerifiedWorldClockLayout(),"changed fog call disables only fog");image[0x307104]^=1;
-    image[0x2fdb78]^=1;Check10(!HasVerifiedWorldWeatherLayout() && HasVerifiedWorldMapLayout(),"changed weather call disables only weather");image[0x2fdb78]^=1;
-    image[0x1bbb4e0]^=1;Check10(!HasVerifiedWorldWeatherLayout(),"changed weather enum is rejected");image[0x1bbb4e0]^=1;
-    image[0x1e022a0]^=1;Check10(!NamedClient10(),"matching name with wrong camera function is rejected");image[0x1e022a0]^=1;
+    image[ClientRva(0x307104)]^=1;Check10(!HasVerifiedLiveFogLayout() && HasVerifiedWorldClockLayout(),"changed fog call disables only fog");image[ClientRva(0x307104)]^=1;
+    image[ClientRva(0x2fdb78)]^=1;Check10(!HasVerifiedWorldWeatherLayout() && HasVerifiedWorldMapLayout(),"changed weather call disables only weather");image[ClientRva(0x2fdb78)]^=1;
+    image[ClientRva(0x1bbb4d0)+0x10]^=1;Check10(!HasVerifiedWorldWeatherLayout(),"changed weather enum is rejected");image[ClientRva(0x1bbb4d0)+0x10]^=1;
+    image[ClientRva(0x1e02290)+0x10]^=1;Check10(!NamedClient10(),"matching name with wrong camera function is rejected");image[ClientRva(0x1e02290)+0x10]^=1;
+    const auto selected = g_clientProfile;
+    g_clientProfile = selected == MinimapClient10::Profile::Build26082781 ? MinimapClient10::Profile::Build25988036 : MinimapClient10::Profile::Build26082781;
+    Check10(!NamedClient10() && !MatchCamera10() && !MatchRenderer10(), "opposite profile cannot admit this fixture");
+    g_clientProfile = MinimapClient10::Profile::Unsupported;
+    Check10(ClientRva(0x2b29c0)==0 && !MatchCamera10() && !MatchRenderer10(), "unsupported profile has no addresses or core admission");
+    g_clientProfile = selected;
     CheckReaders10();
     CheckInactive10();
     CheckLifecycle10();

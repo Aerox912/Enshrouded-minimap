@@ -9,7 +9,7 @@ namespace {
     uintptr_t nextHandle = 100;
     std::map<void*,std::string> live;
     std::map<void*,void*> bindings;
-    std::vector<unsigned char> mapped(64);
+    std::array<unsigned char,64> mapped{};
 
     void Check(bool ok, const char* text) {
         if (!ok) { std::cerr << "FAIL: " << text << '\n'; std::exit(1); }
@@ -127,6 +127,4 @@ int main() {
     }
     Setup(0);g_renderer.fns.destroyImageView=nullptr;
     Check(!TryCreateTexturedFrameResourcesLocked(g_renderer) && live.empty(),"missing destruction function rejects allocation");
-    return 0;
 }
-

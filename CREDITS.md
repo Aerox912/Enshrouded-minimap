@@ -15,9 +15,6 @@ update from elxokker. It includes the changes submitted upstream as
 [PR #6](https://github.com/elxokker/Enshrouded-minimap/pull/6).
 Please report problems with this build to the fork's issue tracker.
 
-The local Sparkweave-branded candidate is displayed as **Sparkweave Minimap**.
-This name does not change the upstream authorship, technical mod ID, or license.
-
 ## Other acknowledgements
 
 - **s0T7x / Miguel Oppermann**: [Shroudtopia](https://github.com/s0t7x/shroudtopia),
@@ -31,13 +28,13 @@ This name does not change the upstream authorship, technical mod ID, or license.
 
 ## License and provenance
 
-This fork is built from the GitHub source repository, which is published
+This release is built from the GitHub source repository, which is published
 under the MIT license. The unmodified [LICENSE](LICENSE), including its existing
 copyright notice for Miguel Oppermann, is included in the source and binary ZIP.
 The upstream license can be inspected at
 [the source revision used by this fork](https://github.com/elxokker/Enshrouded-minimap/blob/ca881bcff534699ee7d2a068c2c351d1124f06f0/LICENSE).
 
-The candidate is compiled from source rather than copied from the original
-Nexus download. Third-party game artwork and trademarks remain the property of their
+The release is compiled from source rather than copied from the original Nexus
+download. Third-party game artwork and trademarks remain the property of their
 respective owners; this fork does not claim ownership of them. Shroudtopia and
 Microsoft runtime installers are linked as requirements and are not bundled.

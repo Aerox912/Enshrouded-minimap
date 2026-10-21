@@ -231,58 +231,10 @@ int main(int argc, char** argv)
     Check(clipped && px == 106, "distant marker clamps to minimap rim");
     VulkanMinimapRenderer renderer{};
     renderer.width = renderer.height = 128; renderer.fns.cmdClearAttachments = Raster;
-    const bool oldWorldMarkerLayout=g_worldMapLayoutSupported, oldLiveMarkerLayout=g_liveMarkerLayoutSupported;
-    g_worldMapLayoutSupported=false; g_liveMarkerLayoutSupported=false; g_showWaypoints=true;
-    g_waypoints.clear(); g_nearbyMarkers.clear(); g_visibleMapMarkers.clear();
-    CapturedWaypoint scratchWaypoint{}; scratchWaypoint.x=WorldToFixed(1000); scratchWaypoint.z=WorldToFixed(2000);
-    g_waypoints.push_back(scratchWaypoint); g_lastWaypointTick=GetTickCount();
-    CopyWaypoints(renderer.markerWaypointScratch);
-    CapturedNearbyMarker scratchNearby{}; scratchNearby.x=WorldToFixed(3500); scratchNearby.z=WorldToFixed(4500);
-    scratchNearby.kind=1; scratchNearby.hasWorldPosition=true;
-    g_nearbyMarkers.push_back(scratchNearby);
-    CopyNearbyMarkers(renderer.markerNearbyScratch);
-    CopyVisibleMapMarkers(renderer.markerVisibleMapScratch);
-    renderer.markerWorldPointScratch.clear();
-    BuildWorldPoints(renderer,renderer.markerWorldPointScratch,renderer.markerWaypointScratch,
-        renderer.markerNearbyScratch,renderer.markerVisibleMapScratch);
-    Check(renderer.markerWorldPointScratch.size()==2 &&
-        std::fabs(renderer.markerWorldPointScratch[0].x-1000.0f)<0.001f &&
-        std::fabs(renderer.markerWorldPointScratch[1].x-3500.0f)<0.001f,
-        "reused marker snapshots preserve waypoint and nearby-marker draw order and positions");
-    const auto waypointCapacity=renderer.markerWaypointScratch.capacity();
-    const auto nearbyCapacity=renderer.markerNearbyScratch.capacity();
-    const auto pointsCapacity=renderer.markerWorldPointScratch.capacity();
-    g_waypoints[0].x=WorldToFixed(1250); g_nearbyMarkers[0].x=WorldToFixed(3750);
-    CopyWaypoints(renderer.markerWaypointScratch); CopyNearbyMarkers(renderer.markerNearbyScratch);
-    renderer.markerWorldPointScratch.clear();
-    BuildWorldPoints(renderer,renderer.markerWorldPointScratch,renderer.markerWaypointScratch,
-        renderer.markerNearbyScratch,renderer.markerVisibleMapScratch);
-    Check(renderer.markerWorldPointScratch.size()==2 &&
-        std::fabs(renderer.markerWorldPointScratch[0].x-1250.0f)<0.001f &&
-        std::fabs(renderer.markerWorldPointScratch[1].x-3750.0f)<0.001f &&
-        renderer.markerWaypointScratch.capacity()==waypointCapacity &&
-        renderer.markerNearbyScratch.capacity()==nearbyCapacity &&
-        renderer.markerWorldPointScratch.capacity()==pointsCapacity,
-        "changed marker snapshots reuse render-owned vector capacity without changing results");
-    g_waypoints.clear(); g_nearbyMarkers.clear();
-    CopyWaypoints(renderer.markerWaypointScratch); CopyNearbyMarkers(renderer.markerNearbyScratch);
-    renderer.markerWorldPointScratch.clear();
-    BuildWorldPoints(renderer,renderer.markerWorldPointScratch,renderer.markerWaypointScratch,
-        renderer.markerNearbyScratch,renderer.markerVisibleMapScratch);
-    Check(renderer.markerWorldPointScratch.empty() &&
-        renderer.markerWaypointScratch.capacity()==waypointCapacity &&
-        renderer.markerNearbyScratch.capacity()==nearbyCapacity,
-        "empty marker snapshots clear rendered points while retaining bounded scratch storage");
-    g_worldMapLayoutSupported=oldWorldMarkerLayout; g_liveMarkerLayoutSupported=oldLiveMarkerLayout;
     DrawWaypointDiamond(renderer, nullptr, 64, 64);
     Check(pixels[64][64].r == 0.2f && pixels[64][70].b == 0.4f && pixels[64][79].r == 1.0f,
         "yellow waypoint outline preserves centre and underlying icon pixels");
-    const auto* diamondScratchStorage=renderer.markerDiamondScratch.data();
-    const auto diamondScratchCapacity=renderer.markerDiamondScratch.capacity();
-    DrawWaypointDiamond(renderer, nullptr, 64, 64);
-    Check(renderer.markerDiamondScratch.data()==diamondScratchStorage &&
-        renderer.markerDiamondScratch.capacity()==diamondScratchCapacity,
-        "repeated waypoint outlines reuse render-owned rectangle storage");    DrawPingDiamond(renderer, nullptr, 32, 32);
+    DrawPingDiamond(renderer, nullptr, 32, 32);
     Check(pixels[32][38].g > pixels[32][38].r && pixels[32][32].g < 0.2f,
         "green ping diamond has a dark arrow centre");
     g_playerArrow.attempted = true; // Exercise procedural fallback when the asset is absent.
@@ -290,18 +242,7 @@ int main(int argc, char** argv)
     DrawRemotePlayerArrow(renderer, nullptr, 96, 32, 1.5707963f);
     Check(clearCalls <= 8 && pixels[32][105].g > pixels[32][105].r && pixels[21][96].r == 0.2f,
         "green player arrow rotates and batches draw commands");
-    std::array<std::size_t,8> arrowCapacities{};
-    std::array<const VkClearRect*,8> arrowStorage{};
-    for(std::size_t i=0;i<arrowStorage.size();++i) {
-        arrowCapacities[i]=renderer.markerArrowShadeScratch[i].capacity();
-        arrowStorage[i]=renderer.markerArrowShadeScratch[i].data();
-    }
-    DrawRemotePlayerArrow(renderer, nullptr, 96, 32, 1.5707963f);
-    bool arrowScratchReused=true;
-    for(std::size_t i=0;i<arrowStorage.size();++i)
-        arrowScratchReused &= arrowCapacities[i]==renderer.markerArrowShadeScratch[i].capacity() &&
-            arrowStorage[i]==renderer.markerArrowShadeScratch[i].data();
-    Check(arrowScratchReused,"repeated player-arrow drawing reuses shade rectangle storage");
+
     Check(TryLoadPlayerArrowFromPath("assets/embervale_player_arrow.rgba", g_playerArrow), "load the actual local-player arrow asset");
     for (auto& row : pixels) for (auto& pixel : row) pixel = {};
     clearCalls = 0;

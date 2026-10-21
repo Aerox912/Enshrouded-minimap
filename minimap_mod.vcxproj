@@ -92,15 +92,17 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="src\pch.h" />
-    <ClInclude Include="src\terrain_gpu.h" />
     <ClInclude Include="src\live_markers.h" />
     <ClInclude Include="src\map_appearance.h" />
     <ClInclude Include="src\client_1_0_profile.h" />
     <ClInclude Include="src\client_1_0_guards.h" />
-    <ClInclude Include="src\menu_visibility_1_0.h" />
+    <ClInclude Include="src\aggregate_timing.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\dllmain.cpp" />
+    <ClCompile Include="src\aggregate_timing.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>

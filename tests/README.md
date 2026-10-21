@@ -1,4 +1,23 @@
-# Camera tracking regression tests
+# Test suite
+
+`ci/build.ps1` builds and runs these eight projects with Release/x64 and MSVC v143: `tracking`, `renderer`, `markers`, `map_features`, `client_1_0`, `frame_failure`, `hdr` and `patch_profile`. The focused manual commands below remain available for individual checks. The private r2 backport adds two offline-only focused projects, `menu_visibility_test` and `public_creative_compat_test`; they are not part of CI or runtime acceptance.
+
+## Private r2 backport menu and Creative checks
+
+From a Visual Studio x64 Native Tools prompt, build these projects with MSVC v143:
+
+```powershell
+MSBuild tests\menu_visibility_test.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+.\build\tests\menu_visibility_test.exe "D:\Games\SteamLibrary\steamapps\common\Enshrouded\Enshrouded.exe"
+
+python tests\prepare_public_creative_fixture.py --zip "PATH_TO_ORIGINAL_CREATIVE_2.1.4_ZIP" --out build\test-data\public-creative
+MSBuild tests\public_creative_compat_test.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+.\build\public-creative-tests\public_creative_compat_test.exe "D:\Games\SteamLibrary\steamapps\common\Enshrouded\Enshrouded.exe" .\build\test-data\public-creative\public-module-data.bin .\build\test-data\public-creative\wrong-module-data.bin
+```
+
+The fixture-preparation script checks the approved ZIP and DLL hashes, then writes inert module data only; it never loads or executes the DLL. Keep the generated fixture directory outside distributable ZIPs. These checks cover offline guard/admission behavior, not in-game rendering, Creative menu behavior, FPS or long-session stability.
+
+## Camera tracking regression tests
 
 From a Visual Studio x64 Native Tools prompt at the repository root:
 
@@ -7,8 +26,9 @@ MSBuild tests\tracking_test.vcxproj /p:Configuration=Release /p:Platform=x64
 .\build\tests\tracking_test.exe
 ```
 
-The project defaults to v142, matching the mod. For Visual Studio 2022 with
-v143 installed, add `/p:PlatformToolset=v143` to the build command. Build output
+The project files retain v142 as their fallback toolset. The r2 CI and standalone
+build entry points select v143; add `/p:PlatformToolset=v143` to this command for
+matching results. Build output
 can be redirected with the usual `OutDir` and `IntDir` MSBuild properties.
 
 The executable includes the production reader and supplies synthetic ECS records.
@@ -144,46 +164,3 @@ region while searching for space. Native tests intermittently faulted in ntdll,
 sometimes during process exit. It now reserves only free addresses within rel32
 reach without changing occupied regions. Thirty consecutive native test runs
 passed after the fix; twelve sanitizer runs had also passed during diagnosis.
-
-## 0.5.11-local-r2 menu callsite ownership regression
-
-`control_test.cpp` exercises the production `ActivateMenuCallsiteOnce` and
-`ActivateMenuDetourWithCompareExchange` with a real `Mem::Detour`/`Mem::Patch`
-on isolated synthetic buffers. It verifies pre-activation rejection, then
-injects a completed foreign call after relay preparation and immediately before
-the aligned eight-byte compare/exchange; the foreign bytes remain unchanged
-and the hook stays inactive. A valid synthetic install preserves the three
-neighboring bytes in that aligned word. Later foreign replacement or altered
-relay bytes fail ownership without another patch write. The test also invokes
-the retained wrapper directly to verify one original-renderer forward for a
-late call. It never executes the synthetic call instruction or reads/writes
-the game process. The compare/exchange closes the completed-write gap tested
-here; it does not establish thread rendezvous or live instruction-fetch
-quiescence. First-install behavior in a running game remains unverified.
-
-The post-CAS finalization regression forces instruction-cache finalization to
-report failure after publishing the real synthetic relay and restoring page
-protection. The retained callsite remains owned for forwarding, but repeated
-activation stays capture-disabled because publication readiness was never
-recorded. The normal successful path and foreign-write rejection run beside it.
-
-## 0.5.11-local-r3 north-up default
-
-`map_features_test.cpp` exercises the production config refresh and orientation
-parser. It checks the initial north-up state, the missing-key fallback, explicit
-`rotating`, and north-up fallback for empty and unrecognized values. Existing
-projection and arrow tests continue to cover both orientation modes.
-
-## 0.5.12-local-r3 death skull color
-
-map_features_test.cpp exercises the production atlas and fallback skull drawing
-paths with a raster clear callback. Run from the source folder:
-
-    MSBuild tests\map_features_test.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
-    .\build\tests\map_features_test.exe --death-color-regression
-
-The check verifies the atlas skull foreground uses the custom-pin red while
-retaining alpha coverage and dark outline pixels, the fallback skull uses the
-same red while retaining its dark outline and draw batches, and an ordinary
-atlas icon keeps its source color. This is offline renderer evidence; in-game
-color appearance still needs separate verification.

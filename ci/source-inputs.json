@@ -1,10 +1,15 @@
 {
   "schemaVersion": 1,
-  "version": "0.5.12",
-  "acceptedSourceZipSha256": "6bef1b62ad2eb8058428466755957bd152e79f0b2c2bb8e35b4732db7a6e558b",
-  "acceptedNativeSourceTreeSha256": "2312a21aa78dbf79ae6a7d7a43b5ec1051e93dc3d5d652dc4ccddb90221ae45c",
-  "acceptedRuntimeDllSha256": "eda8ad629d2c8613cb7e6f8076c2bb346983e81f380646768ff208ae592d9182",
+  "version": "0.5.15",
+  "sourceInputPurpose": "Frozen tested Minimap implementation snapshot, normalized to release version metadata in this source tree.",
+  "candidateSourceZipSha256": "b6275d104963ce169a389b168f960b4f5bae9f30d49a22f578292a8954f014d2",
+  "baselineSourceZipSha256": "56a31365f1873d517b091d0d4e8670060c5bbf6684a33aab7880e49fed31bb05",
+  "acceptedNativeSourceTreeSha256": "59343b6bee378102506ecbb5cd8162ce1e77e44804582b626c0f21b6b24e7210",
   "nativePaths": [
+    ".github/workflows/release.yml",
+    "assets/embervale_bright_palette.json",
+    "assets/embervale_bright_palette.rgb",
+    "assets/embervale_fowr.bin",
     "assets/embervale_minimap_frame.frag.spv",
     "assets/embervale_minimap_frame.rgba",
     "assets/embervale_minimap_frame.vert.spv",
@@ -14,15 +19,26 @@
     "assets/embervale_minimap_terrain.vert",
     "assets/embervale_minimap_terrain.vert.spv",
     "assets/embervale_player_arrow.rgba",
+    "assets/embervale_pois.bin",
     "assets/embervale_realmap_1024.rgba",
     "assets/embervale_realmap_1280.rgba",
     "assets/embervale_realmap_512.rgba",
     "assets/embervale_realmap_default_2048.rgba",
+    "assets/mod.json",
+    "assets/realmap-provenance.json",
+    "assets/src/mod.lua",
+    "build-release.ps1",
+    "ci/build.ps1",
+    "ci/pipeline-tests.ps1",
     "CREDITS.md",
     "include/memory_utils.h",
     "include/shroudtopia.h",
     "LICENSE",
     "minimap_mod.vcxproj",
+    "minimap_mod.vcxproj.filters",
+    "package-release.ps1",
+    "src/aggregate_timing.cpp",
+    "src/aggregate_timing.h",
     "src/client_1_0_guards.h",
     "src/client_1_0_profile.h",
     "src/dllmain.cpp",
@@ -31,12 +47,32 @@
     "src/menu_visibility_1_0.h",
     "src/pch.cpp",
     "src/pch.h",
+    "src/public_creative_compat.h",
     "src/renderer_ownership_adapter.h",
     "src/renderer_ownership_api.h",
     "src/terrain_gpu.h",
     "src/toggle_notice.h",
+    "tests/aggregate_timing_calibration.cpp",
+    "tests/aggregate_timing_calibration.vcxproj",
+    "tests/aggregate_timing_cross_state_race_test.cpp",
+    "tests/aggregate_timing_cross_state_race_test.vcxproj",
+    "tests/aggregate_timing_expanded_green.vcxproj",
+    "tests/aggregate_timing_expanded_red.vcxproj",
+    "tests/aggregate_timing_expanded_red_stub.cpp",
+    "tests/aggregate_timing_expanded_red_test.cpp",
+    "tests/aggregate_timing_loss_classification_test.cpp",
+    "tests/aggregate_timing_loss_classification_test.vcxproj",
+    "tests/aggregate_timing_red.vcxproj",
+    "tests/aggregate_timing_red_stub.cpp",
+    "tests/aggregate_timing_red_test.cpp",
+    "tests/aggregate_timing_report_chunk_test.cpp",
+    "tests/aggregate_timing_report_chunk_test.vcxproj",
+    "tests/aggregate_timing_state_scope_test.cpp",
+    "tests/aggregate_timing_state_scope_test.vcxproj",
     "tests/client_1_0_test.cpp",
     "tests/client_1_0_test.vcxproj",
+    "tests/compat_copy_test.cpp",
+    "tests/compat_copy_test.vcxproj",
     "tests/control_test.cpp",
     "tests/control_test.vcxproj",
     "tests/frame_failure_test.cpp",
@@ -45,6 +81,9 @@
     "tests/hdr_test.vcxproj",
     "tests/map_features_test.cpp",
     "tests/map_features_test.vcxproj",
+    "tests/marker_summary_extracted.inc",
+    "tests/marker_summary_harness.cpp",
+    "tests/marker_summary_test.vcxproj",
     "tests/markers_test.cpp",
     "tests/markers_test.vcxproj",
     "tests/menu_visibility_test.cpp",
@@ -53,6 +92,11 @@
     "tests/patch_profile_test.vcxproj",
     "tests/perf_verify/perf_verify_gpu_test.cpp",
     "tests/perf_verify/perf_verify_gpu_test.vcxproj",
+    "tests/prepare_marker_summary_test.py",
+    "tests/prepare_public_creative_fixture.py",
+    "tests/public_creative_compat_test.cpp",
+    "tests/public_creative_compat_test.vcxproj",
+    "tests/public_creative_timing_red.vcxproj",
     "tests/README.md",
     "tests/renderer_ownership_adapter_test.cpp",
     "tests/renderer_ownership_adapter_test.vcxproj",
@@ -61,18 +105,34 @@
     "tests/terrain_test.cpp",
     "tests/terrain_test.vcxproj",
     "tests/tracking_test.cpp",
-    "tests/tracking_test.vcxproj"
+    "tests/tracking_test.vcxproj",
+    "tools/preview-map-style.vcxproj"
   ],
   "files": [
     {
-      "path": "CREDITS.md",
-      "lengthBytes": 2295,
-      "sha256": "7771f7af6faa9b5e021a0cfe344b199776af8445b98dfa8f3aa41e53f60953f8"
+      "path": ".gitattributes",
+      "lengthBytes": 110,
+      "sha256": "afaceb19e80721060303109f8c675b159608b342072b556a57d7a5f5572b4195"
     },
     {
-      "path": "LICENSE",
-      "lengthBytes": 1092,
-      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
+      "path": ".github/workflows/release.yml",
+      "lengthBytes": 1698,
+      "sha256": "c8868a3e38062357c6f9458b9b8b5bc5febb0016cf7fb0973225bdd7e4574c3f"
+    },
+    {
+      "path": ".gitignore",
+      "lengthBytes": 219,
+      "sha256": "85802e962972deb3ae50f096200cf600bc7f108adeec67733117296d1c6171cb"
+    },
+    {
+      "path": "assets/embervale_bright_palette.json",
+      "lengthBytes": 575,
+      "sha256": "d7a2b2863bbd458909b2816fe5e3ebca41b68b3a1e9f879dbfe663291ab10aca"
+    },
+    {
+      "path": "assets/embervale_bright_palette.rgb",
+      "lengthBytes": 3072,
+      "sha256": "504004a9c3a8faa8b6266bea2df1088e0e300fea474ab796b509f0619bde8293"
     },
     {
       "path": "assets/embervale_fowr.bin",
@@ -151,13 +211,118 @@
     },
     {
       "path": "assets/mod.json",
-      "lengthBytes": 1286,
-      "sha256": "b402a91a3f5a36ef2bc7e8b14dbf1d4789f18c593f4787a5f554b0d62642a995"
+      "lengthBytes": 1296,
+      "sha256": "d08d60c92e2be97d8a5ce7a5b96180141a70c6f4cf590108dd76136d9d87d765"
     },
     {
       "path": "assets/realmap-provenance.json",
-      "lengthBytes": 663,
-      "sha256": "d9ccd5000fb7807a3a41b065182f3d8ba8e365a2bcd601459536a0a91257e9ab"
+      "lengthBytes": 841,
+      "sha256": "c1bb4e0c1c3b807b5d71d8bbcac8b8016c6a4cabe65bfb69a978e14e0442049a"
+    },
+    {
+      "path": "assets/src/mod.lua",
+      "lengthBytes": 329,
+      "sha256": "141e48c2a4c877b173ea355f2502ce36d291cf208a0b725290eb4c2fd897008d"
+    },
+    {
+      "path": "baseline-manifest.json",
+      "lengthBytes": 20555,
+      "sha256": "b2732edaee41921597877099e0c2430f11609205caae22ea76578e90bf7fc5d9"
+    },
+    {
+      "path": "build-release.ps1",
+      "lengthBytes": 1460,
+      "sha256": "81b917bf2d7d0faa0319be69c9ede5dae93d6eadb1364602ba80cb4e821102c8"
+    },
+    {
+      "path": "ci/build.ps1",
+      "lengthBytes": 6493,
+      "sha256": "ebd2c1abcf15d8bd39685ca50323148d6895a82d3d6fdf517b82db7bb86a2e69"
+    },
+    {
+      "path": "ci/pipeline-tests.ps1",
+      "lengthBytes": 10067,
+      "sha256": "4884f98b974d26eeb80da4840f14347125c1f4b9c34e55448897dd039e8fe348"
+    },
+    {
+      "path": "CREDITS.md",
+      "lengthBytes": 2132,
+      "sha256": "b3f421106fd7f838437265fa19f5bc7b42b1faaa00612fd724079fd89cd021e2"
+    },
+    {
+      "path": "docs/CLIENT-1.0.md",
+      "lengthBytes": 2352,
+      "sha256": "58dc9704db3ac837679f5f6c33013a3e4f1d2622bdc3fe35081832eeb49d7301"
+    },
+    {
+      "path": "docs/death-markers.md",
+      "lengthBytes": 3670,
+      "sha256": "ebed4f1f00fab618dd7a3137b96677217c5578f8714a437aee71dbb1e9bb9942"
+    },
+    {
+      "path": "docs/live-fog-weather.md",
+      "lengthBytes": 4919,
+      "sha256": "c5174c12e9735fbe4f0670ceb9f6fb380387784b9830e2ea1959f191e1dbaf83"
+    },
+    {
+      "path": "docs/live-markers.md",
+      "lengthBytes": 6906,
+      "sha256": "424993bc5a7a3d560bcc935db71bbb5e5f8f628d91d98ceb405fd1aab71a895b"
+    },
+    {
+      "path": "docs/map-appearance.md",
+      "lengthBytes": 1375,
+      "sha256": "0a4ea8e15ca7066255d16984b3607d1bde565a65c4f261f91976ccfd77644f67"
+    },
+    {
+      "path": "docs/nexus-description.bbcode",
+      "lengthBytes": 3135,
+      "sha256": "4653965e291134ea6703c409fc08551303d64d0c3cd8ab27d58bdc9ded74e061"
+    },
+    {
+      "path": "docs/pr4-feature-parity.md",
+      "lengthBytes": 6354,
+      "sha256": "991368e9b600822a75495eaccff0fc7dca7cfdbbf300964bf108f6510754dd16"
+    },
+    {
+      "path": "docs/release-0.5.7.md",
+      "lengthBytes": 790,
+      "sha256": "e0442f27a149074d0fe95caeddc5abb64c7d43a8864758263252c1de4fbb2f8a"
+    },
+    {
+      "path": "docs/releases/v0.5.0.md",
+      "lengthBytes": 3340,
+      "sha256": "fb746a0496a8f668b54dc22a1f9ff1a93e322f54415e7280211c17a21dfb3579"
+    },
+    {
+      "path": "docs/releases/v0.5.1.md",
+      "lengthBytes": 2258,
+      "sha256": "136fe67cbb36d11947bc4c9f9a88813ae7cf8c585bf6e6eccf28d5b6b9aeb9e6"
+    },
+    {
+      "path": "docs/releases/v0.5.15.md",
+      "lengthBytes": 513,
+      "sha256": "7991a68899a39636e2826ad9149beddc85bb5911e5a9ef1675279a61914ef380"
+    },
+    {
+      "path": "docs/releases/v0.5.2.md",
+      "lengthBytes": 2129,
+      "sha256": "789fc37964ceae57d39095a77147a5e8add09e367419d4321828cf77bd277570"
+    },
+    {
+      "path": "docs/releases/v0.5.3.md",
+      "lengthBytes": 2474,
+      "sha256": "a5cc918c59e96f0c3e8a4f567384eb632ae4ae65c923d973c502816c8bbef977"
+    },
+    {
+      "path": "docs/releases/v0.5.4.md",
+      "lengthBytes": 216,
+      "sha256": "458f33d20e7b01c541a98086762a8082bb563fe3f21d7b6c8b97a8ccb79a360f"
+    },
+    {
+      "path": "docs/world-clock.md",
+      "lengthBytes": 3083,
+      "sha256": "f763161248687fd1676da3042baf0bddf37e652457b417280d0da97b9e77a70c"
     },
     {
       "path": "include/memory_utils.h",
@@ -170,59 +335,39 @@
       "sha256": "30aa69219fcb8dc9a9f3079b8087710c5d7e146abd3bb5b4cbdfe4a102134e00"
     },
     {
+      "path": "install.ps1",
+      "lengthBytes": 1756,
+      "sha256": "2b0c39f36593482495460bc089ecebac1f5d901438a5b44ed852646c491d5910"
+    },
+    {
+      "path": "LICENSE",
+      "lengthBytes": 1092,
+      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
+    },
+    {
       "path": "minimap_mod.vcxproj",
-      "lengthBytes": 5791,
-      "sha256": "bb4130c2a194156da13533c8504c88b75f0ef538d19c42843140dcb78f7fdcab"
+      "lengthBytes": 5864,
+      "sha256": "0727fd29087c77de9c18fc72425fe7dc7da5cf5e6e740d2ea91c2750143ca94e"
     },
     {
-      "path": "releases/0.5.12/BUILD-MANIFEST.json",
-      "lengthBytes": 950,
-      "sha256": "99477cece8a6bc30156e2002b335105a0fa882d26c159423cdab97cad37b96b4"
+      "path": "minimap_mod.vcxproj.filters",
+      "lengthBytes": 1248,
+      "sha256": "7ab4af7b53e09d95ef774eace40f95e96b2e2c4247c8d0655aae7e541f45aa86"
     },
     {
-      "path": "releases/0.5.12/BUILD-TEST.md",
-      "lengthBytes": 8885,
-      "sha256": "1dcae6b223654c236bec17027a1f56896803d10d5272feed3d5baf432fe23652"
+      "path": "package-release.ps1",
+      "lengthBytes": 6104,
+      "sha256": "17750eddc8280fd106e87086e1e924f3e8a07bfacbe35e3528be9c8b6655d615"
     },
     {
-      "path": "releases/0.5.12/BUILD.ps1",
-      "lengthBytes": 58434,
-      "sha256": "2775783438795dd7084d56a5c0d0191b8418e08096489af02d41b07029a37251"
+      "path": "README-INSTALL.txt",
+      "lengthBytes": 1086,
+      "sha256": "ab8d36a29966d2479a9a429453d56be46a31c9dd45c4ea2e194564a65a140683"
     },
     {
-      "path": "releases/0.5.12/CHANGELOG.md",
-      "lengthBytes": 301,
-      "sha256": "4af58905cc7fdc7d714394f1de61355aaad4bc91ab30330147abd4ce0fe6c11c"
-    },
-    {
-      "path": "releases/0.5.12/GLSLANG-PROVENANCE.md",
-      "lengthBytes": 1253,
-      "sha256": "3250dd56ebfc129b1130594a895a9aeee74659e92d3eb4841d3e4a2be8b53293"
-    },
-    {
-      "path": "releases/0.5.12/README.md",
-      "lengthBytes": 1229,
-      "sha256": "7c6a251f087b98e47581784b732fb0e194f7bcdc4b64e7dd6ad513b3f28c7a39"
-    },
-    {
-      "path": "releases/0.5.12/RELEASE-PROVENANCE.md",
-      "lengthBytes": 1116,
-      "sha256": "7f6b34752bcc0f14882cbfd6706de4929a2d052c6529ffd92cf3b6308b1105eb"
-    },
-    {
-      "path": "releases/0.5.12/RUNTIME-README.txt",
-      "lengthBytes": 1409,
-      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
-    },
-    {
-      "path": "releases/0.5.12/SOURCE-INPUT-MANIFEST.json",
-      "lengthBytes": 11463,
-      "sha256": "1a8d7a82ce75ad3c240a26395ee5d97b156b784a147f016754b97ff12c543707"
-    },
-    {
-      "path": "releases/0.5.12/SOURCE-OVERLAY-MANIFEST.json",
-      "lengthBytes": 1605,
-      "sha256": "c31f57cc84649c08b5ec33a7bd5f4771ea2ccf224c5b1f481b1c301cfbce0a3b"
+      "path": "README.md",
+      "lengthBytes": 16961,
+      "sha256": "438b3877e0555f8784c4e5affcdc43780da8df7e891cd78edd6830d68c8cf6f4"
     },
     {
       "path": "releases/0.5.12/branding/ASSET-PROVENANCE.md",
@@ -255,19 +400,34 @@
       "sha256": "1dbb64b12923c44fec5f72d2a90940ff56c9eefadb21fbcbb5968f928d07b012"
     },
     {
-      "path": "releases/0.5.12/package/README.txt",
-      "lengthBytes": 1409,
-      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
+      "path": "releases/0.5.12/BUILD-MANIFEST.json",
+      "lengthBytes": 950,
+      "sha256": "99477cece8a6bc30156e2002b335105a0fa882d26c159423cdab97cad37b96b4"
+    },
+    {
+      "path": "releases/0.5.12/BUILD-TEST.md",
+      "lengthBytes": 8885,
+      "sha256": "1dcae6b223654c236bec17027a1f56896803d10d5272feed3d5baf432fe23652"
+    },
+    {
+      "path": "releases/0.5.12/BUILD.ps1",
+      "lengthBytes": 58434,
+      "sha256": "2775783438795dd7084d56a5c0d0191b8418e08096489af02d41b07029a37251"
+    },
+    {
+      "path": "releases/0.5.12/CHANGELOG.md",
+      "lengthBytes": 301,
+      "sha256": "4af58905cc7fdc7d714394f1de61355aaad4bc91ab30330147abd4ce0fe6c11c"
+    },
+    {
+      "path": "releases/0.5.12/GLSLANG-PROVENANCE.md",
+      "lengthBytes": 1253,
+      "sha256": "3250dd56ebfc129b1130594a895a9aeee74659e92d3eb4841d3e4a2be8b53293"
     },
     {
       "path": "releases/0.5.12/package/mods/minimap_mod/CREDITS.md",
       "lengthBytes": 2295,
       "sha256": "7771f7af6faa9b5e021a0cfe344b199776af8445b98dfa8f3aa41e53f60953f8"
-    },
-    {
-      "path": "releases/0.5.12/package/mods/minimap_mod/LICENSE",
-      "lengthBytes": 1092,
-      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
     },
     {
       "path": "releases/0.5.12/package/mods/minimap_mod/embervale_fowr.bin",
@@ -325,6 +485,11 @@
       "sha256": "0eee1318166a336c30ff83d6a0d572640db58cd4ab41f9fb11875a6321df80be"
     },
     {
+      "path": "releases/0.5.12/package/mods/minimap_mod/LICENSE",
+      "lengthBytes": 1092,
+      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
+    },
+    {
       "path": "releases/0.5.12/package/mods/minimap_mod/mod.json",
       "lengthBytes": 1286,
       "sha256": "b402a91a3f5a36ef2bc7e8b14dbf1d4789f18c593f4787a5f554b0d62642a995"
@@ -340,19 +505,59 @@
       "sha256": "141e48c2a4c877b173ea355f2502ce36d291cf208a0b725290eb4c2fd897008d"
     },
     {
+      "path": "releases/0.5.12/package/README.txt",
+      "lengthBytes": 1409,
+      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
+    },
+    {
+      "path": "releases/0.5.12/README.md",
+      "lengthBytes": 1229,
+      "sha256": "7c6a251f087b98e47581784b732fb0e194f7bcdc4b64e7dd6ad513b3f28c7a39"
+    },
+    {
+      "path": "releases/0.5.12/RELEASE-PROVENANCE.md",
+      "lengthBytes": 1116,
+      "sha256": "7f6b34752bcc0f14882cbfd6706de4929a2d052c6529ffd92cf3b6308b1105eb"
+    },
+    {
+      "path": "releases/0.5.12/RUNTIME-README.txt",
+      "lengthBytes": 1409,
+      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
+    },
+    {
+      "path": "releases/0.5.12/SOURCE-INPUT-MANIFEST.json",
+      "lengthBytes": 11463,
+      "sha256": "1a8d7a82ce75ad3c240a26395ee5d97b156b784a147f016754b97ff12c543707"
+    },
+    {
+      "path": "releases/0.5.12/SOURCE-OVERLAY-MANIFEST.json",
+      "lengthBytes": 1605,
+      "sha256": "c31f57cc84649c08b5ec33a7bd5f4771ea2ccf224c5b1f481b1c301cfbce0a3b"
+    },
+    {
+      "path": "src/aggregate_timing.cpp",
+      "lengthBytes": 57238,
+      "sha256": "0befc3480df83a9b9d7caaa8d534caa8d0ac7911ee72c90ef3d58831818b3740"
+    },
+    {
+      "path": "src/aggregate_timing.h",
+      "lengthBytes": 17445,
+      "sha256": "c2ce67f2cdd344d44fe635a6f828cc4eba04366bca6da595753d56b3a4714f7b"
+    },
+    {
       "path": "src/client_1_0_guards.h",
-      "lengthBytes": 16112,
-      "sha256": "172507cde7caac1fb4c9294d50c285253ed6aecb5757205f0836d702d8acfb41"
+      "lengthBytes": 31830,
+      "sha256": "1997e0d38e9d69b8e391133ec43bdd8609768e47906481f3d31becabf2a2a81f"
     },
     {
       "path": "src/client_1_0_profile.h",
-      "lengthBytes": 3982,
-      "sha256": "91a1314329e074bc57a60ed0896e25575a40142c766298fb47d7f71dfe68f989"
+      "lengthBytes": 7616,
+      "sha256": "2c900c78dbde37f2dc8ce10c141a838267a078bbc271d5ee5ad335c1c83f3a1f"
     },
     {
       "path": "src/dllmain.cpp",
-      "lengthBytes": 504847,
-      "sha256": "b16bd1f808e71679b01fecda51b6e267b0b72a4992f7acf6f7f3886aab5ec85c"
+      "lengthBytes": 509771,
+      "sha256": "40d52a4b439c866f1e07b27c63e21031e5743e7778db90b91877f487e9035cbf"
     },
     {
       "path": "src/live_markers.h",
@@ -361,13 +566,13 @@
     },
     {
       "path": "src/map_appearance.h",
-      "lengthBytes": 2341,
-      "sha256": "61f43bb9debc241a4ea4082963ccf3d78a05df07e1d5372ac7ac840c3aed5fc4"
+      "lengthBytes": 2389,
+      "sha256": "2864ba336b6b73b244230edb8291f86e3a7131e279c0db5c6f0c889086e5dcc8"
     },
     {
       "path": "src/menu_visibility_1_0.h",
-      "lengthBytes": 4325,
-      "sha256": "ac7192b4039781c9a9d150601bf97f5e0fa9a046e8f834c0a0543d151a51e2c3"
+      "lengthBytes": 7155,
+      "sha256": "be53a15e94f619775bdda1f538c3a9dd446fa60d9057dcbbdbf9ad641e30d012"
     },
     {
       "path": "src/pch.cpp",
@@ -378,6 +583,11 @@
       "path": "src/pch.h",
       "lengthBytes": 93,
       "sha256": "517cd943acb8410b196d2d921e2ec182c636809e2672383e1a8fc9cb2263900b"
+    },
+    {
+      "path": "src/public_creative_compat.h",
+      "lengthBytes": 24452,
+      "sha256": "88a05e993c3474aac2ea9895626ba1d140c164ec845d26cff9b3a60e09a43461"
     },
     {
       "path": "src/renderer_ownership_adapter.h",
@@ -400,19 +610,109 @@
       "sha256": "59092b2520c1c1311e33a5f68b74d7dd3d900bc869161975de6de400913562bc"
     },
     {
-      "path": "tests/README.md",
-      "lengthBytes": 10222,
-      "sha256": "507c2872844f80fee70bf06ed6efde6388a4492d6138cf028f283c3c6ec1f836"
+      "path": "tests/aggregate_timing_calibration.cpp",
+      "lengthBytes": 12716,
+      "sha256": "755a24c44254adcf01ef6ab15bdc549e1415fed90049c25042151fc6bbddc2d3"
+    },
+    {
+      "path": "tests/aggregate_timing_calibration.vcxproj",
+      "lengthBytes": 2151,
+      "sha256": "cd44e4c88cf1656295758dc042a53759346c74fbd04f8057ce941f152c0f196d"
+    },
+    {
+      "path": "tests/aggregate_timing_cross_state_race_test.cpp",
+      "lengthBytes": 11490,
+      "sha256": "d59af22527648f2364e1e23c41fc93d34c4ea972e6aae3567580b58b59dc914f"
+    },
+    {
+      "path": "tests/aggregate_timing_cross_state_race_test.vcxproj",
+      "lengthBytes": 2161,
+      "sha256": "52d0da259e9c8690cd722471a440e6252eaee48578b4913428d9547951936dcb"
+    },
+    {
+      "path": "tests/aggregate_timing_expanded_green.vcxproj",
+      "lengthBytes": 2077,
+      "sha256": "f73283c8189fa9c12767d5bc67f280b0ead98c5b210ad7539a80738ed35c8ae4"
+    },
+    {
+      "path": "tests/aggregate_timing_expanded_red.vcxproj",
+      "lengthBytes": 2116,
+      "sha256": "95d0466021ad758dffe893dc0c9348c8be78ac47387692d0f2e3b473c4324da5"
+    },
+    {
+      "path": "tests/aggregate_timing_expanded_red_stub.cpp",
+      "lengthBytes": 3729,
+      "sha256": "644d1ba5456871305e066340b0be6051d3a28b48380436299ffe4f6db1c47a6a"
+    },
+    {
+      "path": "tests/aggregate_timing_expanded_red_test.cpp",
+      "lengthBytes": 27921,
+      "sha256": "fb9dbf10b5cc453629d101ddd3d92857aee26a06533c25afabc7d77235d4e738"
+    },
+    {
+      "path": "tests/aggregate_timing_loss_classification_test.cpp",
+      "lengthBytes": 32828,
+      "sha256": "c2142c38046e66905295d4222840f3535cab938949a4d3fb84a795f6f8e74412"
+    },
+    {
+      "path": "tests/aggregate_timing_loss_classification_test.vcxproj",
+      "lengthBytes": 2230,
+      "sha256": "0db75b3a2b2b737bd233d40563c726c814228ef30035aa41850a7bc65e419bbc"
+    },
+    {
+      "path": "tests/aggregate_timing_red.vcxproj",
+      "lengthBytes": 2071,
+      "sha256": "06311ee80f0241072ac073d7ec75f7de59d859c40df7906484cdecb9159737d3"
+    },
+    {
+      "path": "tests/aggregate_timing_red_stub.cpp",
+      "lengthBytes": 3523,
+      "sha256": "47bd81d530bf0bf3c478fe6bd056e9717de83a2749675bcf2fa30c703c56c146"
+    },
+    {
+      "path": "tests/aggregate_timing_red_test.cpp",
+      "lengthBytes": 1673,
+      "sha256": "e86eccc14faf0fd872a7deec2a9157294e4669bfc7d1e896712d92ef36b4c676"
+    },
+    {
+      "path": "tests/aggregate_timing_report_chunk_test.cpp",
+      "lengthBytes": 8895,
+      "sha256": "5f624f866a31976be11e4a3de76e2a63961f60993db5fee687304e52c9cce1e1"
+    },
+    {
+      "path": "tests/aggregate_timing_report_chunk_test.vcxproj",
+      "lengthBytes": 2178,
+      "sha256": "4f7e7010dcd01109d2f5d2deda24b8b1e76473a3ee270660134b0078202647da"
+    },
+    {
+      "path": "tests/aggregate_timing_state_scope_test.cpp",
+      "lengthBytes": 3673,
+      "sha256": "8ea9cce7f0c6313705d82ba97d99d61f86bf62ce427b3797c4e5f4b82fdcaef1"
+    },
+    {
+      "path": "tests/aggregate_timing_state_scope_test.vcxproj",
+      "lengthBytes": 2072,
+      "sha256": "2622de30e7e186cbf811676ec7d47f1c897322e48afc4f4ace5d137310c8ec12"
     },
     {
       "path": "tests/client_1_0_test.cpp",
-      "lengthBytes": 16556,
-      "sha256": "49f9a4be374ae490c406cf0ac1f4358b00cd19f67d56db71a926624f50961168"
+      "lengthBytes": 15751,
+      "sha256": "2442b8cda9031480f03a55b93a9be570f0282389429aeefbeac84102fd7e54ff"
     },
     {
       "path": "tests/client_1_0_test.vcxproj",
-      "lengthBytes": 1988,
-      "sha256": "c17f8c7ca5108d13700ca51340f1089d0343083f4dd5d3b61a182cd05ba07565"
+      "lengthBytes": 2066,
+      "sha256": "225e86260a36062df3df3f54823a8da1ad87f26a4e685a227d272154a9b2c5c1"
+    },
+    {
+      "path": "tests/compat_copy_test.cpp",
+      "lengthBytes": 7079,
+      "sha256": "db939fb3c9613d914a29b39620c24bfd20b3a3424f322e89fec21d82eaf1f215"
+    },
+    {
+      "path": "tests/compat_copy_test.vcxproj",
+      "lengthBytes": 2161,
+      "sha256": "e33721ea2af8556c588d441b00d5bc94f5ce5cd486b6f4fd891fa444ef60f87b"
     },
     {
       "path": "tests/control_test.cpp",
@@ -426,13 +726,13 @@
     },
     {
       "path": "tests/frame_failure_test.cpp",
-      "lengthBytes": 8119,
-      "sha256": "90be635cc75317861bf175e679c20c698d9f7f66a4ccaeb16fe1b3815a122b16"
+      "lengthBytes": 8232,
+      "sha256": "280749de598616f2f57bf1320ea4a3c719f585e51c3bec9657ef5150a7fb791c"
     },
     {
       "path": "tests/frame_failure_test.vcxproj",
-      "lengthBytes": 2069,
-      "sha256": "276a80ac3a91278613f0a72e4ac99f08d090d9e9a15b5da06f58a496c1175ff1"
+      "lengthBytes": 2147,
+      "sha256": "905226cc4ac7114eaba253c17f78182faa2ba188082d9c2b07ac5608eeac2d78"
     },
     {
       "path": "tests/hdr_test.cpp",
@@ -441,33 +741,48 @@
     },
     {
       "path": "tests/hdr_test.vcxproj",
-      "lengthBytes": 2049,
-      "sha256": "450d63cf85b7574a36e3b36f610ce452a1e1231f6a3b174529ee86d128a24be6"
+      "lengthBytes": 2127,
+      "sha256": "bf409b1b0bed27176fa462b2658eb31fe8c5a6691d28d5bd3af8b007ffe7fbba"
     },
     {
       "path": "tests/map_features_test.cpp",
-      "lengthBytes": 93216,
-      "sha256": "877b3eefc72d934d8a8f6a244fd877875df0304e21938be0c32b7862a5f7ab95"
+      "lengthBytes": 85382,
+      "sha256": "a52661777e05066ac89eeefac9ca3e39f516bde38e071663bba1a73bfb32c8f4"
     },
     {
       "path": "tests/map_features_test.vcxproj",
-      "lengthBytes": 1990,
-      "sha256": "1903164972699f2a38737ec5a4c393c2b72ffada6d6ad3246d630b29c74f7152"
+      "lengthBytes": 2068,
+      "sha256": "4362ea2a41a43e9a5a0fffaf4f5fd9db701fa9b3bcf2dd58e5c305bc79cd18c9"
+    },
+    {
+      "path": "tests/marker_summary_extracted.inc",
+      "lengthBytes": 5686,
+      "sha256": "c33844acb2bc8d3a584dce9f8a188b7d3cadb7a2a54ab1ab0b39c8e9bf6cbf89"
+    },
+    {
+      "path": "tests/marker_summary_harness.cpp",
+      "lengthBytes": 3656,
+      "sha256": "d9e4327d08cd3cb05940b075ebd8281db30a12f9643e9702ddc749aa9fd3b195"
+    },
+    {
+      "path": "tests/marker_summary_test.vcxproj",
+      "lengthBytes": 2097,
+      "sha256": "1905cbe60f2aa55783d95d3f5ab0efe7386adf60bc1cdd221e8db80df96d9405"
     },
     {
       "path": "tests/markers_test.cpp",
-      "lengthBytes": 19306,
-      "sha256": "906534e04e91e835832937a7b40a1f3fe7600926145adbecf2acb638f8415485"
+      "lengthBytes": 14897,
+      "sha256": "c07f14e58fcc12e783d9cf151991570136dd463fc5625655eda429f5d88a4974"
     },
     {
       "path": "tests/markers_test.vcxproj",
-      "lengthBytes": 1980,
-      "sha256": "90634f26b820b5b73d66acc33171b737064aadeb5785d13af886887e03563e07"
+      "lengthBytes": 2058,
+      "sha256": "bf42ba987b8a298bc0d87256ae85799acfbdf74eb3f39bf89b558295d128e53c"
     },
     {
       "path": "tests/menu_visibility_test.cpp",
-      "lengthBytes": 8197,
-      "sha256": "1b582e5bab6182c1316cb30ad711512c6b4665f95907aa2d329a55ab5f84c505"
+      "lengthBytes": 9153,
+      "sha256": "cea3354a4fa5eea7681ff994be67ae393ae1a1f98845533f8fbdb15d3b6c944a"
     },
     {
       "path": "tests/menu_visibility_test.vcxproj",
@@ -476,8 +791,8 @@
     },
     {
       "path": "tests/patch_profile_test.cpp",
-      "lengthBytes": 1187,
-      "sha256": "e73397274edcfb76ad57be0c54af16eb7722d31096180fc43a88828e20171715"
+      "lengthBytes": 1674,
+      "sha256": "7449e2cf9a762b4799a2b552c134eff6720e262166cd299e26ec078691fee6d9"
     },
     {
       "path": "tests/patch_profile_test.vcxproj",
@@ -495,6 +810,36 @@
       "sha256": "cadaf31a6ac536e85e1078097dc240bebb79e5d19456c6ea026376f5be321ca5"
     },
     {
+      "path": "tests/prepare_marker_summary_test.py",
+      "lengthBytes": 1698,
+      "sha256": "08f1d5f8435cc2147798d0cbe4de8e985dccd9aa1d44db84538099fd1422a4dc"
+    },
+    {
+      "path": "tests/prepare_public_creative_fixture.py",
+      "lengthBytes": 1701,
+      "sha256": "2b31837c2fa43dcc1cd6a94bc7c101d3a4d2c71674d5c40afa4d9e6702d1d7da"
+    },
+    {
+      "path": "tests/public_creative_compat_test.cpp",
+      "lengthBytes": 42730,
+      "sha256": "13674da2a6c0ff99d31c9cde32cb6e7ecfcd53135da363329802dc392a3f4f5f"
+    },
+    {
+      "path": "tests/public_creative_compat_test.vcxproj",
+      "lengthBytes": 2180,
+      "sha256": "2bf80dc490cbf834bd849b1afc64a33487190fab43a3463eefc63d76c9d02d67"
+    },
+    {
+      "path": "tests/public_creative_timing_red.vcxproj",
+      "lengthBytes": 2138,
+      "sha256": "461f5a7ba2339d0e97655c538c48a408c97a3da854701942a57a7d8f2b8522e1"
+    },
+    {
+      "path": "tests/README.md",
+      "lengthBytes": 9388,
+      "sha256": "01b57ddbfdb38d3e0a7ecde410c222c7525454aeb77c39d87eb1c87ba3b32747"
+    },
+    {
       "path": "tests/renderer_ownership_adapter_test.cpp",
       "lengthBytes": 14668,
       "sha256": "cccaeeacaaac968a362b5b6e192b47f2e06fc70688ba41b54c3b014c209e4b52"
@@ -506,13 +851,13 @@
     },
     {
       "path": "tests/renderer_test.cpp",
-      "lengthBytes": 18123,
-      "sha256": "04077b4bdb4b5896d24f469ac0216038f53a10a5b6672b647cc98c6a3c87a029"
+      "lengthBytes": 14800,
+      "sha256": "e5ef22ac7e12d82ae7f44437a49f9dc7db09787a6a7d986d891bd3d6671bc487"
     },
     {
       "path": "tests/renderer_test.vcxproj",
-      "lengthBytes": 2056,
-      "sha256": "6bc3216a850be20b2229c680f14fe910fbed9165f09743bd5f1d18ccc99e24b3"
+      "lengthBytes": 2134,
+      "sha256": "8437c264e1b5305000df1e58dab21c6e13411f71167631fb4c53618f3ec00439"
     },
     {
       "path": "tests/terrain_test.cpp",
@@ -531,8 +876,35 @@
     },
     {
       "path": "tests/tracking_test.vcxproj",
-      "lengthBytes": 2056,
-      "sha256": "058c916a2c9d9b650a7a62bbbeccc68752b7862c9f0802382c7c50de67e67def"
+      "lengthBytes": 2134,
+      "sha256": "a4cb578acc63d796a43a670405d0ee4d6aac6876742f4d20551ae033b4bab6d2"
+    },
+    {
+      "path": "timing-baseline-sanitized.json",
+      "lengthBytes": 44915,
+      "sha256": "1c6697fa868ef69162011896d505b74b90ec4892da83f01398fa0c32d0057f4b"
+    },
+    {
+      "path": "tools/extract-color-palette.py",
+      "lengthBytes": 1543,
+      "sha256": "ac3b7e54a3c0abad06f22e177cde5d18900bfff359d43346a82a67dfae93b33b"
+    },
+    {
+      "path": "tools/generate_client_1_0_guards.py",
+      "lengthBytes": 1958,
+      "sha256": "5784ea02840beb9e0c1aa56a01b5b272211fd66dabfa9782be18a594f935e90e"
+    },
+    {
+      "path": "tools/preview-map-style.cpp",
+      "lengthBytes": 959,
+      "sha256": "a42a49450b80d16c9c8cbaea015a8372baf22028d136ef5fb349e63bde0eaeb3"
+    },
+    {
+      "path": "tools/preview-map-style.vcxproj",
+      "lengthBytes": 1251,
+      "sha256": "7596f35a0bbc54bf4eb7c6edf582af3579bceffd098ea894bfc49a26ee2828f0"
     }
-  ]
+  ],
+  "fixtures": [],
+  "previousRelease": null
 }

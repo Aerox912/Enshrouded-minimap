@@ -1,57 +1,29 @@
-# ESM Minimap 0.5.8: Enshrouded 1.0
+# ESM Minimap 0.5.10-local-r2: Enshrouded 1.0
 
-This compatibility release targets Steam client build **25966634**, executable SHA-256
-`4d6d43ea4a91e71c82d60b045dde932179c99e32e40657efe374688b2933589a`.
-It requires the existing Shroudtopia native loader and proxy. EML alone cannot load this DLL.
-The technical mod ID remains `minimap_mod`. Upstream credits and the MIT license are unchanged.
+This public preview targets Steam client build **25988036**, executable SHA-256
+`82e5020a8736348cd0374f004b2f5e5ef456b5bd27aa5420df34c7dd241cfeeb`. It requires
+the maintained Shroudtopia native loader and proxy. EML alone cannot load this DLL.
+The technical mod ID remains `minimap_mod`; upstream credits and the MIT license are retained.
 
-The source starts at `f93ab498bc6200cbb9ea6a57b29ff824c70e6535` and includes the frozen
-Bright-map source delta whose prior DLL hash was
-`27c9460312d2a225185bd1d4274f42cfcb37f85c0292f9b3dfc18809c21b63b0`.
-This is a legacy Shroudtopia compatibility update, separate from the ESM-native port.
+## Published artifacts
 
-## Changes
+- Preview: [ESM-Minimap-0.5.10-local-r2-preview.zip](https://github.com/Aerox912/Enshrouded-minimap/releases/download/v0.5.10-local-r2/ESM-Minimap-0.5.10-local-r2-preview.zip)
+- Source snapshot: [ESM-Minimap-0.5.10-local-r2-source.zip](https://github.com/Aerox912/Enshrouded-minimap/releases/download/v0.5.10-local-r2/ESM-Minimap-0.5.10-local-r2-source.zip)
+- Source baseline: public `main` commit `5241d3830f9b1034614837fc08bbed8709e0ac6a`
+- Source ZIP SHA-256: `50f2148bf24cc785a59261f50cdd57909dadc40edb220ebb89c58301530d1a82`
+- Preview DLL SHA-256: `9b2f5646a5332798cf8d20098d73b41fcc3341822008ac9a962a23f2ecfb0b73`
 
-- Select the current ABI by executable SHA-256, then independently verify named systems,
-  complete instructions and feature-specific layouts before installing hooks.
-- Update local camera, remote players, waypoint/ping, marker visibility, world/death marker,
-  fog, weather, clock and Vulkan contracts for this client.
-- Read pings from the native segmented arena, with its verified block capacity, count limit,
-  cycle detection and guarded reads. Failed reads publish no partial markers.
-- Install Vulkan callbacks only from a presenting context whose table/device pair and resolved
-  functions agree. One pair owns the originals; additional devices and foreign slots are refused.
-- Keep load readiness independent of Shroudtopia's host-owned `loaded` flag. Discard partial
-  optional hook pairs, unwind failed required activation, and drain in-flight present callbacks
-  before renderer teardown. Inactive present calls forward once without polling controls.
-- Pin callback code for the process lifetime and retain original Vulkan functions even after
-  logical unload or failed slot restoration. Already-selected callbacks can still forward.
-  A process restart is required to replace this DLL or select another Vulkan device.
-- Preserve Bright and explicit Original map appearance. No map texture or world extent was
-  changed in this compatibility work.
+## r2 source changes
 
-## Verification and limits
+- Update the client profile and named-instruction guards for build 25988036.
+- Select the bundled 2048 x 2048 map by default while preserving the Original map option.
+- Require Vulkan image-view create/destroy functions in the ready predicate and unwind partially created renderer resources on failures.
+- Add client-profile, frame-failure, HDR and patch-profile test projects.
 
-The test programs compile the production readers and guards against a private mapped PE,
-mocked Vulkan functions and synthetic records. They never execute game instructions.
-Build all five test projects under `tests` with MSBuild, Release/x64/v143/C++17, and run them.
-Pass the exact client executable to `client_1_0_test.exe`, with an older executable as optional
-second argument for profile rejection. Build `minimap_mod.vcxproj` with the same toolset.
-See the frozen candidate's verification logs for exact counts and hashes.
+## Test and compatibility boundary
 
-Offline tests do not establish graphics output, game stability, save compatibility, all 1.0
-regions or multiplayer behavior. Testing must check movement/rotation, zoom/size/toggle,
-clock/weather/fog, pins/pings/players/death markers, Bright/Original appearance and a
-deactivate/reactivate cycle. Test newly added world regions explicitly; inherited static
-map coverage is not evidence that those regions are covered. No dedicated-server DLL is supplied.
-Close the game before installation or rollback; hot DLL unloading is outside this candidate's
-acceptance scope.
+`ci/build.ps1` builds and runs the mod and eight test projects with MSVC v143. The test projects exercise production readers and guards using private mapped images, synthetic data or mocked Vulkan calls; they do not execute game instructions or establish in-game rendering.
 
-The unknown-build path installs no hooks. The previously named legacy profile remains in
-source, but this candidate's fresh acceptance evidence is for the pinned current client only.
+The accepted live scope recorded with the r2 source is native SDR local alignment, hide/show placement and normal restart persistence. HDR/scRGB/PQ remains experimental and unverified in game. This is a client mod requiring Shroudtopia/WINMM, not an EML-native mod or a server component. Do not infer multiplayer, every-setting, every-display or all-region acceptance from the bounded local scope.
 
-## Observed local gameplay, 16 October 2026
-
-The exact ce16e8a2 DLL passed user checks for local world rendering, movement,
-camera turns, world reload, tracking, opening/closing the world map and F10 hide/show.
-The supplied screenshot shows the colored map. This is bounded local 1.0 testing,
-not acceptance of every setting, multiplayer, new regions or other display setups.
+For installation, close Enshrouded and replace only `mods/minimap_mod` from the preview ZIP. Keep the existing `shroudtopia.json` and back up the prior mod folder before updating.

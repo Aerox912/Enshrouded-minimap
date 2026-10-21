@@ -10,7 +10,8 @@ foreach ($entry in $manifest.files) {
     $file = Get-Item -LiteralPath $path -ErrorAction Stop
     $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($file.Length -ne $entry.lengthBytes -or $hash -cne $entry.sha256) {
-        throw "Source input differs from accepted 0.5.12: $($entry.path)"
+        $versionLabel = if ($manifest.PSObject.Properties.Name -contains 'version') { $manifest.version } else { 'inventory' }
+        throw "Source input differs from accepted $versionLabel`: $($entry.path)"
     }
 }
 $nativePaths = [string[]]@($manifest.nativePaths)

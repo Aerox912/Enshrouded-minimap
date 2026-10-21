@@ -42,5 +42,6 @@
   <ItemGroup>
     <ClCompile Include="hdr_test.cpp" />
   </ItemGroup>
+  <ItemGroup><ClCompile Include="..\src\aggregate_timing.cpp" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -3,7 +3,8 @@
 #include "toggle_notice.h"
 #include "client_1_0_profile.h"
 #include "menu_visibility_1_0.h"
-#include "renderer_ownership_adapter.h"
+#include "public_creative_compat.h"
+#include "aggregate_timing.h"
 #pragma comment(lib, "gdi32.lib")
 
 #include <shroudtopia.h>
@@ -13,6 +14,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -27,12 +29,51 @@
 
 namespace
 {
+    using MinimapAggregateTiming::DiagnosticCollector;
+    using MinimapAggregateTiming::FormatSnapshot;
+    using MinimapAggregateTiming::Metric;
+    using MinimapAggregateTiming::MenuWrapperPartition;
+    using MinimapAggregateTiming::ScopedTimer;
+    using MinimapAggregateTiming::Snapshot;
+    using MinimapAggregateTiming::StateContext;
+    using MinimapAggregateTiming::Visibility;
+    using MinimapAggregateTiming::MenuState;
+
+    bool ReadDiagnosticClock(void*, std::uint64_t* ticks) noexcept
+    {
+        if (ticks == nullptr) return false;
+        LARGE_INTEGER value{};
+        if (!QueryPerformanceCounter(&value) || value.QuadPart < 0) return false;
+        *ticks = static_cast<std::uint64_t>(value.QuadPart);
+        return true;
+    }
+
+    bool InitializeDiagnosticCollector() noexcept
+    {
+        static const bool initialized = []() noexcept {
+            LARGE_INTEGER frequency{}, start{};
+            auto& collector = DiagnosticCollector();
+            if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0 ||
+                !QueryPerformanceCounter(&start) || start.QuadPart < 0)
+            {
+                collector.Initialize(nullptr, nullptr, 0, 0);
+                return false;
+            }
+            collector.Initialize(ReadDiagnosticClock, nullptr,
+                static_cast<std::uint64_t>(frequency.QuadPart),
+                static_cast<std::uint64_t>(start.QuadPart));
+            return true;
+        }();
+        return initialized;
+    }
+
     bool g_client10 = false;
+    MinimapClient10::Profile g_clientProfile = MinimapClient10::Profile::Build25988036;
+    uintptr_t ClientRva(uintptr_t oldRva) { return MinimapClient10::Rva(g_clientProfile, oldRva); }
+    bool IsCurrentClientBuild() { return g_clientProfile == MinimapClient10::Profile::Build26082781; }
     std::atomic<bool> g_runtimeCallbacksActive{false};
     // Covers submission and the original present consuming its wait semaphores.
     std::mutex g_presentCallbackMutex;
-    // Configuration, hotkeys and session transitions share one complete critical section.
-    std::recursive_mutex g_runtimeControlsMutex;
     std::size_t ClientOffset(std::size_t legacy, std::size_t current) { return g_client10 ? current : legacy; }
     std::size_t VulkanSlot(std::size_t legacy) {
         return g_client10 && legacy >= 0x570 && legacy <= 0x590 ? legacy + 0x10 : legacy;
@@ -112,8 +153,6 @@ namespace
     constexpr int MINIMAP_DEFAULT_MAX_DRAWN_POINTS = 64;
     constexpr int MINIMAP_MIN_ZOOM = -3;
     constexpr int MINIMAP_MAX_ZOOM = 7;
-    constexpr std::size_t TERRAIN_CLEAR_BATCH_LIMIT = 16;
-    constexpr std::uint32_t TERRAIN_CLEAR_RECT_LIMIT = 512;
     constexpr std::size_t WORLD_MAP_ARRAY_OFFSET = 0x1C100;
     constexpr std::size_t CUSTOM_MAP_ARRAY_OFFSET = 0x3C128;
     constexpr std::size_t DEATH_MAP_ARRAY_OFFSET = 0x7C178;
@@ -524,28 +563,11 @@ namespace
         VkClearValue clearValue;
     };
 
-    struct MinimapWorldPoint
-    {
-        float x = 0.0f;
-        float z = 0.0f;
-        std::uint32_t kind = 0;
-        bool navigation = false;
-        bool customPin = false;
-    };
-
-
     struct VkClearRect
     {
         VkRect2D rect;
         std::uint32_t baseArrayLayer = 0;
         std::uint32_t layerCount = 1;
-    };
-
-    struct TerrainClearBatch
-    {
-        float red = 0.0f, green = 0.0f, blue = 0.0f;
-        std::array<VkClearRect, TERRAIN_CLEAR_RECT_LIMIT> rects{};
-        std::uint32_t rectCount = 0;
     };
 
     struct VkFenceCreateInfo
@@ -631,16 +653,6 @@ namespace
         void* image = nullptr;
         VkImageSubresourceRange subresourceRange;
     };
-
-    struct VkMappedMemoryRange
-    {
-        std::uint32_t sType = 6;
-        const void* pNext = nullptr;
-        void* memory = nullptr;
-        std::uint64_t offset = 0;
-        std::uint64_t size = ~std::uint64_t(0);
-    };
-    using FlushMappedMemoryRangesFn = std::int32_t(__fastcall*)(void*, std::uint32_t, const VkMappedMemoryRange*);
 
     struct VkSamplerCreateInfo
     {
@@ -988,7 +1000,6 @@ namespace
         DestroyImageViewFn destroyImageView = nullptr;
         CreateRenderPassFn createRenderPass = nullptr;
         DestroyRenderPassFn destroyRenderPass = nullptr;
-        FlushMappedMemoryRangesFn flushMappedMemoryRanges = nullptr;
         CreateFramebufferFn createFramebuffer = nullptr;
         DestroyFramebufferFn destroyFramebuffer = nullptr;
         CreateCommandPoolFn createCommandPool = nullptr;
@@ -1108,40 +1119,8 @@ namespace
         }
     };
 
-    struct LiveFogSnapshot;
-    struct TexturedResources
+    struct VulkanMinimapRenderer
     {
-        uintptr_t frameTextureImage = 0;
-        uintptr_t frameTextureMemory = 0;
-        uintptr_t frameTextureImageView = 0;
-        uintptr_t frameSampler = 0;
-        uintptr_t frameStagingBuffer = 0;
-        uintptr_t frameStagingMemory = 0;
-        uintptr_t frameDescriptorSetLayout = 0;
-        uintptr_t frameDescriptorPool = 0;
-        uintptr_t frameDescriptorSet = 0;
-        uintptr_t framePipelineLayout = 0;
-        uintptr_t framePipeline = 0;
-        std::uint32_t frameTextureWidth = 0;
-        std::uint32_t frameTextureHeight = 0;
-        bool frameTextureUploadPending = false;
-        bool frameTextureReady = false;
-    };
-    struct TerrainTextureSlot : TexturedResources
-    {
-        const void* mapIdentity = nullptr;
-        int mapWidth = 0, mapHeight = 0;
-        int fogWidth = 1, fogHeight = 1;
-        std::shared_ptr<const LiveFogSnapshot> fogSnapshot;
-        bool fogUploadPending = false;
-        std::vector<VkBufferImageCopy> fogDirtyRegions;
-    };
-
-    struct VulkanMinimapRenderer : TexturedResources
-    {
-        const char* terrainFallbackReason = nullptr;
-        std::uint64_t terrainUploadBytes = 0;
-        std::uint32_t terrainUploadRegions = 0;
         bool ready = false;
         bool submissionFailed = false;
         uintptr_t device = 0;
@@ -1166,35 +1145,21 @@ namespace
         std::vector<uintptr_t> submissionFences;
         uintptr_t renderPass = 0;
         uintptr_t commandPool = 0;
-        std::vector<TerrainTextureSlot> terrainSlots;
-        std::size_t terrainImageIndex = 0;
-        bool terrainDisabled = false;
-        bool terrainPrepared = false;
-        bool terrainInitializedLogged = false;
-        bool terrainFallbackLogged = false;
-        bool terrainDrawAttempted = false;
-        bool terrainGpuDrawn = false;
-        std::uint64_t clearAttachmentCommands = 0;
-        std::uint64_t clearAttachmentRects = 0;
-        std::uint64_t recordingCpuNanoseconds = 0;
-        DWORD lastRendererDiagnosticTick = 0;
-        bool rendererDiagnosticLogged = false;
-        std::vector<TerrainClearBatch> terrainClearBatches;
-        std::size_t terrainClearBatchCount = 0;
-        bool terrainClearBatchUnavailable = false;
-        std::vector<CapturedWaypoint> markerWaypointScratch;
-        std::vector<CapturedNearbyMarker> markerNearbyScratch;
-        std::vector<CapturedMapMarkerVisibility> markerVisibleMapScratch;
-        std::vector<CapturedWorldMapMarker> markerWorldMapScratch;
-        std::vector<CapturedWorldMapMarker> markerDeathScratch;
-        std::vector<MinimapWorldPoint> markerWorldPointScratch;
-        std::vector<MinimapWorldPoint> markerVisiblePointScratch;
-        std::vector<MinimapLive::Marker> markerPlayerScratch;
-        std::vector<MinimapLive::Marker> markerPingScratch;
-        std::array<std::vector<VkClearRect>, 8> markerArrowShadeScratch;
-        std::vector<VkClearRect> markerDiamondScratch;
-        std::vector<VkClearRect> markerDeathOutlineScratch;
-        std::vector<VkClearRect> markerDeathBoneScratch;
+        uintptr_t frameTextureImage = 0;
+        uintptr_t frameTextureMemory = 0;
+        uintptr_t frameTextureImageView = 0;
+        uintptr_t frameSampler = 0;
+        uintptr_t frameStagingBuffer = 0;
+        uintptr_t frameStagingMemory = 0;
+        uintptr_t frameDescriptorSetLayout = 0;
+        uintptr_t frameDescriptorPool = 0;
+        uintptr_t frameDescriptorSet = 0;
+        uintptr_t framePipelineLayout = 0;
+        uintptr_t framePipeline = 0;
+        std::uint32_t frameTextureWidth = 0;
+        std::uint32_t frameTextureHeight = 0;
+        bool frameTextureUploadPending = false;
+        bool frameTextureReady = false;
         VulkanRendererFns fns;
     };
 
@@ -1280,8 +1245,8 @@ namespace
 
     ModMetaData g_metaData = {
         "minimap_mod",
-        "Sparkweave Minimap: in-game map with a world clock, players, pings, waypoints and death markers.",
-            "0.5.12-local-r3",
+        "Shroudweave Minimap: in-game map with a world clock, players, pings, waypoints and death markers.",
+        "0.5.15",
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
         true,
@@ -1315,6 +1280,8 @@ namespace
     std::atomic<std::uint64_t> g_menuVisibilityCallsitePreimageWord{ 0 };
     std::atomic<bool> g_menuVisibilityCallsitePreimageReady{ false };
     std::atomic<std::uint64_t> g_lastMenuVisibilityClosedLogTick{ 0 };
+    std::atomic<DWORD> g_lastMenuVisibilityRetryTick{ 0 };
+    bool g_initialMenuVisibilityPending = false;
 
     std::mutex g_waypointMutex;
     std::vector<CapturedWaypoint> g_waypoints;
@@ -1486,17 +1453,17 @@ namespace
     {
         TopRight = 0,
         MiddleRight = 1,
-        BottomRight = 2
+        BottomRight = 2,
+        TopLeft = 3,
+        MiddleLeft = 4,
+        BottomLeft = 5
     };
 
-    enum class MinimapOrientation : int
-    {
-        Rotating = 0,
-        NorthUp = 1
-    };
+    enum class MinimapOrientation : int { Rotating = 0, NorthUp = 1 };
+    std::atomic<MinimapOrientation> g_minimapOrientation{ MinimapOrientation::NorthUp };
+    std::atomic<int> g_minimapOffset{ 0 };
 
     std::atomic<int> g_minimapPlacement{ static_cast<int>(MinimapPlacement::BottomRight) };
-    std::atomic<MinimapOrientation> g_minimapOrientation{ MinimapOrientation::NorthUp };
 
     std::array<std::uint8_t, LOCAL_PLAYER_UI_RENDER_SETUP_STOLEN_SIZE> g_localPlayerUiRenderSetupExpected = {
         0x48, 0x89, 0x7C, 0x24, 0x18,
@@ -1593,7 +1560,8 @@ namespace
 
     MinimapOrientation ParseMinimapOrientation(const std::string& value)
     {
-        return NormalizeConfigValue(value) == "rotating" ? MinimapOrientation::Rotating : MinimapOrientation::NorthUp;
+        return NormalizeConfigValue(value) == "rotating" ?
+            MinimapOrientation::Rotating : MinimapOrientation::NorthUp;
     }
 
     struct MinimapOrientationAngles
@@ -1602,26 +1570,26 @@ namespace
         float playerArrowHeading = 0.0f;
     };
 
-    MinimapOrientationAngles ResolveMinimapOrientationAngles(MinimapOrientation orientation, float playerHeading, bool headingValid)
+    MinimapOrientationAngles ResolveMinimapOrientationAngles(
+        MinimapOrientation orientation, float playerHeading, bool headingValid)
     {
         const float heading = headingValid && std::isfinite(playerHeading) ? playerHeading : 0.0f;
-        if (orientation == MinimapOrientation::NorthUp)
-            return {0.0f, heading};
-        return {heading, 0.0f};
+        return orientation == MinimapOrientation::NorthUp ?
+            MinimapOrientationAngles{ 0.0f, heading } : MinimapOrientationAngles{ heading, 0.0f };
     }
 
-    void RotateArrowSample(float destinationX, float destinationY, float heading, float& sourceX, float& sourceY)
+    void RotateArrowSample(float destinationX, float destinationY, float heading,
+        float& sourceX, float& sourceY)
     {
-        const float cosine = std::cos(heading);
-        const float sine = std::sin(heading);
+        const float cosine = std::cos(heading), sine = std::sin(heading);
         sourceX = cosine * destinationX + sine * destinationY;
         sourceY = -sine * destinationX + cosine * destinationY;
     }
 
-    void RotateArrowPoint(float sourceX, float sourceY, float heading, float& destinationX, float& destinationY)
+    void RotateArrowPoint(float sourceX, float sourceY, float heading,
+        float& destinationX, float& destinationY)
     {
-        const float cosine = std::cos(heading);
-        const float sine = std::sin(heading);
+        const float cosine = std::cos(heading), sine = std::sin(heading);
         destinationX = cosine * sourceX - sine * sourceY;
         destinationY = sine * sourceX + cosine * sourceY;
     }
@@ -1632,12 +1600,25 @@ namespace
         if (normalized == "topright" || normalized == "top" || normalized == "tr")
             return MinimapPlacement::TopRight;
 
+        if (normalized == "topleft" || normalized == "tl")
+            return MinimapPlacement::TopLeft;
+
         if (normalized == "middleright" || normalized == "centerright" ||
             normalized == "middle" || normalized == "center" ||
             normalized == "right" || normalized == "mr")
         {
             return MinimapPlacement::MiddleRight;
         }
+
+        if (normalized == "middleleft" || normalized == "centerleft" ||
+            normalized == "left" || normalized == "ml")
+            return MinimapPlacement::MiddleLeft;
+
+        if (normalized == "bottomleft" || normalized == "bl")
+            return MinimapPlacement::BottomLeft;
+
+        if (normalized == "bottomright" || normalized == "br")
+            return MinimapPlacement::BottomRight;
 
         return MinimapPlacement::BottomRight;
     }
@@ -1650,10 +1631,23 @@ namespace
             return "top-right";
         case MinimapPlacement::MiddleRight:
             return "middle-right";
+        case MinimapPlacement::TopLeft:
+            return "top-left";
+        case MinimapPlacement::MiddleLeft:
+            return "middle-left";
+        case MinimapPlacement::BottomLeft:
+            return "bottom-left";
         case MinimapPlacement::BottomRight:
         default:
             return "bottom-right";
         }
+    }
+
+    bool IsLeftMinimapPlacement(MinimapPlacement placement)
+    {
+        return placement == MinimapPlacement::TopLeft ||
+            placement == MinimapPlacement::MiddleLeft ||
+            placement == MinimapPlacement::BottomLeft;
     }
 
     int ParseMinimapToggleKey(const std::string& value, int fallback = VK_F10)
@@ -1754,6 +1748,42 @@ namespace
         return ClampValue(parsed, low, high);
     }
 
+    int ParseSignedConfigInteger(const std::string& value, int fallback, int low, int high)
+    {
+        const auto first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return fallback;
+        const auto last = value.find_last_not_of(" \t\r\n");
+        std::size_t index = first;
+        bool negative = false;
+        if (value[index] == '+' || value[index] == '-')
+        {
+            negative = value[index] == '-';
+            if (++index > last) return fallback;
+        }
+        const std::uint64_t limit = negative ?
+            static_cast<std::uint64_t>(-(static_cast<std::int64_t>(low))) :
+            static_cast<std::uint64_t>(high);
+        std::uint64_t parsed = 0;
+        for (; index <= last; ++index)
+        {
+            const char ch = value[index];
+            if (ch < '0' || ch > '9') return fallback;
+            const auto digit = static_cast<std::uint64_t>(ch - '0');
+            parsed = parsed > (limit - MinValue(limit, digit)) / 10 ?
+                limit : MinValue(limit, parsed * 10 + digit);
+        }
+        const std::int64_t signedValue = negative ?
+            -static_cast<std::int64_t>(parsed) : static_cast<std::int64_t>(parsed);
+        return ClampValue(static_cast<int>(signedValue), low, high);
+    }
+
+    int ScaleMinimapOffset(int offsetAt1080p, std::uint32_t height)
+    {
+        const double scaled = static_cast<double>(offsetAt1080p) * height / 1080.0;
+        return static_cast<int>(ClampValue<std::int64_t>(
+            static_cast<std::int64_t>(std::llround(scaled)), INT_MIN, INT_MAX));
+    }
+
     std::string MinimapToggleKeyName(int key)
     {
         if (key >= VK_F1 && key <= VK_F24)
@@ -1797,7 +1827,7 @@ namespace
 
     void RefreshMinimapConfig(ModContext* modContext, bool forceLog = false)
     {
-        std::lock_guard<std::recursive_mutex> controls(g_runtimeControlsMutex);
+        ScopedTimer capture(DiagnosticCollector(), Metric::ConfigPoll);
         std::string configuredPosition = "bottom-right";
         std::string positionSource = "default";
         if (!TryReadMinimapConfigStringFromFile(modContext, "position", configuredPosition, positionSource) &&
@@ -1882,8 +1912,11 @@ namespace
         readOption("icon_style", configuredIconStyle);
         readOption("map_style", configuredMapStyle);
         std::string configuredMapOrientation = "north-up";
+        std::string configuredOffset = "0";
         readOption("map_orientation", configuredMapOrientation);
+        readOption("offset", configuredOffset);
         const MinimapOrientation mapOrientation = ParseMinimapOrientation(configuredMapOrientation);
+        const int offset = ParseSignedConfigInteger(configuredOffset, 0, -1080, 1080);
         const bool defaultStyle = NormalizeConfigValue(configuredMapStyle) != "original";
         const bool previousDefaultStyle = g_defaultMapStyle.exchange(defaultStyle);
         const MinimapOrientation previousMapOrientation = g_minimapOrientation.exchange(mapOrientation);
@@ -1897,6 +1930,7 @@ namespace
         const bool previousWorld = g_showWorldMarkers.exchange(showWorld);
 
         const MinimapPlacement placement = ParseMinimapPlacement(configuredPosition);
+        const int previousOffset = g_minimapOffset.exchange(offset);
         const int toggleKey = ParseMinimapToggleKey(configuredToggleKey);
         const bool renderFallback = ParseConfigBoolean(configuredRenderFallback, true);
         const bool debugLogging = ParseConfigBoolean(configuredDebugLogging, false);
@@ -1923,7 +1957,7 @@ namespace
         const bool previousPings = g_showPings.exchange(showPings);
         const bool previousWaypoints = g_showWaypoints.exchange(showWaypoints);
         if (!forceLog && !hotkeysChanged && !scaleChanged && previousDefaultStyle == defaultStyle &&
-            previousMapOrientation == mapOrientation &&
+            previousMapOrientation == mapOrientation && previousOffset == offset &&
             previous == static_cast<int>(placement) &&
             previousToggleKey == toggleKey &&
             previousRenderFallback == renderFallback &&
@@ -1940,6 +1974,7 @@ namespace
         std::ostringstream oss;
         oss << "[Minimap] config"
             << " | position=" << MinimapPlacementName(placement)
+            << " | offset=" << offset
             << " | raw=" << configuredPosition
             << " | position_source=" << positionSource
             << " | toggle_key=" << MinimapToggleKeyName(toggleKey)
@@ -1981,20 +2016,32 @@ namespace
         const int safeTop = radius + frameExtra + 8;
         const int safeBottom = MaxValue(safeTop, screenHeight - radius - 8 - MaxValue(footerHeight, frameExtra));
 
-        MinimapPlacement placement = MinimapPlacement::BottomRight;
         const int rawPlacement = g_minimapPlacement.load();
-        if (rawPlacement == static_cast<int>(MinimapPlacement::TopRight))
-            placement = MinimapPlacement::TopRight;
-        else if (rawPlacement == static_cast<int>(MinimapPlacement::MiddleRight))
-            placement = MinimapPlacement::MiddleRight;
+        const MinimapPlacement placement = rawPlacement >= static_cast<int>(MinimapPlacement::TopRight) &&
+            rawPlacement <= static_cast<int>(MinimapPlacement::BottomLeft) ?
+            static_cast<MinimapPlacement>(rawPlacement) : MinimapPlacement::BottomRight;
 
         int cy = bottom;
-        if (placement == MinimapPlacement::TopRight)
+        const int verticalPosition = static_cast<int>(placement) % 3;
+        if (verticalPosition == 0)
             cy = top;
-        else if (placement == MinimapPlacement::MiddleRight)
+        else if (verticalPosition == 1)
             cy = screenHeight / 2;
 
+        // Positive offsets move upward. Scale the configured 1080p pixels with
+        // output height, then retain the existing HUD and frame safety bounds.
+        cy -= ScaleMinimapOffset(g_minimapOffset.load(), height);
         return ClampValue(cy, safeTop, safeBottom);
+    }
+
+    int ComputeMinimapCenterX(std::uint32_t width, int radius, int marginX, int frameHalf)
+    {
+        const int inset = MaxValue(marginX, frameHalf - radius + 8) + radius;
+        const int rawPlacement = g_minimapPlacement.load();
+        const MinimapPlacement placement = rawPlacement >= static_cast<int>(MinimapPlacement::TopRight) &&
+            rawPlacement <= static_cast<int>(MinimapPlacement::BottomLeft) ?
+            static_cast<MinimapPlacement>(rawPlacement) : MinimapPlacement::BottomRight;
+        return IsLeftMinimapPlacement(placement) ? inset : static_cast<int>(width) - inset;
     }
 
     bool SafeRead(uintptr_t address, void* buffer, std::size_t size)
@@ -2450,55 +2497,29 @@ namespace
     {
         g_menuVisibilityCaptureEpoch.fetch_add(1, std::memory_order_acq_rel);
         g_menuVisibilitySnapshot.Clear();
+        PublicCreativeCompat::ForgetIdentity();
     }
 
-    bool TryReadCurrentHudScreenType(std::uint8_t& screen)
+    bool TryReadCurrentHudScreenType(std::uint8_t& screen, std::array<uintptr_t, 4>* chain = nullptr)
     {
-        uintptr_t context = 0;
-        uintptr_t holder = 0;
-        uintptr_t state = 0;
-        uintptr_t play = 0;
-        if (g_exeBase == 0 ||
-            !SafeReadValue(g_exeBase + MinimapMenu10::UiContextRva, context) || context == 0 ||
-            !SafeReadValue(context + MinimapMenu10::HolderOffset, holder) || holder == 0 ||
-            !SafeReadValue(holder, state) || state == 0 ||
-            !SafeReadValue(state + MinimapMenu10::PlayStateOffset, play) || play == 0)
-        {
+        using PublicCreativeCompat::Copy;
+        using PublicCreativeCompat::Range;
+        uintptr_t context = 0, holder = 0, state = 0, play = 0;
+        if (!g_exeBase || ClientRva(MinimapMenu10::UiContextRva) > g_exeImageSize ||
+            sizeof(context) > g_exeImageSize - ClientRva(MinimapMenu10::UiContextRva) ||
+            !Range(g_exeBase, g_exeImageSize) ||
+            !Copy(g_exeBase + ClientRva(MinimapMenu10::UiContextRva), &context, sizeof(context)) ||
+            !Range(context, MinimapMenu10::HolderOffset + sizeof(holder)) ||
+            !Copy(context + MinimapMenu10::HolderOffset, &holder, sizeof(holder)) ||
+            !Copy(holder, &state, sizeof(state)) ||
+            !Range(state, MinimapMenu10::PlayStateOffset + sizeof(play)) ||
+            !Copy(state + MinimapMenu10::PlayStateOffset, &play, sizeof(play)) ||
+            !Range(play, MinimapMenu10::ScreenOffset + sizeof(screen)) ||
+            !Copy(play + MinimapMenu10::ScreenOffset, &screen, sizeof(screen)))
             return false;
-        }
-
-        return SafeReadValue(play + MinimapMenu10::ScreenOffset, screen);
-    }
-
-    void CaptureCurrentHudScreenType()
-    {
-        if (!g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
-            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
-        {
-            return;
-        }
-
-        const std::uint64_t epoch = g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire);
-        std::uint8_t screen = 0;
-        const bool readSucceeded = TryReadCurrentHudScreenType(screen);
-        const std::uint64_t now = GetTickCount64();
-        if (epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
-            !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
-            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
-        {
-            g_menuVisibilitySnapshot.Clear();
-            return;
-        }
-
-        g_menuVisibilitySnapshot.Capture(screen, now, readSucceeded);
-        // A session reset or deactivation can race the scalar publication. Fence
-        // any in-flight callback so an old screen cannot repopulate the snapshot.
-        if (epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
-            !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
-            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
-        {
-            g_menuVisibilitySnapshot.Clear();
-        }
+        if (chain)
+            *chain = { context, holder, state, play };
+        return true;
     }
 
     bool CurrentProfileAllowsMinimapGameplay()
@@ -2509,39 +2530,45 @@ namespace
         const std::uint64_t now = GetTickCount64();
         if (g_menuVisibilityHookActive.load(std::memory_order_acquire) &&
             g_menuVisibilitySnapshot.AllowsGameplay(now))
-        {
             return true;
-        }
 
         std::uint64_t previous = g_lastMenuVisibilityClosedLogTick.load();
         if (now - previous >= 5000 &&
             g_lastMenuVisibilityClosedLogTick.compare_exchange_strong(previous, now))
-        {
             Log("[Minimap] current HUD state is missing, stale, or outside the verified InGame screen; minimap hidden");
-        }
         return false;
     }
 
     bool ShouldSampleMinimapFallbackCamera()
     {
-        if (!g_minimapVisible.load() || !CurrentProfileAllowsMinimapGameplay()) return false;
+        if (!g_minimapVisible.load() || !CurrentProfileAllowsMinimapGameplay())
+            return false;
         CURSORINFO cursorInfo{};
         cursorInfo.cbSize = sizeof(cursorInfo);
-        if (GetCursorInfo(&cursorInfo) && (cursorInfo.flags & CURSOR_SHOWING) != 0)
-            return false;
-        return true;
+        return !(GetCursorInfo(&cursorInfo) && (cursorInfo.flags & CURSOR_SHOWING) != 0);
     }
 
     bool IsMinimapGameplay()
     {
-        if (!CurrentProfileAllowsMinimapGameplay()) return false;
+        if (!CurrentProfileAllowsMinimapGameplay())
+            return false;
         CURSORINFO cursorInfo{};
         cursorInfo.cbSize = sizeof(cursorInfo);
-        if (GetCursorInfo(&cursorInfo) && (cursorInfo.flags & CURSOR_SHOWING) != 0) return false;
+        if (GetCursorInfo(&cursorInfo) && (cursorInfo.flags & CURSOR_SHOWING) != 0)
+            return false;
+
         return HasFreshPlayerPosition();
     }
 
-    bool ShouldDrawMinimapInWorld() { return g_minimapVisible.load() && IsMinimapGameplay(); }
+    bool ShouldDrawMinimapInWorld(bool* visibleObserved = nullptr,
+        bool* gameplayObserved = nullptr)
+    {
+        const bool visible = g_minimapVisible.load();
+        if (visibleObserved != nullptr) *visibleObserved = visible;
+        const bool gameplay = visible && IsMinimapGameplay();
+        if (gameplayObserved != nullptr) *gameplayObserved = gameplay;
+        return visible && gameplay;
+    }
 
     bool IsMinimapGameFocused()
     {
@@ -2837,7 +2864,6 @@ namespace
 
     void ResetWorldSessionFromLog()
     {
-        std::lock_guard<std::recursive_mutex> controls(g_runtimeControlsMutex);
         g_toggleNotice.clear();
         const bool wasOnline = g_gameSessionOnline.exchange(false);
         const bool wasReady = g_worldSessionReady.exchange(false);
@@ -2861,7 +2887,7 @@ namespace
 
     void PollGameSessionLog()
     {
-        std::lock_guard<std::recursive_mutex> controls(g_runtimeControlsMutex);
+        ScopedTimer capture(DiagnosticCollector(), Metric::LogPoll);
         const DWORD now = GetTickCount();
         if (now - g_lastSessionLogPollTick < SESSION_LOG_POLL_MS)
             return;
@@ -3134,12 +3160,12 @@ namespace
     #include "client_1_0_guards.h"
 
     bool NamedClient10() {
-        return IsNamedSystemAt(0x1e02290,"player_camera_transform",0x2b29c0) &&
-            IsNamedSystemAt(0x1e0c200,"player_waypoints_ui",0x30e970);
+        return IsNamedSystemAt(ClientRva(0x1e02290),"player_camera_transform",ClientRva(0x2b29c0)) &&
+            IsNamedSystemAt(ClientRva(0x1e0c200),"player_waypoints_ui",ClientRva(0x30e970));
     }
     bool Iterators10() {
-        return reinterpret_cast<uintptr_t>(g_iterInit)==g_exeBase+0x9bab60 &&
-            reinterpret_cast<uintptr_t>(g_iterNext)==g_exeBase+0x9b5a50;
+        return reinterpret_cast<uintptr_t>(g_iterInit)==g_exeBase+ClientRva(0x9bab60) &&
+            reinterpret_cast<uintptr_t>(g_iterNext)==g_exeBase+ClientRva(0x9b5a50);
     }
     // Entire instructions before the iterator call; no relative operands copied.
     const std::array<std::uint8_t, 17> g_daytimeUiExpected = {
@@ -3149,7 +3175,7 @@ namespace
 
     bool HasVerifiedWorldClockLayout()
     {
-        if (g_client10) return Iterators10() && IsNamedSystemAt(0x1e02460,"player_daytime_ui",0x2b31a0) && IsNamedSystemAt(0x1e06420,"client_update_daytime",0x302610) && MatchClock10();
+        if (g_client10) return Iterators10() && IsNamedSystemAt(ClientRva(0x1e02460),"player_daytime_ui",ClientRva(0x2b31a0)) && IsNamedSystemAt(ClientRva(0x1e06420),"client_update_daytime",ClientRva(0x302610)) && MatchClock10();
         const std::uint8_t iterator[] = { 0xE8, 0x27, 0x3E, 0x67, 0,
             0x48, 0x8B, 0x4C, 0x24, 0x40, 0xE8, 0x6D, 0xCD, 0xA5, 0 };
         // isDaytime reads sunrise +28, sunset +30 and current solar time +48.
@@ -3285,11 +3311,11 @@ namespace
     bool HasVerifiedWorldWeatherLayout()
     {
         if (g_client10) {
-            if (!IsNamedSystemAt(0x1e03360,"ambient_effects",0x2fd800) || !MatchWeather10()) return false;
+            if (!IsNamedSystemAt(ClientRva(0x1e03360),"ambient_effects",ClientRva(0x2fd800)) || !MatchWeather10()) return false;
             const char* names[]={"Clear","Rain","Snow","Blizzard"};
             for (std::uint64_t i=0;i<4;++i) {
                 uintptr_t name=0;std::uint64_t value=99;char actual[9]{};
-                const uintptr_t entry=g_exeBase+0x1bbb4d0+i*0x28;
+                const uintptr_t entry=g_exeBase+ClientRva(0x1bbb4d0)+i*0x28;
                 const auto length=std::strlen(names[i])+1;
                 if (!SafeReadValue(entry,name) || name<g_exeBase || name-g_exeBase+length>g_exeImageSize ||
                     !SafeReadValue(entry+0x10,value) || value!=i || !SafeRead(name,actual,length) ||
@@ -3339,13 +3365,75 @@ namespace
         if (allocation) VirtualFree(allocation, 0, MEM_RELEASE);
     }
 
+    Mem::Detour* InstallVerifiedCallHook(uintptr_t callRva, uintptr_t targetRva, uintptr_t handler)
+    {
+        std::uint8_t call[5] = {};
+        if (callRva + sizeof(call) > g_exeImageSize || targetRva >= g_exeImageSize ||
+            !SafeRead(g_exeBase + callRva, call, sizeof(call)) || call[0] != 0xE8) return nullptr;
+        std::int32_t relative = 0;
+        std::memcpy(&relative, call + 1, sizeof(relative));
+        const auto resolvedTarget = static_cast<std::uintptr_t>(
+            static_cast<std::int64_t>(callRva) + 5 + relative);
+        // The prior mixed signed/unsigned comparison converts this signed
+        // value to uintptr_t; make that same conversion explicit.
+        if (resolvedTarget != targetRva) return nullptr;
+        // Keep CALL at the original site. A leaf relay tail-jumps to the C++
+        // wrapper, retaining the original stack alignment, shadow space and
+        // return address. Only this local-player call is intercepted.
+        std::uint8_t relay[14] = {0xFF,0x25,0,0,0,0};
+        std::memcpy(relay + 6, &handler, sizeof(handler));
+        auto* hook = new Mem::Detour(g_exeBase + callRva, relay, sizeof(relay), false);
+        const auto displacement = static_cast<std::int64_t>(hook->shellcode->data->address) -
+            static_cast<std::int64_t>(g_exeBase + callRva + 5);
+        if (!hook->shellcode->data->address || displacement < INT32_MIN || displacement > INT32_MAX)
+        {
+            DestroyCallSiteHook(hook);
+            return nullptr;
+        }
+        const std::uint8_t opcode = 0xE8;
+        hook->patch->updateOpcode(0, const_cast<std::uint8_t*>(&opcode), 1);
+        return hook;
+    }
+
     void CaptureMenuVisibilityCallsiteHook();
+
+    enum class MenuAdmission : std::uint8_t { rejected, raw, publicCreative };
+
+    struct MenuOwnershipSample
+    {
+        MenuAdmission admission = MenuAdmission::rejected;
+        unsigned kind = 0;
+        PublicCreativeCompat::Digest identity{};
+    };
+
+    struct MenuOwnershipOutcomeRecorder
+    {
+        MenuOwnershipSample& sample;
+        PublicCreativeCompat::ProofOrigin origin;
+        ~MenuOwnershipOutcomeRecorder() noexcept
+        {
+            using namespace MinimapAggregateTiming;
+            OwnershipStage stage{};
+            if (origin == PublicCreativeCompat::ProofOrigin::CallbackPre)
+                stage = OwnershipStage::Pre;
+            else if (origin == PublicCreativeCompat::ProofOrigin::CallbackPost)
+                stage = OwnershipStage::Post;
+            else return;
+
+            const auto result = sample.admission == MenuAdmission::raw ? OwnershipResult::Raw :
+                sample.admission == MenuAdmission::publicCreative ? OwnershipResult::PublicCreative :
+                OwnershipResult::Rejected;
+            DiagnosticCollector().RecordOwnershipOutcome(stage, result);
+        }
+    };
 
     bool MakeDirectCallOpcode(uintptr_t callsite, uintptr_t target, std::uint8_t (&opcode)[5])
     {
-        if (callsite > UINTPTR_MAX - 5) return false;
+        if (callsite > UINTPTR_MAX - 5)
+            return false;
         const auto relative = static_cast<std::int64_t>(target) - static_cast<std::int64_t>(callsite + 5);
-        if (relative < INT32_MIN || relative > INT32_MAX) return false;
+        if (relative < INT32_MIN || relative > INT32_MAX)
+            return false;
         opcode[0] = 0xE8;
         const auto relative32 = static_cast<std::int32_t>(relative);
         std::memcpy(opcode + 1, &relative32, sizeof(relative32));
@@ -3358,46 +3446,6 @@ namespace
         return MakeDirectCallOpcode(callsite, target, expected) &&
             SafeRead(callsite, actual, sizeof(actual)) &&
             std::memcmp(actual, expected, sizeof(expected)) == 0;
-    }
-
-    RendererOwnershipAdapter::MenuAdmission EvaluateCurrentMenuAdmission()
-    {
-        using RendererOwnershipAdapter::MenuAdmission;
-        const auto* image = reinterpret_cast<const std::uint8_t*>(g_exeBase);
-        if (!g_exeBase || g_exeImageSize <= RVA_MENU_RENDERER_CALL_1_0 + 5 ||
-            g_exeImageSize <= MinimapMenu10::RendererRva)
-            return MenuAdmission::rejected;
-
-        if (MinimapMenu10::MatchGuards(image, g_exeImageSize))
-            return IsCallsiteCalling(g_exeBase + RVA_MENU_RENDERER_CALL_1_0,
-                g_exeBase + MinimapMenu10::RendererRva)
-                ? MenuAdmission::raw
-                : MenuAdmission::rejected;
-
-        HMODULE provider = nullptr;
-        if (!GetModuleHandleExW(0, L"native_ui_host.dll", &provider))
-            return MenuAdmission::rejected;
-        struct ModuleReference
-        {
-            HMODULE value;
-            ~ModuleReference() { if (value) FreeLibrary(value); }
-        } providerReference{provider};
-
-        using namespace native_ui_host::renderer_ownership;
-        const auto getter = reinterpret_cast<decltype(&NativeUiHost_GetRendererOwnershipApi)>(
-            GetProcAddress(providerReference.value, "NativeUiHost_GetRendererOwnershipApi"));
-        if (!getter)
-            return MenuAdmission::rejected;
-
-        const Api* api = getter(abi_version);
-        const auto admission = RendererOwnershipAdapter::EvaluateMenuGuards(
-            image, g_exeImageSize, g_exeBase, api);
-        if (!RendererOwnershipAdapter::IsAdmitted(admission))
-            return admission;
-        return IsCallsiteCalling(g_exeBase + RVA_MENU_RENDERER_CALL_1_0,
-            g_exeBase + MinimapMenu10::RendererRva)
-            ? admission
-            : MenuAdmission::rejected;
     }
 
     bool IsRetainedMenuCallsiteOwned(
@@ -3431,14 +3479,77 @@ namespace
 
     bool IsRetainedCurrentMenuCallsiteOwned(Mem::Detour* hook)
     {
-        if (!g_exeBase || g_exeImageSize <= RVA_MENU_RENDERER_CALL_1_0 + 5 ||
-            g_exeImageSize <= MinimapMenu10::RendererRva)
+        if (!g_exeBase || g_exeImageSize <= ClientRva(RVA_MENU_RENDERER_CALL_1_0) + 5 ||
+            g_exeImageSize <= ClientRva(MinimapMenu10::RendererRva))
             return false;
-        const auto renderer = g_exeBase + MinimapMenu10::RendererRva;
+        const auto renderer = g_exeBase + ClientRva(MinimapMenu10::RendererRva);
         return g_originalMenuRenderer.load(std::memory_order_acquire) == renderer &&
-            IsRetainedMenuCallsiteOwned(
-                hook, g_exeBase + RVA_MENU_RENDERER_CALL_1_0, renderer,
-                reinterpret_cast<uintptr_t>(&CaptureMenuVisibilityCallsiteHook));
+            IsRetainedMenuCallsiteOwned(hook, g_exeBase + ClientRva(RVA_MENU_RENDERER_CALL_1_0),
+                renderer, reinterpret_cast<uintptr_t>(&CaptureMenuVisibilityCallsiteHook));
+    }
+
+    bool ReadMenuGuardBytes(const std::uint8_t* source, void* output, std::size_t size)
+    {
+        return source && output && size <= 64 && PublicCreativeCompat::GuardCopy(source, output, size);
+    }
+
+    bool SampleCurrentMenuOwnership(MenuOwnershipSample& sample, bool retained,
+        PublicCreativeCompat::ProofOrigin origin = PublicCreativeCompat::ProofOrigin::Other)
+    {
+        sample = {};
+        const MenuOwnershipOutcomeRecorder outcome{sample, origin};
+        const auto* image = reinterpret_cast<const std::uint8_t*>(g_exeBase);
+        if (!g_exeBase || g_exeImageSize <= ClientRva(RVA_MENU_RENDERER_CALL_1_0) + 10 ||
+            g_exeImageSize <= ClientRva(MinimapMenu10::RendererRva) + 18 ||
+            !PublicCreativeCompat::Range(g_exeBase, g_exeImageSize))
+            return false;
+
+        std::uint8_t callPrefix[5]{};
+        const std::uint8_t* ownedCall = nullptr;
+        if (retained)
+        {
+            if (!IsRetainedCurrentMenuCallsiteOwned(g_menuVisibilityCallHook) ||
+                !MakeDirectCallOpcode(g_exeBase + ClientRva(RVA_MENU_RENDERER_CALL_1_0),
+                    g_exeBase + ClientRva(MinimapMenu10::RendererRva), callPrefix))
+                return false;
+            ownedCall = callPrefix;
+        }
+        const auto guards = [&](const std::uint8_t* prefix, std::size_t size)
+        {
+            return MinimapMenu10::MatchGuardsWithRendererPrefix(image, g_exeImageSize,
+                prefix, size, ownedCall, ownedCall ? 5 : 0, ReadMenuGuardBytes, IsCurrentClientBuild());
+        };
+
+        std::array<std::uint8_t, 18> entry{};
+        if (!PublicCreativeCompat::Copy(g_exeBase + ClientRva(MinimapMenu10::RendererRva),
+            entry.data(), entry.size(), true))
+            return false;
+        if (guards(nullptr, 0))
+        {
+            PublicCreativeCompat::ForgetIdentity();
+            sample.admission = MenuAdmission::raw;
+            sample.kind = 1;
+            std::copy(entry.begin(), entry.end(), sample.identity.begin());
+            return true;
+        }
+
+        PublicCreativeCompat::Proof publicProof{};
+        if (PublicCreativeCompat::Inspect(g_exeBase + ClientRva(MinimapMenu10::RendererRva), publicProof, origin) &&
+            guards(PublicCreativeCompat::Original, sizeof(PublicCreativeCompat::Original)))
+        {
+            sample.admission = MenuAdmission::publicCreative;
+            sample.kind = publicProof.kind + 2;
+            sample.identity = publicProof.digest;
+            return true;
+        }
+        return false;
+    }
+
+    MenuAdmission EvaluateCurrentMenuAdmission()
+    {
+        MenuOwnershipSample sample{};
+        SampleCurrentMenuOwnership(sample, false, PublicCreativeCompat::ProofOrigin::AdmissionUpdate);
+        return sample.admission;
     }
 
     constexpr uintptr_t MENU_CALLSITE_ALIGNED_WORD_OFFSET = 2;
@@ -3470,8 +3581,7 @@ namespace
     {
         if (!hook || hook->active || !hook->shellcode || !hook->shellcode->data ||
             !hook->shellcode->data->address || hook->shellcode->data->size != 14 ||
-            !hook->patch || hook->patch->patched ||
-            hook->patch->originalBytes || !hook->patch->data ||
+            !hook->patch || hook->patch->patched || hook->patch->originalBytes || !hook->patch->data ||
             hook->patch->data->address != callsite || hook->patch->data->size != 5 ||
             (callsite & 7) != MENU_CALLSITE_ALIGNED_WORD_OFFSET || !finalizePublication)
             return false;
@@ -3486,7 +3596,6 @@ namespace
 
         auto* savedOriginalBytes = new std::uint8_t[sizeof(expectedCall)];
         std::memcpy(savedOriginalBytes, expectedCall, sizeof(expectedCall));
-
         if (!hook->shellcode->injected && !hook->shellcode->inject())
         {
             delete[] savedOriginalBytes;
@@ -3508,8 +3617,6 @@ namespace
         std::memcpy(replacementBytes + MENU_CALLSITE_ALIGNED_WORD_OFFSET,
             hook->patch->data->opcode, sizeof(expectedCall));
 
-        // Tests inject a completed foreign patch here to exercise the same final
-        // compare-and-exchange gate used by the live UI callsite.
         beforeCompareExchange();
 
         DWORD previousProtection = 0;
@@ -3531,86 +3638,196 @@ namespace
             hook->patch->patched = true;
             hook->active = true;
         }
-
-        const bool publicationFinalized = finalizePublication(
-            alignedAddress, replaced, previousProtection);
-
+        const bool publicationFinalized = finalizePublication(alignedAddress, replaced, previousProtection);
         delete[] savedOriginalBytes;
         return replaced && publicationFinalized;
     }
 
-    template <typename Hook, typename CanInstall, typename IsOwned, typename Activate>
+    template <typename CanInstall, typename IsOwned, typename Activate>
     bool ActivateMenuCallsiteOnce(
-        Hook* hook, std::atomic<bool>& everActivated,
-        std::atomic<bool>& publicationFinalized, CanInstall canInstall,
-        IsOwned isOwned, Activate activate)
+        Mem::Detour* hook, CanInstall canInstall, IsOwned isOwned, Activate activate)
     {
         if (!hook)
             return false;
-
-        if (everActivated.load(std::memory_order_acquire))
-            return publicationFinalized.load(std::memory_order_acquire) && isOwned(hook);
-
-        // Recheck the complete profile contract and exact original call immediately
-        // before the first write. A changed or foreign callsite is never replaced.
+        if (g_menuVisibilityCallsiteEverActivated.load(std::memory_order_acquire))
+            return g_menuVisibilityCallsitePublicationFinalized.load(std::memory_order_acquire) && isOwned(hook);
         if (!canInstall())
             return false;
-
         if (!activate(hook))
         {
             if (hook->active)
-                everActivated.store(true, std::memory_order_release);
+                g_menuVisibilityCallsiteEverActivated.store(true, std::memory_order_release);
             return false;
         }
-
-        // Once the relay may have been reached, keep it for process lifetime.
-        everActivated.store(true, std::memory_order_release);
+        g_menuVisibilityCallsiteEverActivated.store(true, std::memory_order_release);
         if (!isOwned(hook))
             return false;
-
-        publicationFinalized.store(true, std::memory_order_release);
+        g_menuVisibilityCallsitePublicationFinalized.store(true, std::memory_order_release);
         return true;
     }
 
     template <typename Hook, typename Snapshot>
     Hook* DisableMenuCaptureAndRetainCallsite(
-        Hook* hook,
-        std::atomic<bool>& captureActive,
-        std::atomic<std::uint64_t>& captureEpoch,
-        Snapshot& snapshot)
+        Hook* hook, std::atomic<bool>& captureActive,
+        std::atomic<std::uint64_t>& captureEpoch, Snapshot& snapshot)
     {
-        // A UI thread can already have fetched this relay when capture is
-        // disabled. Keep the patched callsite and target intact until exit.
+        // The UI thread may already have fetched the relay. Keep the callsite
+        // and forwarding target alive until process exit; disable capture only.
         captureActive.store(false, std::memory_order_release);
         captureEpoch.fetch_add(1, std::memory_order_acq_rel);
         snapshot.Clear();
         return hook;
     }
 
-    Mem::Detour* InstallVerifiedCallHook(uintptr_t callRva, uintptr_t targetRva, uintptr_t handler)
+    void CaptureMenuVisibilityCallsiteHook()
     {
-        std::uint8_t call[5] = {};
-        if (callRva + sizeof(call) > g_exeImageSize || targetRva >= g_exeImageSize ||
-            !SafeRead(g_exeBase + callRva, call, sizeof(call)) || call[0] != 0xE8) return nullptr;
-        std::int32_t relative = 0;
-        std::memcpy(&relative, call + 1, sizeof(relative));
-        if (static_cast<std::int64_t>(callRva) + 5 + relative != targetRva) return nullptr;
-        // Keep CALL at the original site. A leaf relay tail-jumps to the C++
-        // wrapper, retaining the original stack alignment, shadow space and
-        // return address. Only this local-player call is intercepted.
-        std::uint8_t relay[14] = {0xFF,0x25,0,0,0,0};
-        std::memcpy(relay + 6, &handler, sizeof(handler));
-        auto* hook = new Mem::Detour(g_exeBase + callRva, relay, sizeof(relay), false);
-        const auto displacement = static_cast<std::int64_t>(hook->shellcode->data->address) -
-            static_cast<std::int64_t>(g_exeBase + callRva + 5);
-        if (!hook->shellcode->data->address || displacement < INT32_MIN || displacement > INT32_MAX)
+        MenuWrapperPartition wrapper(DiagnosticCollector());
+        const auto epoch = g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire);
+        MenuOwnershipSample before{};
+        std::array<uintptr_t, 4> contextBefore{};
+        std::uint8_t initialScreen = 0;
+        const bool staged = g_client10 && g_runtimeCallbacksActive.load(std::memory_order_acquire) &&
+            g_menuVisibilityHookActive.load(std::memory_order_acquire) &&
+            SampleCurrentMenuOwnership(before, true, PublicCreativeCompat::ProofOrigin::CallbackPre) &&
+            TryReadCurrentHudScreenType(initialScreen, &contextBefore);
+        const bool preservePriorGameplay = staged && initialScreen == 1 &&
+            g_menuVisibilitySnapshot.AllowsGameplay(GetTickCount64());
+        if (!preservePriorGameplay)
+            g_menuVisibilitySnapshot.Clear();
+
+        const auto original = reinterpret_cast<MenuRendererFn>(
+            g_originalMenuRenderer.load(std::memory_order_acquire));
+        if (original == nullptr)
         {
-            DestroyCallSiteHook(hook);
-            return nullptr;
+            g_menuVisibilitySnapshot.Clear();
+            wrapper.NullOriginalExit();
+            return;
         }
-        const std::uint8_t opcode = 0xE8;
-        hook->patch->updateOpcode(0, const_cast<std::uint8_t*>(&opcode), 1);
-        return hook;
+        wrapper.ForwardStarted();
+        original();
+        wrapper.ForwardReturned();
+
+        if (!staged || epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
+            !g_client10 || !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
+            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
+        {
+            g_menuVisibilitySnapshot.Clear();
+            return;
+        }
+
+        std::uint8_t screen = 0;
+        std::array<uintptr_t, 4> contextAfter{};
+        MenuOwnershipSample after{};
+        if (!TryReadCurrentHudScreenType(screen, &contextAfter) || contextBefore != contextAfter ||
+            !SampleCurrentMenuOwnership(after, true, PublicCreativeCompat::ProofOrigin::CallbackPost) || before.kind != after.kind ||
+            before.identity != after.identity ||
+            epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
+            !g_client10 || !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
+            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
+        {
+            g_menuVisibilitySnapshot.Clear();
+            return;
+        }
+
+        g_menuVisibilitySnapshot.Capture(screen, GetTickCount64(), true);
+        if (epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
+            !g_client10 || !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
+            !g_menuVisibilityHookActive.load(std::memory_order_acquire))
+            g_menuVisibilitySnapshot.Clear();
+    }
+
+    bool PrepareMenuVisibilityCallsite(ModContext* context)
+    {
+        g_originalMenuRenderer.store(g_exeBase + ClientRva(MinimapMenu10::RendererRva), std::memory_order_release);
+        if (g_menuVisibilityCallHook == nullptr)
+        {
+            g_menuVisibilityCallHook = InstallVerifiedCallHook(
+                ClientRva(RVA_MENU_RENDERER_CALL_1_0),
+                ClientRva(MinimapMenu10::RendererRva),
+                reinterpret_cast<uintptr_t>(&CaptureMenuVisibilityCallsiteHook));
+            std::uint64_t originalAlignedWord = 0;
+            if (g_menuVisibilityCallHook && ReadMenuCallsitePreimageWord(
+                g_exeBase + ClientRva(RVA_MENU_RENDERER_CALL_1_0), originalAlignedWord))
+            {
+                g_menuVisibilityCallsitePreimageWord.store(originalAlignedWord, std::memory_order_release);
+                g_menuVisibilityCallsitePreimageReady.store(true, std::memory_order_release);
+            }
+            else if (g_menuVisibilityCallHook)
+            {
+                DestroyCallSiteHook(g_menuVisibilityCallHook);
+                g_menuVisibilityCallHook = nullptr;
+                context->Log("[Minimap] HUD visibility callsite preimage unavailable; map visibility will fail closed");
+            }
+        }
+        return g_menuVisibilityCallHook != nullptr;
+    }
+
+    bool ActivateCurrentMenuCallsite(const MenuOwnershipSample& expected)
+    {
+        return ActivateMenuCallsiteOnce(
+            g_menuVisibilityCallHook,
+            [&expected]() {
+                MenuOwnershipSample current{};
+                return g_menuVisibilityCallsitePreimageReady.load(std::memory_order_acquire) &&
+                    SampleCurrentMenuOwnership(current, false, PublicCreativeCompat::ProofOrigin::AdmissionUpdate) && current.admission == expected.admission &&
+                    current.kind == expected.kind && current.identity == expected.identity &&
+                    IsCallsiteCalling(g_exeBase + ClientRva(RVA_MENU_RENDERER_CALL_1_0),
+                        g_exeBase + ClientRva(MinimapMenu10::RendererRva));
+            },
+            [](Mem::Detour* hook) { return IsRetainedCurrentMenuCallsiteOwned(hook); },
+            [](Mem::Detour* hook) {
+                if (!g_menuVisibilityCallsitePreimageReady.load(std::memory_order_acquire))
+                    return false;
+                return ActivateMenuDetourWithCompareExchange(
+                    hook, g_exeBase + ClientRva(RVA_MENU_RENDERER_CALL_1_0),
+                    g_menuVisibilityCallsitePreimageWord.load(std::memory_order_acquire),
+                    []() {});
+            });
+    }
+
+    bool ActivateMenuVisibilityAtBoundary(ModContext* context, bool& initialMenuPending)
+    {
+        if (g_menuVisibilityCallsiteEverActivated.load(std::memory_order_acquire))
+        {
+            MenuOwnershipSample retained{};
+            const bool verified = g_menuVisibilityCallsitePublicationFinalized.load(std::memory_order_acquire) &&
+                SampleCurrentMenuOwnership(retained, true, PublicCreativeCompat::ProofOrigin::AdmissionUpdate);
+            initialMenuPending = !verified;
+            return verified;
+        }
+
+        MenuOwnershipSample admission{};
+        if (!SampleCurrentMenuOwnership(admission, false, PublicCreativeCompat::ProofOrigin::AdmissionUpdate) ||
+            admission.admission == MenuAdmission::rejected)
+        {
+            initialMenuPending = true;
+            return false;
+        }
+        if (!PrepareMenuVisibilityCallsite(context))
+        {
+            initialMenuPending = true;
+            return false;
+        }
+
+        const bool activated = ActivateCurrentMenuCallsite(admission);
+        initialMenuPending = !activated &&
+            !g_menuVisibilityCallsiteEverActivated.load(std::memory_order_acquire);
+        return activated;
+    }
+
+    bool RetryPendingMenuVisibilityAtUpdate(
+        bool modActive, ModContext* context, bool& initialMenuPending)
+    {
+        if (!modActive || !initialMenuPending)
+            return g_menuVisibilityHookActive.load(std::memory_order_acquire);
+        const DWORD now = GetTickCount();
+        DWORD previous = g_lastMenuVisibilityRetryTick.load(std::memory_order_relaxed);
+        if (previous != 0 && now - previous < 500)
+            return false;
+        if (!g_lastMenuVisibilityRetryTick.compare_exchange_strong(
+            previous, now, std::memory_order_acq_rel, std::memory_order_relaxed))
+            return false;
+        return ActivateMenuVisibilityAtBoundary(context, initialMenuPending);
     }
 
 
@@ -3662,6 +3879,7 @@ namespace
 
     void __fastcall CaptureFogUpdate(void* fog, const float* position, float radius)
     {
+        ScopedTimer capture(DiagnosticCollector(), Metric::FogCapture);
         const auto session = g_worldSessionGeneration.load();
         g_updateFog(fog, position, radius); // Includes the native local-player ownership check at the call site.
         if (!g_liveFogLayoutSupported || !g_showFogOfWar) return;
@@ -3728,13 +3946,6 @@ namespace
         return { enabled, enabled ? CopyLiveFog(GetTickCount()) : nullptr };
     }
 
-    const LiveFogSnapshot* CurrentMinimapFogSnapshot(const MinimapFogFrame& fog)
-    {
-        const auto* snapshot = fog.snapshot.get();
-        return fog.enabled && snapshot && snapshot->session == g_worldSessionGeneration.load() &&
-            GetTickCount() - snapshot->tick <= 2000 ? snapshot : nullptr;
-    }
-
     void ApplyExplorationFog(float& red, float& green, float& blue, float revealed)
     {
         // Opaque parchment hides terrain entirely in unexplored cells. The
@@ -3746,7 +3957,7 @@ namespace
 
     bool HasVerifiedLiveFogLayout()
     {
-        if (g_client10) return IsNamedSystemAt(0x1e08760,"fog_of_war",0x307040) && MatchFog10();
+        if (g_client10) return IsNamedSystemAt(ClientRva(0x1e08760),"fog_of_war",ClientRva(0x307040)) && MatchFog10();
         const std::uint8_t owner[] = {0x48,0x8B,0xD3,0x8B,0x08,0xE8,0x24,0x2E,0x09,0x00,
             0x84,0xC0,0x74,0x59};
         const std::uint8_t object[] = {0x48,0x8B,0x4C,0x24,0x48};
@@ -3769,7 +3980,7 @@ namespace
 
     bool HasVerifiedWorldMapLayout()
     {
-        if (g_client10) return Iterators10() && IsNamedSystemAt(0x1e041d0,"clear_map_markers_for_ui",0x2fee40) && IsNamedSystemAt(0x1e07210,"custom_map_markers_ui",0x3031c0) && IsNamedSystemAt(0x1e0d770,"replicate_map_markers_for_ui",0x310b10) && MatchWorld10();
+        if (g_client10) return Iterators10() && IsNamedSystemAt(ClientRva(0x1e041d0),"clear_map_markers_for_ui",ClientRva(0x2fee40)) && IsNamedSystemAt(ClientRva(0x1e07210),"custom_map_markers_ui",ClientRva(0x3031c0)) && IsNamedSystemAt(ClientRva(0x1e0d770),"replicate_map_markers_for_ui",ClientRva(0x310b10)) && MatchWorld10();
         const std::uint8_t init[] = { 0xE8, 0x8C, 0xC9, 0x63, 0x00 };
         const std::uint8_t clear[] = { 0x48, 0x89, 0x88, 0x08, 0xC1, 0x01, 0x00,
             0x48, 0x89, 0x88, 0x30, 0xC1, 0x03, 0x00 };
@@ -3840,7 +4051,7 @@ namespace
         const auto count = markers.size();
         std::vector<CapturedWorldMapMarker> deaths;
         const bool deathsValid = g_deathMarkerLayoutSupported &&
-            ReadWorldMapArray(state, ClientOffset(DEATH_MAP_ARRAY_OFFSET,MinimapClient10::DeathMapArrayOffset), false, deaths, DEATH_MAP_MAX_ENTRIES);
+            ReadWorldMapArray(state, ClientOffset(DEATH_MAP_ARRAY_OFFSET,0x3BEA50), false, deaths, DEATH_MAP_MAX_ENTRIES);
         if (!deathsValid) deaths.clear();
         const auto deathCount = deaths.size();
         {
@@ -3861,38 +4072,19 @@ namespace
         }
     }
 
-    void CopyWorldMapMarkers(std::vector<CapturedWorldMapMarker>& result, DWORD now)
-    {
-        result.clear();
-        std::lock_guard<std::mutex> lock(g_worldMapMutex);
-        if (!g_worldMapValid || now - g_worldMapTick > MinimapLive::PlayerStaleMs)
-            return;
-        result.assign(g_worldMapMarkers.begin(), g_worldMapMarkers.end());
-    }
-
     std::vector<CapturedWorldMapMarker> CopyWorldMapMarkers(DWORD now)
     {
-        std::vector<CapturedWorldMapMarker> result;
-        CopyWorldMapMarkers(result, now);
-        return result;
-    }
-
-    void CopyDeathMarkers(std::vector<CapturedWorldMapMarker>& result, DWORD now)
-    {
-        result.clear();
-        if (!g_deathMarkerLayoutSupported || !g_showDeathMarkers.load())
-            return;
         std::lock_guard<std::mutex> lock(g_worldMapMutex);
-        if (now - g_worldMapTick > MinimapLive::PlayerStaleMs)
-            return;
-        result.assign(g_deathMarkers.begin(), g_deathMarkers.end());
+        if (!g_worldMapValid || now - g_worldMapTick > MinimapLive::PlayerStaleMs) return {};
+        return g_worldMapMarkers;
     }
 
     std::vector<CapturedWorldMapMarker> CopyDeathMarkers(DWORD now)
     {
-        std::vector<CapturedWorldMapMarker> result;
-        CopyDeathMarkers(result, now);
-        return result;
+        if (!g_deathMarkerLayoutSupported || !g_showDeathMarkers.load()) return {};
+        std::lock_guard<std::mutex> lock(g_worldMapMutex);
+        if (now - g_worldMapTick > MinimapLive::PlayerStaleMs) return {};
+        return g_deathMarkers;
     }
 
     bool TryInitWorldMapState(void* ctx, uintptr_t& state)
@@ -3924,7 +4116,7 @@ namespace
 
     bool HasVerifiedLiveMarkerLayout()
     {
-        if (g_client10) return NamedClient10() && Iterators10() && IsNamedSystemAt(0x1e11c00,"update_ui_data",0x317ce0) && MatchMarkers10();
+        if (g_client10) return NamedClient10() && Iterators10() && IsNamedSystemAt(ClientRva(0x1e11c00),"update_ui_data",ClientRva(0x317ce0)) && MatchMarkers10();
         // Pin the record size, lookup arguments/targets and BasicPlayerInfos
         // slot layout as well as the named systems. Fail closed after updates.
         const std::uint8_t recordSize[] = { 0x41, 0xB8, 0x98, 0x00, 0x00, 0x00 };
@@ -4040,6 +4232,7 @@ namespace
 
     void __fastcall CapturePlayerCameraTransformHook(void* ctx, void*, void*, void*)
     {
+        ScopedTimer capture(DiagnosticCollector(), Metric::CameraCapture);
         uintptr_t record[10] = {};
         // player_camera_transform: +0x10 RenderTransform, +0x18 LocalPlayerData,
         // +0x30 LocalPlayerCameraTransform. Both transforms have fixed xyz + quaternion.
@@ -4197,6 +4390,7 @@ namespace
 
     bool TryRefreshPlayerPositionFromCachedCamera()
     {
+        ScopedTimer capture(DiagnosticCollector(), Metric::CachedCameraRefresh);
         const uintptr_t cachedCamera = g_playerCameraAddress.load();
         if (!IsLikelyRuntimePointer(cachedCamera))
             return false;
@@ -4249,6 +4443,7 @@ namespace
 
     bool TryCapturePlayerCameraFromRenderRoots()
     {
+        ScopedTimer capture(DiagnosticCollector(), Metric::CameraFallbackCapture);
         if (g_directCameraTrackingSupported)
             return false;
 
@@ -4838,7 +5033,8 @@ namespace
             return false;
         }
 
-        if (ShouldSampleMinimapFallbackCamera()) TryCapturePlayerCameraFromWaypointRecord(record);
+        if (ShouldSampleMinimapFallbackCamera())
+            TryCapturePlayerCameraFromWaypointRecord(record);
 
         std::vector<CapturedNearbyMarker> nearbyMarkers;
         if (g_liveMarkerLayoutSupported)
@@ -4947,18 +5143,6 @@ namespace
                 Log("[Minimap] awaiting internal player_waypoints_ui state");
             }
         }
-    }
-
-    void CaptureMenuVisibilityCallsiteHook()
-    {
-        // This call-site shim runs on the verified UI thread. The transient
-        // context is read only around the original renderer call and never kept.
-        CaptureCurrentHudScreenType();
-        const auto original = reinterpret_cast<MenuRendererFn>(g_originalMenuRenderer.load(std::memory_order_acquire));
-        if (original == nullptr)
-            return; // The call site is patched only after its exact target is validated.
-        original();
-        CaptureCurrentHudScreenType();
     }
 
     void __fastcall CaptureRenderPresentFrameHook(void* renderContext, void*, void* swapchainState, void*)
@@ -5384,7 +5568,6 @@ namespace
         fns.destroyImageView = ResolveDeviceFunction<DestroyImageViewFn>(getDeviceProcAddr, device, "vkDestroyImageView");
         fns.createRenderPass = ResolveDeviceFunction<CreateRenderPassFn>(getDeviceProcAddr, device, "vkCreateRenderPass");
         fns.destroyRenderPass = ResolveDeviceFunction<DestroyRenderPassFn>(getDeviceProcAddr, device, "vkDestroyRenderPass");
-        fns.flushMappedMemoryRanges = ResolveDeviceFunction<FlushMappedMemoryRangesFn>(getDeviceProcAddr, device, "vkFlushMappedMemoryRanges");
         fns.createFramebuffer = ResolveDeviceFunction<CreateFramebufferFn>(getDeviceProcAddr, device, "vkCreateFramebuffer");
         fns.destroyFramebuffer = ResolveDeviceFunction<DestroyFramebufferFn>(getDeviceProcAddr, device, "vkDestroyFramebuffer");
         fns.createCommandPool = ResolveDeviceFunction<CreateCommandPoolFn>(getDeviceProcAddr, device, "vkCreateCommandPool");
@@ -5515,7 +5698,6 @@ namespace
         }
 
         AddFrameShaderCandidates(candidates, "", name);
-        AddFrameShaderCandidates(candidates, "assets", name);
 
         for (const std::string& path : candidates)
         {
@@ -5609,16 +5791,31 @@ namespace
         r=pq(rr); g=pq(gg); b=pq(bb);
     }
 
-    bool TryCreateTexturedResourcesLocked(VulkanMinimapRenderer& renderer, TexturedResources& resource,
-        const std::vector<std::uint8_t>& rgba, int textureWidth, int textureHeight, bool terrain)
+    bool TryCreateTexturedFrameResourcesLocked(VulkanMinimapRenderer& renderer)
     {
-        if (resource.frameTextureReady) return true;
-        if (textureWidth <= 0 || textureHeight <= 0 || textureWidth > 4096 || textureHeight > 4096 ||
-            rgba.size() != std::size_t(textureWidth) * textureHeight * 4) return false;
-        if (!renderer.fns.TextureReady() || (terrain && !renderer.fns.flushMappedMemoryRanges)) return false;
+        if (renderer.frameTextureReady)
+            return true;
+        if (!renderer.fns.TextureReady())
+            return false;
+
+        EnsureMinimapFrameLoaded();
+
+        std::vector<std::uint8_t> rgba;
+        int textureWidth = 0;
+        int textureHeight = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_minimapFrameMutex);
+            if (!g_minimapFrame.loaded || g_minimapFrame.rgba.empty() || g_minimapFrame.width <= 0 || g_minimapFrame.height <= 0)
+                return false;
+
+            rgba = g_minimapFrame.rgba;
+            textureWidth = g_minimapFrame.width;
+            textureHeight = g_minimapFrame.height;
+        }
+
         void* device = reinterpret_cast<void*>(renderer.device);
         std::vector<float> hdrPixels;
-        const bool hdr = !terrain && IsHdrColorSpace(renderer.colorSpace);
+        const bool hdr = IsHdrColorSpace(renderer.colorSpace);
         if (hdr) {
             hdrPixels.resize(rgba.size());
             for (std::size_t i=0; i<rgba.size(); i+=4) {
@@ -5672,10 +5869,6 @@ namespace
         if (!TryAllocateMemoryByTrial(renderer, bufferRequirements, true, &stagingMemory, &mapped))
             return false;
         std::memcpy(mapped, hdr ? static_cast<const void*>(hdrPixels.data()) : rgba.data(), static_cast<std::size_t>(textureBytes));
-        if (terrain) {
-            VkMappedMemoryRange range{}; range.memory = stagingMemory;
-            if (renderer.fns.flushMappedMemoryRanges(device, 1, &range) != VK_SUCCESS) return false;
-        }
         renderer.fns.unmapMemory(device, stagingMemory);
         mapped = nullptr;
         if (renderer.fns.bindBufferMemory(device, stagingBuffer, stagingMemory, 0) != VK_SUCCESS)
@@ -5744,8 +5937,8 @@ namespace
 
         std::vector<std::uint8_t> vertexShader;
         std::vector<std::uint8_t> fragmentShader;
-        if (!TryReadFrameShader(terrain ? "embervale_minimap_terrain.vert.spv" : "embervale_minimap_frame.vert.spv", vertexShader) ||
-            !TryReadFrameShader(terrain ? "embervale_minimap_terrain.frag.spv" : "embervale_minimap_frame.frag.spv", fragmentShader))
+        if (!TryReadFrameShader("embervale_minimap_frame.vert.spv", vertexShader) ||
+            !TryReadFrameShader("embervale_minimap_frame.frag.spv", fragmentShader))
         {
             return false;
         }
@@ -5755,8 +5948,8 @@ namespace
             return false;
 
         VkPushConstantRange pushRange{};
-        pushRange.stageFlags = terrain ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
-        pushRange.size = sizeof(float) * (terrain ? 32 : 8);
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRange.size = sizeof(float) * 8;
         void* setLayoutForPipeline = setLayout;
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.setLayoutCount = 1;
@@ -5788,7 +5981,7 @@ namespace
         VkPipelineRasterizationStateCreateInfo raster{};
         VkPipelineMultisampleStateCreateInfo multisample{};
         VkPipelineColorBlendAttachmentState blendAttachment{};
-        blendAttachment.blendEnable = terrain ? 0 : 1;
+        blendAttachment.blendEnable = 1;
         blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -5816,61 +6009,23 @@ namespace
         if (!pipelineOk)
             return false;
 
-        resource.frameStagingBuffer = reinterpret_cast<uintptr_t>(stagingBuffer);
-        resource.frameStagingMemory = reinterpret_cast<uintptr_t>(stagingMemory);
-        resource.frameTextureImage = reinterpret_cast<uintptr_t>(textureImage);
-        resource.frameTextureMemory = reinterpret_cast<uintptr_t>(textureMemory);
-        resource.frameTextureImageView = reinterpret_cast<uintptr_t>(textureImageView);
-        resource.frameSampler = reinterpret_cast<uintptr_t>(sampler);
-        resource.frameDescriptorSetLayout = reinterpret_cast<uintptr_t>(setLayout);
-        resource.frameDescriptorPool = reinterpret_cast<uintptr_t>(descriptorPool);
-        resource.frameDescriptorSet = reinterpret_cast<uintptr_t>(descriptorSet);
-        resource.framePipelineLayout = reinterpret_cast<uintptr_t>(pipelineLayout);
-        resource.framePipeline = reinterpret_cast<uintptr_t>(pipeline);
-        resource.frameTextureWidth = static_cast<std::uint32_t>(textureWidth);
-        resource.frameTextureHeight = static_cast<std::uint32_t>(textureHeight);
-        resource.frameTextureUploadPending = true;
-        resource.frameTextureReady = true;
+        renderer.frameStagingBuffer = reinterpret_cast<uintptr_t>(stagingBuffer);
+        renderer.frameStagingMemory = reinterpret_cast<uintptr_t>(stagingMemory);
+        renderer.frameTextureImage = reinterpret_cast<uintptr_t>(textureImage);
+        renderer.frameTextureMemory = reinterpret_cast<uintptr_t>(textureMemory);
+        renderer.frameTextureImageView = reinterpret_cast<uintptr_t>(textureImageView);
+        renderer.frameSampler = reinterpret_cast<uintptr_t>(sampler);
+        renderer.frameDescriptorSetLayout = reinterpret_cast<uintptr_t>(setLayout);
+        renderer.frameDescriptorPool = reinterpret_cast<uintptr_t>(descriptorPool);
+        renderer.frameDescriptorSet = reinterpret_cast<uintptr_t>(descriptorSet);
+        renderer.framePipelineLayout = reinterpret_cast<uintptr_t>(pipelineLayout);
+        renderer.framePipeline = reinterpret_cast<uintptr_t>(pipeline);
+        renderer.frameTextureWidth = static_cast<std::uint32_t>(textureWidth);
+        renderer.frameTextureHeight = static_cast<std::uint32_t>(textureHeight);
+        renderer.frameTextureUploadPending = true;
+        renderer.frameTextureReady = true;
         pending.release();
         return true;
-    }
-
-    bool TryCreateTexturedFrameResourcesLocked(VulkanMinimapRenderer& renderer)
-    {
-        if (renderer.frameTextureReady) return true;
-        EnsureMinimapFrameLoaded();
-        std::lock_guard<std::mutex> lock(g_minimapFrameMutex);
-        if (!g_minimapFrame.loaded || g_minimapFrame.rgba.empty()) return false;
-        return TryCreateTexturedResourcesLocked(renderer, renderer, g_minimapFrame.rgba,
-            g_minimapFrame.width, g_minimapFrame.height, false);
-    }
-
-    void DestroyTexturedResources(VulkanMinimapRenderer& renderer, TexturedResources& resource)
-    {
-        void* device = reinterpret_cast<void*>(renderer.device);
-        const auto& fns = renderer.fns;
-            if (resource.framePipeline != 0 && fns.destroyPipeline != nullptr)
-                fns.destroyPipeline(device, reinterpret_cast<void*>(resource.framePipeline), nullptr);
-            if (resource.framePipelineLayout != 0 && fns.destroyPipelineLayout != nullptr)
-                fns.destroyPipelineLayout(device, reinterpret_cast<void*>(resource.framePipelineLayout), nullptr);
-            if (resource.frameDescriptorPool != 0 && fns.destroyDescriptorPool != nullptr)
-                fns.destroyDescriptorPool(device, reinterpret_cast<void*>(resource.frameDescriptorPool), nullptr);
-            if (resource.frameDescriptorSetLayout != 0 && fns.destroyDescriptorSetLayout != nullptr)
-                fns.destroyDescriptorSetLayout(device, reinterpret_cast<void*>(resource.frameDescriptorSetLayout), nullptr);
-            if (resource.frameSampler != 0 && fns.destroySampler != nullptr)
-                fns.destroySampler(device, reinterpret_cast<void*>(resource.frameSampler), nullptr);
-            if (resource.frameTextureImageView != 0 && fns.destroyImageView != nullptr)
-                fns.destroyImageView(device, reinterpret_cast<void*>(resource.frameTextureImageView), nullptr);
-            if (resource.frameTextureImage != 0 && fns.destroyImage != nullptr)
-                fns.destroyImage(device, reinterpret_cast<void*>(resource.frameTextureImage), nullptr);
-            if (resource.frameTextureMemory != 0 && fns.freeMemory != nullptr)
-                fns.freeMemory(device, reinterpret_cast<void*>(resource.frameTextureMemory), nullptr);
-            if (resource.frameStagingBuffer != 0 && fns.destroyBuffer != nullptr)
-                fns.destroyBuffer(device, reinterpret_cast<void*>(resource.frameStagingBuffer), nullptr);
-            if (resource.frameStagingMemory != 0 && fns.freeMemory != nullptr)
-                fns.freeMemory(device, reinterpret_cast<void*>(resource.frameStagingMemory), nullptr);
-
-        resource = {};
     }
 
     void DestroyVulkanMinimapRendererLocked()
@@ -5883,8 +6038,26 @@ namespace
 
         if (device != nullptr)
         {
-            DestroyTexturedResources(g_renderer, g_renderer);
-            for (auto& slot : g_renderer.terrainSlots) DestroyTexturedResources(g_renderer, slot);
+            if (g_renderer.framePipeline != 0 && fns.destroyPipeline != nullptr)
+                fns.destroyPipeline(device, reinterpret_cast<void*>(g_renderer.framePipeline), nullptr);
+            if (g_renderer.framePipelineLayout != 0 && fns.destroyPipelineLayout != nullptr)
+                fns.destroyPipelineLayout(device, reinterpret_cast<void*>(g_renderer.framePipelineLayout), nullptr);
+            if (g_renderer.frameDescriptorPool != 0 && fns.destroyDescriptorPool != nullptr)
+                fns.destroyDescriptorPool(device, reinterpret_cast<void*>(g_renderer.frameDescriptorPool), nullptr);
+            if (g_renderer.frameDescriptorSetLayout != 0 && fns.destroyDescriptorSetLayout != nullptr)
+                fns.destroyDescriptorSetLayout(device, reinterpret_cast<void*>(g_renderer.frameDescriptorSetLayout), nullptr);
+            if (g_renderer.frameSampler != 0 && fns.destroySampler != nullptr)
+                fns.destroySampler(device, reinterpret_cast<void*>(g_renderer.frameSampler), nullptr);
+            if (g_renderer.frameTextureImageView != 0 && fns.destroyImageView != nullptr)
+                fns.destroyImageView(device, reinterpret_cast<void*>(g_renderer.frameTextureImageView), nullptr);
+            if (g_renderer.frameTextureImage != 0 && fns.destroyImage != nullptr)
+                fns.destroyImage(device, reinterpret_cast<void*>(g_renderer.frameTextureImage), nullptr);
+            if (g_renderer.frameTextureMemory != 0 && fns.freeMemory != nullptr)
+                fns.freeMemory(device, reinterpret_cast<void*>(g_renderer.frameTextureMemory), nullptr);
+            if (g_renderer.frameStagingBuffer != 0 && fns.destroyBuffer != nullptr)
+                fns.destroyBuffer(device, reinterpret_cast<void*>(g_renderer.frameStagingBuffer), nullptr);
+            if (g_renderer.frameStagingMemory != 0 && fns.freeMemory != nullptr)
+                fns.freeMemory(device, reinterpret_cast<void*>(g_renderer.frameStagingMemory), nullptr);
 
             if (fns.destroySemaphore != nullptr)
             {
@@ -6186,7 +6359,7 @@ namespace
         ~MinimapScaleScope() { renderer.widgetScale = 1.0f; }
     };
 
-    bool TryMakeClippedClearRect(VulkanMinimapRenderer& renderer, int x, int y, int width, int height, VkClearRect& result)
+    bool AppendClippedClearRect(VulkanMinimapRenderer& renderer, std::vector<VkClearRect>& rects, int x, int y, int width, int height)
     {
         ScaleMinimapRect(renderer, x, y, width, height);
         if (width <= 0 || height <= 0)
@@ -6212,27 +6385,18 @@ namespace
         if (width <= 0 || height <= 0)
             return false;
 
-        result = {};
-        result.rect.offset.x = x;
-        result.rect.offset.y = y;
-        result.rect.extent.width = static_cast<std::uint32_t>(width);
-        result.rect.extent.height = static_cast<std::uint32_t>(height);
-        return true;
-    }
-
-    bool AppendClippedClearRect(VulkanMinimapRenderer& renderer, std::vector<VkClearRect>& rects, int x, int y, int width, int height)
-    {
         VkClearRect rect{};
-        if (!TryMakeClippedClearRect(renderer, x, y, width, height, rect))
-            return false;
+        rect.rect.offset.x = x;
+        rect.rect.offset.y = y;
+        rect.rect.extent.width = static_cast<std::uint32_t>(width);
+        rect.rect.extent.height = static_cast<std::uint32_t>(height);
         rects.push_back(rect);
         return true;
     }
 
-    void CmdClearRects(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue, float alpha,
-        const VkClearRect* rects, std::uint32_t rectCount)
+    void CmdClearRects(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue, float alpha, const std::vector<VkClearRect>& rects)
     {
-        if (rectCount == 0)
+        if (rects.empty())
             return;
 
         VkClearAttachment attachment{};
@@ -6242,24 +6406,33 @@ namespace
         attachment.clearValue.color.float32[2] = blue;
         attachment.clearValue.color.float32[3] = alpha;
 
-        renderer.fns.cmdClearAttachments(commandBuffer, 1, &attachment, rectCount, rects);
-        ++renderer.clearAttachmentCommands;
-        renderer.clearAttachmentRects += rectCount;
-    }
-
-    void CmdClearRects(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue, float alpha,
-        const std::vector<VkClearRect>& rects)
-    {
-        if (rects.empty())
-            return;
-        CmdClearRects(renderer, commandBuffer, red, green, blue, alpha, rects.data(),
-            static_cast<std::uint32_t>(rects.size()));
+        renderer.fns.cmdClearAttachments(commandBuffer, 1, &attachment, static_cast<std::uint32_t>(rects.size()), rects.data());
     }
 
     void CmdClearRect(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue, float alpha, int x, int y, int width, int height)
     {
-        VkClearRect rect{};
-        if (!TryMakeClippedClearRect(renderer, x, y, width, height, rect))
+        ScaleMinimapRect(renderer, x, y, width, height);
+        if (width <= 0 || height <= 0)
+            return;
+
+        const int maxWidth = static_cast<int>(renderer.width);
+        const int maxHeight = static_cast<int>(renderer.height);
+        if (x < 0)
+        {
+            width += x;
+            x = 0;
+        }
+        if (y < 0)
+        {
+            height += y;
+            y = 0;
+        }
+        if (x >= maxWidth || y >= maxHeight)
+            return;
+
+        width = MinValue(width, maxWidth - x);
+        height = MinValue(height, maxHeight - y);
+        if (width <= 0 || height <= 0)
             return;
 
         VkClearAttachment attachment{};
@@ -6269,85 +6442,12 @@ namespace
         attachment.clearValue.color.float32[2] = blue;
         attachment.clearValue.color.float32[3] = alpha;
 
-        renderer.fns.cmdClearAttachments(commandBuffer, 1, &attachment, 1, &rect);
-        ++renderer.clearAttachmentCommands;
-        ++renderer.clearAttachmentRects;
-    }
-
-    bool BeginTerrainClearBatches(VulkanMinimapRenderer& renderer)
-    {
-        if (renderer.terrainClearBatchUnavailable)
-            return false;
-
-        try
-        {
-            if (renderer.terrainClearBatches.size() != TERRAIN_CLEAR_BATCH_LIMIT)
-                renderer.terrainClearBatches.resize(TERRAIN_CLEAR_BATCH_LIMIT);
-        }
-        catch (const std::bad_alloc&)
-        {
-            renderer.terrainClearBatchUnavailable = true;
-            renderer.terrainClearBatchCount = 0;
-            return false;
-        }
-
-        renderer.terrainClearBatchCount = 0;
-        for (TerrainClearBatch& batch : renderer.terrainClearBatches)
-            batch.rectCount = 0;
-        return true;
-    }
-
-    void FlushTerrainClearBatches(VulkanMinimapRenderer& renderer, void* commandBuffer)
-    {
-        for (std::size_t index = 0; index < renderer.terrainClearBatchCount; ++index)
-        {
-            TerrainClearBatch& batch = renderer.terrainClearBatches[index];
-            CmdClearRects(renderer, commandBuffer, batch.red, batch.green, batch.blue, 1.0f,
-                batch.rects.data(), batch.rectCount);
-            batch.rectCount = 0;
-        }
-        renderer.terrainClearBatchCount = 0;
-    }
-
-    void QueueTerrainClearRect(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue,
-        int x, int y, int width, int height)
-    {
         VkClearRect rect{};
-        if (!TryMakeClippedClearRect(renderer, x, y, width, height, rect))
-            return;
-
-        auto findBatch = [&]() -> TerrainClearBatch*
-        {
-            for (std::size_t index = 0; index < renderer.terrainClearBatchCount; ++index)
-            {
-                TerrainClearBatch& batch = renderer.terrainClearBatches[index];
-                if (std::fabs(batch.red - red) < 0.0001f &&
-                    std::fabs(batch.green - green) < 0.0001f &&
-                    std::fabs(batch.blue - blue) < 0.0001f)
-                    return &batch;
-            }
-            return nullptr;
-        };
-
-        TerrainClearBatch* batch = findBatch();
-        if (batch != nullptr && batch->rectCount == TERRAIN_CLEAR_RECT_LIMIT)
-        {
-            FlushTerrainClearBatches(renderer, commandBuffer);
-            batch = nullptr;
-        }
-        if (batch == nullptr)
-        {
-            if (renderer.terrainClearBatchCount == renderer.terrainClearBatches.size())
-                FlushTerrainClearBatches(renderer, commandBuffer);
-
-            batch = &renderer.terrainClearBatches[renderer.terrainClearBatchCount++];
-            batch->red = red;
-            batch->green = green;
-            batch->blue = blue;
-            batch->rectCount = 0;
-        }
-
-        batch->rects[batch->rectCount++] = rect;
+        rect.rect.offset.x = x;
+        rect.rect.offset.y = y;
+        rect.rect.extent.width = static_cast<std::uint32_t>(width);
+        rect.rect.extent.height = static_cast<std::uint32_t>(height);
+        renderer.fns.cmdClearAttachments(commandBuffer, 1, &attachment, 1, &rect);
     }
 
     void CmdClearCircle(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue, float alpha, int cx, int cy, int radius, int stripHeight)
@@ -6441,6 +6541,51 @@ namespace
         CmdClearRects(renderer, commandBuffer, red, green, blue, 1.0f, rects);
     }
 
+    void CmdClearRotatedVerticalTriangle(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, int tipY, int baseY, int baseHalfWidth,
+        float red, float green, float blue, float heading)
+    {
+        if (std::fabs(heading) < 0.0001f)
+        {
+            CmdClearVerticalTriangle(renderer, commandBuffer, cx, tipY, baseY,
+                baseHalfWidth, red, green, blue);
+            return;
+        }
+
+        const int height = MaxValue(1, baseY - tipY);
+        const float tipOffset = static_cast<float>(tipY - cy);
+        const float baseOffset = static_cast<float>(baseY - cy);
+        std::vector<VkClearRect> rects;
+        rects.reserve(160);
+        for (int dy = -18; dy <= 18; ++dy)
+        {
+            int runStart = -1;
+            for (int dx = -18; dx <= 18; ++dx)
+            {
+                float sourceX = 0.0f, sourceY = 0.0f;
+                RotateArrowSample(static_cast<float>(dx), static_cast<float>(dy), heading, sourceX, sourceY);
+                bool inside = false;
+                if (sourceY >= tipOffset && sourceY <= baseOffset)
+                {
+                    const float t = (sourceY - tipOffset) / static_cast<float>(height);
+                    const int halfWidth = MaxValue(1, static_cast<int>(t * static_cast<float>(baseHalfWidth)));
+                    inside = std::fabs(sourceX) <= static_cast<float>(halfWidth);
+                }
+
+                if (inside && runStart < 0)
+                    runStart = dx;
+                else if (!inside && runStart >= 0)
+                {
+                    AppendClippedClearRect(renderer, rects, cx + runStart, cy + dy, dx - runStart, 1);
+                    runStart = -1;
+                }
+            }
+            if (runStart >= 0)
+                AppendClippedClearRect(renderer, rects, cx + runStart, cy + dy, 19 - runStart, 1);
+        }
+        CmdClearRects(renderer, commandBuffer, red, green, blue, 1.0f, rects);
+    }
+
     void CmdClearSmallCircle(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, int drawRadius, float red, float green, float blue, float alpha = 1.0f)
     {
         if (drawRadius <= 0)
@@ -6463,7 +6608,7 @@ namespace
         CmdClearRects(renderer, commandBuffer, red, green, blue, alpha, rects);
     }
 
-    bool TryDrawMinimapRasterIcon(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, std::uint32_t kind, bool clipped, bool deathMarkerRed = false);
+    bool TryDrawMinimapRasterIcon(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, std::uint32_t kind, bool clipped);
     bool HasLoadedMinimapIconAtlas();
 
     void CmdClearPoiBackplate(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, int size, float red, float green, float blue)
@@ -6640,50 +6785,8 @@ namespace
 
     void EnsurePlayerArrowLoaded();
 
-    void CmdClearRotatedVerticalTriangle(VulkanMinimapRenderer& renderer, void* commandBuffer,
-        int cx, int cy, int tipY, int baseY, int baseHalfWidth, float red, float green, float blue, float heading)
-    {
-        if (std::fabs(heading) < 0.0001f)
-        {
-            CmdClearVerticalTriangle(renderer, commandBuffer, cx, tipY, baseY, baseHalfWidth, red, green, blue);
-            return;
-        }
-
-        const int height = MaxValue(1, baseY - tipY);
-        const float tipOffset = static_cast<float>(tipY - cy);
-        const float baseOffset = static_cast<float>(baseY - cy);
-        std::vector<VkClearRect> rects;
-        rects.reserve(160);
-        for (int dy = -18; dy <= 18; ++dy)
-        {
-            int runStart = -1;
-            for (int dx = -18; dx <= 18; ++dx)
-            {
-                float sourceX = 0.0f, sourceY = 0.0f;
-                RotateArrowSample(static_cast<float>(dx), static_cast<float>(dy), heading, sourceX, sourceY);
-                bool inside = false;
-                if (sourceY >= tipOffset && sourceY <= baseOffset)
-                {
-                    const float t = (sourceY - tipOffset) / static_cast<float>(height);
-                    const int halfWidth = MaxValue(1, static_cast<int>(t * static_cast<float>(baseHalfWidth)));
-                    inside = std::fabs(sourceX) <= static_cast<float>(halfWidth);
-                }
-
-                if (inside && runStart < 0)
-                    runStart = dx;
-                else if (!inside && runStart >= 0)
-                {
-                    AppendClippedClearRect(renderer, rects, cx + runStart, cy + dy, dx - runStart, 1);
-                    runStart = -1;
-                }
-            }
-            if (runStart >= 0)
-                AppendClippedClearRect(renderer, rects, cx + runStart, cy + dy, 19 - runStart, 1);
-        }
-        CmdClearRects(renderer, commandBuffer, red, green, blue, 1.0f, rects);
-    }
-
-    void CmdClearPlayerArrow(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, float heading)
+    void CmdClearPlayerArrow(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, int radius, float heading = 0.0f)
     {
         CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, cx, cy, 12, 0.02f, 0.13f, 0.16f, 0.34f);
         CmdClearSmallCircle(renderer, commandBuffer, cx, cy, radius, cx, cy + 1, 8, 0.0f, 0.0f, 0.0f, 0.52f);
@@ -6698,7 +6801,8 @@ namespace
             1, 0.035f, 0.026f, 0.018f);
     }
 
-    bool TryDrawPremiumPlayerArrow(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, float heading)
+    bool TryDrawPremiumPlayerArrow(VulkanMinimapRenderer& renderer, void* commandBuffer,
+        int cx, int cy, int radius, float heading = 0.0f)
     {
         EnsurePlayerArrowLoaded();
 
@@ -6711,8 +6815,8 @@ namespace
         const int top = cy - targetSize / 2;
         const int clipRadius = MaxValue(1, radius - 18);
         const int clipRadiusSq = clipRadius * clipRadius;
-
         const float half = static_cast<float>(targetSize - 1) * 0.5f;
+
         for (int dstY = 0; dstY < targetSize; ++dstY)
         {
             const int screenY = top + dstY;
@@ -6747,7 +6851,8 @@ namespace
                 constexpr float sampleEpsilon = 0.0001f;
                 const int sourcePixelX = static_cast<int>(std::floor(sourceX + half + sampleEpsilon));
                 const int sourcePixelY = static_cast<int>(std::floor(sourceY + half + sampleEpsilon));
-                if (sourcePixelX < 0 || sourcePixelX >= targetSize || sourcePixelY < 0 || sourcePixelY >= targetSize)
+                if (sourcePixelX < 0 || sourcePixelX >= targetSize ||
+                    sourcePixelY < 0 || sourcePixelY >= targetSize)
                 {
                     flushRun(screenX);
                     continue;
@@ -6790,43 +6895,28 @@ namespace
         return true;
     }
 
-    void CopyWaypoints(std::vector<CapturedWaypoint>& result)
+    std::vector<CapturedWaypoint> CopyWaypoints()
     {
-        result.clear();
         std::lock_guard<std::mutex> lock(g_waypointMutex);
         if (!g_showWaypoints.load() ||
             (g_liveMarkerLayoutSupported && GetTickCount() - g_lastWaypointTick.load() >= MinimapLive::PlayerStaleMs))
-            return;
-        result.assign(g_waypoints.begin(), g_waypoints.end());
-    }
-
-    std::vector<CapturedWaypoint> CopyWaypoints()
-    {
-        std::vector<CapturedWaypoint> result;
-        CopyWaypoints(result);
-        return result;
-    }
-
-    void CopyNearbyMarkers(std::vector<CapturedNearbyMarker>& result)
-    {
-        result.clear();
-        std::lock_guard<std::mutex> lock(g_nearbyMarkerMutex);
-        result.assign(g_nearbyMarkers.begin(), g_nearbyMarkers.end());
+            return {};
+        return g_waypoints;
     }
 
     std::vector<CapturedNearbyMarker> CopyNearbyMarkers()
     {
-        std::vector<CapturedNearbyMarker> result;
-        CopyNearbyMarkers(result);
-        return result;
+        std::lock_guard<std::mutex> lock(g_nearbyMarkerMutex);
+        return g_nearbyMarkers;
     }
 
-    void CopyVisibleMapMarkers(std::vector<CapturedMapMarkerVisibility>& result)
+    std::vector<CapturedMapMarkerVisibility> CopyVisibleMapMarkers()
     {
-        result.clear();
         const DWORD now = GetTickCount();
         std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
 
+        std::vector<CapturedMapMarkerVisibility> result;
+        result.reserve(g_visibleMapMarkers.size());
         for (const CapturedMapMarkerVisibility& marker : g_visibleMapMarkers)
         {
             if (marker.visibility == 0 || now - marker.lastUpdateTick > VISIBLE_MAP_MARKER_STALE_MS)
@@ -6834,12 +6924,7 @@ namespace
 
             result.push_back(marker);
         }
-    }
 
-    std::vector<CapturedMapMarkerVisibility> CopyVisibleMapMarkers()
-    {
-        std::vector<CapturedMapMarkerVisibility> result;
-        CopyVisibleMapMarkers(result);
         return result;
     }
 
@@ -7676,7 +7761,7 @@ namespace
         }
     }
 
-    bool TryDrawMinimapRasterIcon(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, std::uint32_t kind, bool clipped, bool deathMarkerRed)
+    bool TryDrawMinimapRasterIcon(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int x, int y, std::uint32_t kind, bool clipped)
     {
         MinimapIcon icon{};
         if (!TryCopyMinimapIcon(kind, icon))
@@ -7733,18 +7818,15 @@ namespace
                     (static_cast<std::size_t>(srcY) * static_cast<std::size_t>(icon.width) + static_cast<std::size_t>(srcX)) *
                     4u;
                 const std::uint8_t alpha = icon.rgba[offset + 3];
-                const std::size_t glyphIndex = offset / 4;
-                const bool glyphPixel = glyphIndex < icon.glyph.size() && icon.glyph[glyphIndex] != 0;
-                if (alpha <= 24 || (styled && !glyphPixel))
+                if (alpha <= 24 || (styled && (offset / 4 >= icon.glyph.size() || !icon.glyph[offset / 4])))
                 {
                     flushRun(screenX);
                     continue;
                 }
 
-                const bool tintDeathGlyph = deathMarkerRed && glyphPixel;
-                const float red = tintDeathGlyph ? 1.0f : (styled ? 0.33f : static_cast<float>(icon.rgba[offset + 0]) / 255.0f);
-                const float green = tintDeathGlyph ? 0.20f : (styled ? 0.20f : static_cast<float>(icon.rgba[offset + 1]) / 255.0f);
-                const float blue = tintDeathGlyph ? 0.16f : (styled ? 0.05f : static_cast<float>(icon.rgba[offset + 2]) / 255.0f);
+                const float red = styled ? 0.33f : static_cast<float>(icon.rgba[offset + 0]) / 255.0f;
+                const float green = styled ? 0.20f : static_cast<float>(icon.rgba[offset + 1]) / 255.0f;
+                const float blue = styled ? 0.05f : static_cast<float>(icon.rgba[offset + 2]) / 255.0f;
 
                 if (runStart >= 0 &&
                     std::fabs(runRed - red) < 0.002f &&
@@ -7786,6 +7868,14 @@ namespace
         return true;
     }
 
+    struct MinimapWorldPoint
+    {
+        float x = 0.0f;
+        float z = 0.0f;
+        std::uint32_t kind = 0;
+        bool navigation = false;
+        bool customPin = false;
+    };
 
     bool TryResolveKnownMarkerIconKey(std::uint32_t candidate, std::uint32_t& outKey)
     {
@@ -8101,6 +8191,12 @@ namespace
                 changed = true;
             }
 
+            // Counts are used only by the throttled debug summary. Keep cache
+            // updates/pruning above; avoid a second full scan for ordinary captures.
+            if (!changed || now - g_lastVisibleMapMarkerSummaryTick < 5000 ||
+                !g_debugLoggingEnabled.load())
+                return;
+
             for (const CapturedMapMarkerVisibility& current : g_visibleMapMarkers)
             {
                 if (current.visibility == 0 || now - current.lastUpdateTick > VISIBLE_MAP_MARKER_STALE_MS)
@@ -8137,6 +8233,7 @@ namespace
 
     bool TryPublishMapMarkerVisibilityRecord(const MapMarkerVisibilityIterationRecord& record)
     {
+        ScopedTimer capture(DiagnosticCollector(), Metric::MarkerCapture);
         if (record.marker == nullptr || record.visibilityState == nullptr)
             return false;
 
@@ -8299,7 +8396,7 @@ namespace
 
     bool HasVisibleMapMarkerNear(const std::vector<MinimapWorldPoint>& visibleMarkers, float x, float z, std::uint32_t kind);
 
-    void BuildWorldPoints(VulkanMinimapRenderer& renderer,
+    void BuildWorldPoints(
         std::vector<MinimapWorldPoint>& points,
         const std::vector<CapturedWaypoint>& waypoints,
         const std::vector<CapturedNearbyMarker>& nearbyMarkers,
@@ -8312,8 +8409,7 @@ namespace
             const bool debugKeys = g_debugLoggingEnabled.load() && now - lastUnknownLog >= 15000;
             std::ostringstream unknownKeys;
             int unknownCount = 0;
-            CopyWorldMapMarkers(renderer.markerWorldMapScratch, now);
-            for (const auto& marker : renderer.markerWorldMapScratch)
+            for (const auto& marker : CopyWorldMapMarkers(now))
             {
                 // Dedicated ping capture preserves per-sender expiry and toggles.
                 if (marker.key == WORLD_MAP_PING && (g_liveMarkerLayoutSupported || !g_showPings.load())) continue;
@@ -8338,8 +8434,7 @@ namespace
             }
             return; // An empty/expired snapshot must not resurrect cached POIs.
         }
-        std::vector<MinimapWorldPoint>& visibleMarkerPoints = renderer.markerVisiblePointScratch;
-        visibleMarkerPoints.clear();
+        std::vector<MinimapWorldPoint> visibleMarkerPoints;
         visibleMarkerPoints.reserve(visibleMapMarkers.size());
         for (const CapturedMapMarkerVisibility& marker : visibleMapMarkers)
         {
@@ -8500,13 +8595,13 @@ namespace
             candidates.reserve(MinValue(g_staticPois.pois.size(), STATIC_POI_MAX_DRAWN));
             for (const StaticPoi& poi : g_staticPois.pois)
             {
+                if (!IsWorldPointRevealedByFogOfWar(poi.x, poi.z))
+                    continue;
+
                 const float dx = poi.x - centerX;
                 const float dz = poi.z - centerZ;
                 const float distanceSq = dx * dx + dz * dz;
                 if (distanceSq > radiusSq)
-                    continue;
-
-                if (!IsWorldPointRevealedByFogOfWar(poi.x, poi.z))
                     continue;
 
                 if (requireVisibilityMatch && !HasVisibleMapMarkerNear(visibleMarkerPoints, poi.x, poi.z, poi.kind))
@@ -8519,12 +8614,12 @@ namespace
             }
         }
 
-        const std::size_t count = MinValue(candidates.size(), STATIC_POI_MAX_DRAWN);
-        std::partial_sort(candidates.begin(), candidates.begin() + count, candidates.end(), [](const StaticPoiCandidate& left, const StaticPoiCandidate& right)
+        std::sort(candidates.begin(), candidates.end(), [](const StaticPoiCandidate& left, const StaticPoiCandidate& right)
         {
             return left.distanceSq < right.distanceSq;
         });
 
+        const std::size_t count = MinValue(candidates.size(), STATIC_POI_MAX_DRAWN);
         for (std::size_t index = 0; index < count; ++index)
         {
             points.push_back(candidates[index].point);
@@ -8559,7 +8654,6 @@ namespace
     void FilterFoggedWorldPoints(std::vector<MinimapWorldPoint>& points, const MinimapFogFrame& fog)
     {
         if (!fog.enabled) return;
-        const auto* snapshot = CurrentMinimapFogSnapshot(fog);
         points.erase(std::remove_if(points.begin(), points.end(), [&](const MinimapWorldPoint& point) {
             // Live navigation has a separate draw layer. Retain its legacy
             // waypoint/ping representations, custom pins and native quests.
@@ -8567,7 +8661,7 @@ namespace
                 return false;
             // Test the real world location, before clamping icons to the rim.
             // Reveal icons only on the explored side of the soft fog edge.
-            return SampleLiveFog(snapshot, point.x, point.z) < 0.5f;
+            return SampleLiveFog(fog.snapshot.get(), point.x, point.z) < 0.5f;
         }), points.end());
     }
 
@@ -8626,23 +8720,9 @@ namespace
         blue = ClampValue(blue * vignette + 0.004f, 0.0f, 1.0f);
     }
 
-    bool TryDrawTerrainTexture(VulkanMinimapRenderer&, void*, int, int, int, float, float, float, float, const MinimapFogFrame&);
-
     void DrawRealMap(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, float centerX, float centerZ, float unitsPerPixel, float headingRadians,
         const MinimapFogFrame& fog = CaptureMinimapFogFrame())
     {
-        renderer.terrainDrawAttempted = true;
-        renderer.terrainGpuDrawn = false;
-        if (renderer.terrainPrepared && TryDrawTerrainTexture(renderer, commandBuffer, cx, cy, radius,
-            centerX, centerZ, unitsPerPixel, headingRadians, fog))
-        {
-            renderer.terrainGpuDrawn = true;
-            renderer.terrainFallbackReason = nullptr;
-            return;
-        }
-        if (renderer.terrainFallbackReason == nullptr)
-            renderer.terrainFallbackReason = renderer.terrainPrepared ? "gpu_terrain_draw_rejected" : "gpu_terrain_not_prepared";
-        const auto* fogSnapshot = CurrentMinimapFogSnapshot(fog);
         EnsureRealMapLoaded();
 
         const int innerRadius = MaxValue(8, radius);
@@ -8651,7 +8731,6 @@ namespace
         std::lock_guard<std::mutex> lock(g_realMapMutex);
         const RealMapTexture& map = ActiveRealMapLocked();
         const bool hasMap = map.loaded && !map.rgba.empty();
-        const bool useBatchedClears = BeginTerrainClearBatches(renderer);
         const int sampleStep = ClampValue(g_minimapMapSampleStep.load(), 1, 4);
         const int mapLight = g_minimapMapLight.load();
         const auto quantizeColor = [mapLight](float value) -> float
@@ -8675,12 +8754,7 @@ namespace
                 if (!inRun || endX <= runStart)
                     return;
 
-                if (useBatchedClears)
-                    QueueTerrainClearRect(renderer, commandBuffer, runRed, runGreen, runBlue,
-                        cx + runStart, cy + y, endX - runStart, rowHeight);
-                else
-                    CmdClearRect(renderer, commandBuffer, runRed, runGreen, runBlue, 1.0f,
-                        cx + runStart, cy + y, endX - runStart, rowHeight);
+                CmdClearRect(renderer, commandBuffer, runRed, runGreen, runBlue, 1.0f, cx + runStart, cy + y, endX - runStart, rowHeight);
                 inRun = false;
             };
 
@@ -8739,7 +8813,7 @@ namespace
                     const float distance = std::sqrt(static_cast<float>(distanceSq)) / static_cast<float>(innerRadius);
                     ApplyMapLighting(red, green, blue, distance, mapLight);
                     if (fog.enabled)
-                        ApplyExplorationFog(red, green, blue, SampleLiveFog(fogSnapshot, worldX, worldZ));
+                        ApplyExplorationFog(red, green, blue, SampleLiveFog(fog.snapshot.get(), worldX, worldZ));
                 }
 
                 red = quantizeColor(red);
@@ -8764,8 +8838,6 @@ namespace
 
             flushRun(innerRadius + 1);
         }
-        if (useBatchedClears)
-            FlushTerrainClearBatches(renderer, commandBuffer);
     }
 
     void CmdClearRingBand(VulkanMinimapRenderer& renderer, void* commandBuffer, float red, float green, float blue, float alpha, int cx, int cy, int outerRadius, int innerRadius, int stripHeight)
@@ -8891,21 +8963,20 @@ namespace
         return true;
     }
 
-    void RecordTextureUpload(VulkanMinimapRenderer& renderer, TexturedResources& resource, void* commandBuffer, bool full = true, std::uint32_t offsetY = 0,
-        const std::vector<VkBufferImageCopy>* regions = nullptr)
+    void RecordFrameTextureUploadIfNeeded(VulkanMinimapRenderer& renderer, void* commandBuffer)
     {
-        if (!resource.frameTextureReady)
+        if (!renderer.frameTextureReady || !renderer.frameTextureUploadPending)
             return;
 
-        void* image = reinterpret_cast<void*>(resource.frameTextureImage);
-        void* buffer = reinterpret_cast<void*>(resource.frameStagingBuffer);
+        void* image = reinterpret_cast<void*>(renderer.frameTextureImage);
+        void* buffer = reinterpret_cast<void*>(renderer.frameStagingBuffer);
         if (image == nullptr || buffer == nullptr)
             return;
 
         VkImageMemoryBarrier toTransfer{};
-        toTransfer.srcAccessMask = full ? 0 : VK_ACCESS_SHADER_READ_BIT;
+        toTransfer.srcAccessMask = 0;
         toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        toTransfer.oldLayout = full ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toTransfer.image = image;
         toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -8913,7 +8984,7 @@ namespace
         toTransfer.subresourceRange.layerCount = 1;
         renderer.fns.cmdPipelineBarrier(
             commandBuffer,
-            full ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
             0,
             0,
@@ -8926,18 +8997,16 @@ namespace
         VkBufferImageCopy copy{};
         copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         copy.imageSubresource.layerCount = 1;
-        copy.bufferOffset = std::uint64_t(offsetY) * resource.frameTextureWidth * 4;
-        copy.imageOffset.y = static_cast<std::int32_t>(offsetY);
-        copy.imageExtent.width = resource.frameTextureWidth;
-        copy.imageExtent.height = resource.frameTextureHeight - offsetY;
+        copy.imageExtent.width = renderer.frameTextureWidth;
+        copy.imageExtent.height = renderer.frameTextureHeight;
         copy.imageExtent.depth = 1;
         renderer.fns.cmdCopyBufferToImage(
             commandBuffer,
             buffer,
             image,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            regions ? static_cast<std::uint32_t>(regions->size()) : 1,
-            regions ? regions->data() : &copy);
+            1,
+            &copy);
 
         VkImageMemoryBarrier toShader{};
         toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -8960,16 +9029,8 @@ namespace
             1,
             &toShader);
 
-        resource.frameTextureUploadPending = false;
+        renderer.frameTextureUploadPending = false;
     }
-
-    void RecordFrameTextureUploadIfNeeded(VulkanMinimapRenderer& renderer, void* commandBuffer)
-    {
-        if (renderer.frameTextureReady && renderer.frameTextureUploadPending)
-            RecordTextureUpload(renderer, renderer, commandBuffer);
-    }
-
-#include "terrain_gpu.h"
 
     bool TryDrawMinimapTexturedFrame(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, int frameExtra, float headingRadians)
     {
@@ -9090,7 +9151,7 @@ namespace
         CmdClearRingBand(renderer, commandBuffer, 0.026f, 0.025f, 0.023f, 1.0f, cx, cy, radius + 3, radius + 1, 2);
     }
 
-    void CmdClearCompassFrameOverlay(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius, float mapHeading)
+    void CmdClearCompassFrameOverlay(VulkanMinimapRenderer& renderer, void* commandBuffer, int cx, int cy, int radius)
     {
         CmdClearRingBand(renderer, commandBuffer, 0.90f, 0.71f, 0.38f, 1.0f, cx, cy, radius + 14, radius + 13, 2);
         CmdClearRingBand(renderer, commandBuffer, 0.25f, 0.17f, 0.085f, 1.0f, cx, cy, radius + 11, radius + 10, 2);
@@ -9104,7 +9165,7 @@ namespace
         {
             const bool cardinalTick = (index % 8) == 0;
             const bool major = (index % 4) == 0;
-            const float angle = (static_cast<float>(index) / 32.0f) * 2.0f * kPi - mapHeading;
+            const float angle = (static_cast<float>(index) / 32.0f) * 2.0f * kPi;
             const int outer = radius + 11;
             const int inner = cardinalTick ? radius + 2 : (major ? radius + 5 : radius + 8);
             const int x0 = cx + static_cast<int>(std::sin(angle) * static_cast<float>(inner));
@@ -9115,16 +9176,10 @@ namespace
         }
 
         const int badge = radius + 13;
-        const std::array<std::pair<float, char>, 4> compassBadges = {{
-            {0.0f, 'N'}, {kPi * 0.5f, 'E'}, {kPi, 'S'}, {kPi * 1.5f, 'W'}
-        }};
-        for (const auto& badgeInfo : compassBadges)
-        {
-            const float angle = badgeInfo.first - mapHeading;
-            const int x = cx + static_cast<int>(std::sin(angle) * static_cast<float>(badge));
-            const int y = cy - static_cast<int>(std::cos(angle) * static_cast<float>(badge));
-            CmdClearCompassBadge(renderer, commandBuffer, x, y, badgeInfo.second);
-        }
+        CmdClearCompassBadge(renderer, commandBuffer, cx, cy - badge, 'N');
+        CmdClearCompassBadge(renderer, commandBuffer, cx + badge, cy, 'E');
+        CmdClearCompassBadge(renderer, commandBuffer, cx, cy + badge, 'S');
+        CmdClearCompassBadge(renderer, commandBuffer, cx - badge, cy, 'W');
 
         const int jewel = radius + 9;
         const std::array<float, 4> jewelAngles = {
@@ -9135,9 +9190,8 @@ namespace
         };
         for (const float angle : jewelAngles)
         {
-            const float rotatedAngle = angle - mapHeading;
-            const int x = cx + static_cast<int>(std::sin(rotatedAngle) * static_cast<float>(jewel));
-            const int y = cy - static_cast<int>(std::cos(rotatedAngle) * static_cast<float>(jewel));
+            const int x = cx + static_cast<int>(std::sin(angle) * static_cast<float>(jewel));
+            const int y = cy - static_cast<int>(std::cos(angle) * static_cast<float>(jewel));
             CmdClearRimJewel(renderer, commandBuffer, x, y);
         }
     }
@@ -9148,8 +9202,8 @@ namespace
         std::lock_guard<std::mutex> lock(g_playerArrowMutex);
         const bool textured = g_playerArrow.loaded && !g_playerArrow.rgba.empty() &&
             g_playerArrow.width > 0 && g_playerArrow.height > 0;
-        auto& shades = renderer.markerArrowShadeScratch;
-        for (auto& shade : shades) shade.clear();
+        const float c = std::cos(heading), s = std::sin(heading);
+        std::array<std::vector<VkClearRect>, 8> shades;
         // Rotate the same arrow asset used for the local player. Quantize the
         // green tint and batch rectangles so each arrow needs at most 8 clears.
         for (int dy = -17; dy <= 17; ++dy)
@@ -9157,8 +9211,8 @@ namespace
             int runStart = -17, previous = -1;
             for (int dx = -17; dx <= 18; ++dx)
             {
-                float sx = 0.0f, sy = 0.0f;
-                RotateArrowSample(static_cast<float>(dx), static_cast<float>(dy), heading, sx, sy);
+                const float sx = c * dx + s * dy;
+                const float sy = -s * dx + c * dy;
                 int shade = -1;
                 if (dx < 18 && sx >= -12 && sx < 12 && sy >= -12 && sy < 12)
                 {
@@ -9206,8 +9260,7 @@ namespace
         int extent, float red, float green, float blue)
     {
         // Leave the centre untouched so the original icon remains visible.
-        auto& outline = renderer.markerDiamondScratch;
-        outline.clear();
+        std::vector<VkClearRect> outline;
         outline.reserve(4 * extent + 2);
         for (int dy = -extent; dy <= extent; ++dy)
         {
@@ -9256,7 +9309,7 @@ namespace
     void DrawDeathMarker(VulkanMinimapRenderer& renderer, void* commandBuffer,
         int cx, int cy, int radius, int x, int y, std::uint32_t key)
     {
-        if (TryDrawMinimapRasterIcon(renderer, commandBuffer, cx, cy, radius, x, y, key, false, true)) return;
+        if (TryDrawMinimapRasterIcon(renderer, commandBuffer, cx, cy, radius, x, y, key, false)) return;
         // The bundled atlas predates tombstones. A compact skull remains readable
         // without an extra asset, including with an older installed icon atlas.
         static constexpr const char* skull[] = {
@@ -9264,9 +9317,7 @@ namespace
             "###  ###  ###", "##   ###   ##", "##   ###   ##", "#############",
             " #### # #### ", "  #########  ", "   # # # #   ", "   #######   "
         };
-        auto& outline = renderer.markerDeathOutlineScratch;
-        auto& bone = renderer.markerDeathBoneScratch;
-        outline.clear(); bone.clear();
+        std::vector<VkClearRect> outline, bone;
         outline.reserve(156); bone.reserve(156);
         for (int row = 0; row < 12; ++row)
             for (int col = 0; col < 13; ++col)
@@ -9276,14 +9327,15 @@ namespace
                     AppendClippedClearRect(renderer, bone, x + col - 6, y + row - 6, 1, 1);
                 }
         CmdClearRects(renderer, commandBuffer, 0.05f, 0.04f, 0.035f, 1.0f, outline);
-        CmdClearRects(renderer, commandBuffer, 1.0f, 0.20f, 0.16f, 1.0f, bone);
+        CmdClearRects(renderer, commandBuffer, 1.0f, 0.18f, 0.16f, 1.0f, bone);
     }
 
     void DrawLiveMarkers(VulkanMinimapRenderer& renderer, void* commandBuffer,
         const std::vector<CapturedWaypoint>& waypoints, float centerX, float centerZ,
         float unitsPerPixel, float heading, int cx, int cy, int radius)
     {
-        CopyLiveMarkers(renderer.markerPlayerScratch, renderer.markerPingScratch, GetTickCount());
+        std::vector<MinimapLive::Marker> players, pings;
+        CopyLiveMarkers(players, pings, GetTickCount());
         auto project = [&](std::int64_t x, std::int64_t z, int& px, int& py)
         {
             bool clipped = false;
@@ -9291,7 +9343,7 @@ namespace
                 unitsPerPixel, heading, cx, cy, radius, px, py, clipped);
         };
         // Keep live markers separate from POI deduplication and the icon limit.
-        for (const auto& player : renderer.markerPlayerScratch)
+        for (const auto& player : players)
         {
             int x, y;
             project(player.x, player.z, x, y);
@@ -9299,8 +9351,7 @@ namespace
         }
         // Deaths bypass ordinary POI limits/deduplication and stay at the rim
         // when distant. Draw before the selected-waypoint outline.
-        CopyDeathMarkers(renderer.markerDeathScratch, GetTickCount());
-        for (const auto& death : renderer.markerDeathScratch)
+        for (const auto& death : CopyDeathMarkers(GetTickCount()))
         {
             int x, y;
             project(death.x, death.z, x, y);
@@ -9313,7 +9364,7 @@ namespace
                 project(waypoint.x, waypoint.z, x, y);
                 DrawWaypointDiamond(renderer, commandBuffer, x, y);
             }
-        for (const auto& ping : renderer.markerPingScratch)
+        for (const auto& ping : pings)
         {
             int x, y;
             project(ping.x, ping.z, x, y);
@@ -9492,7 +9543,7 @@ namespace
         }
     }
 
-    void DrawMinimapWidget(VulkanMinimapRenderer& renderer, void* commandBuffer, const MinimapFogFrame& fog = CaptureMinimapFogFrame())
+    void DrawMinimapWidget(VulkanMinimapRenderer& renderer, void* commandBuffer)
     {
         const int shortEdge = static_cast<int>(MinValue(renderer.width, renderer.height));
         const int radius = ClampValue(shortEdge / 11, 104, 142);
@@ -9510,7 +9561,7 @@ namespace
         const bool showPanel = showClock || weather.valid;
         const int frameHalf = hasRasterFrame ? MinimapRasterVisibleHalfHeight(radius, frameExtra) : radius + 26;
         const int frameYOffset = hasRasterFrame ? -MaxValue(1, (2 * (radius + frameExtra) + 128) / 256) : 0;
-        const int cx = static_cast<int>(renderer.width) - MaxValue(marginX, scaled(frameHalf - radius) + 8) - scaled(radius);
+        const int cx = ComputeMinimapCenterX(renderer.width, scaled(radius), marginX, scaled(frameHalf));
         const int frameTopExtra = frameHalf - frameYOffset - radius;
         const int frameBottomExtra = frameHalf + frameYOffset - radius;
         // Use the visible ornament, not the padded texture, for clock spacing.
@@ -9522,17 +9573,11 @@ namespace
         const float zoom = std::pow(1.32f, static_cast<float>(zoomStep));
         const float unitsPerPixel = MINIMAP_BASE_UNITS_PER_PIXEL / zoom;
 
-        CopyWaypoints(renderer.markerWaypointScratch);
-        CopyNearbyMarkers(renderer.markerNearbyScratch);
-        CopyVisibleMapMarkers(renderer.markerVisibleMapScratch);
-        auto& waypoints = renderer.markerWaypointScratch;
-        auto& nearbyMarkers = renderer.markerNearbyScratch;
-        auto& visibleMapMarkers = renderer.markerVisibleMapScratch;
-
-
-        auto& points = renderer.markerWorldPointScratch;
-        points.clear();
-        BuildWorldPoints(renderer, points, waypoints, nearbyMarkers, visibleMapMarkers);
+        const std::vector<CapturedWaypoint> waypoints = CopyWaypoints();
+        const std::vector<CapturedNearbyMarker> nearbyMarkers = CopyNearbyMarkers();
+        const std::vector<CapturedMapMarkerVisibility> visibleMapMarkers = CopyVisibleMapMarkers();
+        std::vector<MinimapWorldPoint> points;
+        BuildWorldPoints(points, waypoints, nearbyMarkers, visibleMapMarkers);
 
         CapturedPlayerPosition playerPosition{};
         if (!TryGetPlayerPosition(playerPosition))
@@ -9540,14 +9585,15 @@ namespace
 
         const float centerX = FixedToWorld(playerPosition.x);
         const float centerZ = FixedToWorld(playerPosition.z);
-        const float smoothedHeading = SmoothMapHeading(renderer, playerPosition.headingRadians,
-            playerPosition.hasHeading, GetTickCount());
+        const float smoothedHeading = SmoothMapHeading(
+            renderer, playerPosition.headingRadians, playerPosition.hasHeading, GetTickCount());
         const MinimapOrientationAngles orientation = ResolveMinimapOrientationAngles(
             g_minimapOrientation.load(), smoothedHeading, playerPosition.hasHeading);
         const float mapHeading = orientation.mapHeading;
         if (!g_worldMapLayoutSupported || !g_showWorldMarkers.load())
             AppendVisibleStaticPoiPoints(points, nearbyMarkers, visibleMapMarkers, centerX, centerZ, unitsPerPixel * static_cast<float>(radius) * STATIC_POI_DRAW_RADIUS_FACTOR);
         // Terrain and icons must use the same exploration snapshot this frame.
+        const auto fog = CaptureMinimapFogFrame();
         FilterFoggedWorldPoints(points, fog);
         LimitMinimapWorldPoints(points, centerX, centerZ);
 
@@ -9563,7 +9609,7 @@ namespace
                 TryDrawMinimapRasterFrame(renderer, commandBuffer, cx, cy, radius, frameExtra);
         }
         else
-            CmdClearCompassFrameOverlay(renderer, commandBuffer, cx, cy, radius, mapHeading);
+            CmdClearCompassFrameOverlay(renderer, commandBuffer, cx, cy, radius);
 
         const int pointProjectionRadius = hasRasterFrame ? frameMapRadius : radius;
         const int pointClipRadius = hasRasterFrame ? frameMapRadius : radius - 14;
@@ -9640,73 +9686,19 @@ namespace
         }
     }
 
-    bool LogRendererDiagnostics(VulkanMinimapRenderer& renderer, DWORD now)
-    {
-        if (!g_debugLoggingEnabled.load() || g_modContext == nullptr)
-            return false;
-        if (renderer.rendererDiagnosticLogged && now - renderer.lastRendererDiagnosticTick < 5000)
-            return false;
-
-        renderer.rendererDiagnosticLogged = true;
-        renderer.lastRendererDiagnosticTick = now;
-        const char* terrainPath = !renderer.terrainDrawAttempted ? "not-drawn" :
-            (renderer.terrainGpuDrawn ? "gpu" : "cpu-fallback");
-        const char* fallback = renderer.terrainFallbackReason;
-        if (fallback == nullptr)
-            fallback = renderer.terrainDrawAttempted && !renderer.terrainGpuDrawn ? "unknown" : "none";
-
-        std::ostringstream oss;
-        oss << "[Minimap] renderer terrain=" << terrainPath
-            << " | fallback=" << fallback
-            << " | clear_commands=" << renderer.clearAttachmentCommands
-            << " | clear_rects=" << renderer.clearAttachmentRects
-            << " | upload_regions=" << renderer.terrainUploadRegions
-            << " | upload_bytes=" << renderer.terrainUploadBytes
-            << " | record_cpu_ns=" << renderer.recordingCpuNanoseconds
-            << " | gpu_time=unavailable";
-        Log(oss.str());
-        return true;
-    }
     bool RecordVulkanMinimapCommandLocked(std::uint32_t imageIndex)
     {
         if (!g_renderer.ready || imageIndex >= g_renderer.commandBuffers.size() || imageIndex >= g_renderer.framebuffers.size())
             return false;
 
-        g_renderer.clearAttachmentCommands = 0;
-        g_renderer.clearAttachmentRects = 0;
-        g_renderer.terrainUploadBytes = 0;
-        g_renderer.terrainUploadRegions = 0;
-        g_renderer.recordingCpuNanoseconds = 0;
-        g_renderer.terrainFallbackReason = nullptr;
-        g_renderer.terrainDrawAttempted = false;
-        g_renderer.terrainGpuDrawn = false;
-        const auto recordingStarted = std::chrono::steady_clock::now();
-        const auto finishRecording = [&](bool success)
-        {
-            g_renderer.recordingCpuNanoseconds = static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - recordingStarted).count());
-            LogRendererDiagnostics(g_renderer, GetTickCount());
-            return success;
-        };
-
         void* commandBuffer = reinterpret_cast<void*>(g_renderer.commandBuffers[imageIndex]);
         if (g_renderer.fns.resetCommandBuffer(commandBuffer, 0) != VK_SUCCESS)
-            return finishRecording(false);
+            return false;
 
         VkCommandBufferBeginInfo beginInfo{};
         if (g_renderer.fns.beginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
-            return finishRecording(false);
+            return false;
 
-        const auto fog = CaptureMinimapFogFrame();
-        g_renderer.terrainPrepared = false;
-        if (g_minimapVisible.load()) {
-            try { g_renderer.terrainPrepared = PrepareTerrainTexture(g_renderer, imageIndex, commandBuffer, fog); }
-            catch (const std::bad_alloc&) {
-                g_renderer.terrainDisabled = true;
-                g_renderer.terrainFallbackReason = "allocation-failed";
-                Log("[Minimap] GPU terrain allocation failed; using CPU terrain until renderer recreation");
-            }
-        }
         RecordFrameTextureUploadIfNeeded(g_renderer, commandBuffer);
 
         VkRenderPassBeginInfo renderPassBegin{};
@@ -9718,12 +9710,19 @@ namespace
         renderPassBegin.renderArea.extent.height = g_renderer.height;
 
         g_renderer.fns.cmdBeginRenderPass(commandBuffer, &renderPassBegin, 0);
-        if (g_minimapVisible.load()) DrawMinimapWidget(g_renderer, commandBuffer, fog);
+        if (g_minimapVisible.load())
+        {
+            ScopedTimer widget(DiagnosticCollector(), Metric::OverlayWidget);
+            DrawMinimapWidget(g_renderer, commandBuffer);
+        }
         bool noticeOn = false;
         if (ReadMinimapNotice(noticeOn))
+        {
+            ScopedTimer notice(DiagnosticCollector(), Metric::OverlayNotice);
             DrawMinimapNotice(g_renderer, commandBuffer, noticeOn, GetDpiForWindow(GetForegroundWindow()));
+        }
         g_renderer.fns.cmdEndRenderPass(commandBuffer);
-        return finishRecording(g_renderer.fns.endCommandBuffer(commandBuffer) == VK_SUCCESS);
+        return g_renderer.fns.endCommandBuffer(commandBuffer) == VK_SUCCESS;
     }
 
     bool TryReadPresentTargets(const VkPresentInfoKHR& info, uintptr_t& firstSwapchain, std::uint32_t& imageIndex)
@@ -9788,7 +9787,12 @@ namespace
         if (fenceStatus != VK_SUCCESS)
             return StopVulkanMinimapSubmissionLocked("fence status failed", fenceStatus, imageIndex);
 
-        if (!RecordVulkanMinimapCommandGuarded(imageIndex))
+        bool recorded = false;
+        {
+            ScopedTimer record(DiagnosticCollector(), Metric::OverlayRecord);
+            recorded = RecordVulkanMinimapCommandGuarded(imageIndex);
+        }
+        if (!recorded)
         {
             g_renderer.submissionFailed = true;
             Log("[Minimap] Vulkan minimap drawing stopped: command recording failed");
@@ -9813,9 +9817,17 @@ namespace
         if (resetResult != VK_SUCCESS)
             return StopVulkanMinimapSubmissionLocked("fence reset failed", resetResult, imageIndex);
 
-        const std::int32_t submitResult = SubmitVulkanMinimapCommandGuarded(queue, &submitInfo, fence);
+        std::int32_t submitResult = VK_SUCCESS;
+        {
+            ScopedTimer submit(DiagnosticCollector(), Metric::OverlaySubmit);
+            submitResult = SubmitVulkanMinimapCommandGuarded(queue, &submitInfo, fence);
+        }
         if (submitResult != VK_SUCCESS)
+        {
+            DiagnosticCollector().Count(Metric::QueueSubmitFailure);
             return StopVulkanMinimapSubmissionLocked("queue submit failed", submitResult, imageIndex);
+        }
+        DiagnosticCollector().Count(Metric::QueueSubmitSuccess);
 
         adjustedWaitSemaphore[0] = signalSemaphore;
         adjustedInfo = info;
@@ -9824,22 +9836,30 @@ namespace
         return true;
     }
 
-    bool TrySubmitVulkanMinimap(void* queue, const VkPresentInfoKHR& info, uintptr_t firstSwapchain, std::uint32_t imageIndex, VkPresentInfoKHR& adjustedInfo, const void** adjustedWaitSemaphore)
+    bool TrySubmitVulkanMinimap(void* queue, const VkPresentInfoKHR& info, uintptr_t firstSwapchain, std::uint32_t imageIndex, VkPresentInfoKHR& adjustedInfo, const void** adjustedWaitSemaphore, bool gameplayObserved)
     {
         if (!g_runtimeCallbacksActive.load() || queue == nullptr || firstSwapchain == 0 || info.waitSemaphoreCount > 8)
             return false;
 
-        // Commit one coherent session through queueSubmit; the caller presents after this guard releases.
-        std::lock_guard<std::recursive_mutex> controls(g_runtimeControlsMutex);
-
-        if (ShouldSampleMinimapFallbackCamera()) {
-            TryRefreshPlayerPositionFromCachedCamera();
-            if (!HasFreshPlayerPosition() && g_renderCameraFallbackEnabled.load())
-                TryCapturePlayerCameraFromRenderRoots();
-        }
+        TryRefreshPlayerPositionFromCachedCamera();
+        if (!HasFreshPlayerPosition() && g_renderCameraFallbackEnabled.load() &&
+            ShouldSampleMinimapFallbackCamera())
+            TryCapturePlayerCameraFromRenderRoots();
         bool noticeOn = false;
         const bool noticeVisible = ReadMinimapNotice(noticeOn);
-        if (!ShouldDrawMinimapInWorld() && !noticeVisible)
+        bool visibleObserved = false;
+        bool gameplayForDraw = false;
+        const bool shouldDraw = ShouldDrawMinimapInWorld(&visibleObserved, &gameplayForDraw);
+        StateContext state{};
+        state.visibility = visibleObserved ? Visibility::Visible : Visibility::Hidden;
+        state.noticeActive = noticeVisible;
+        state.menu = (gameplayForDraw || (!visibleObserved && gameplayObserved))
+            ? MenuState::Gameplay : MenuState::Unknown;
+        state.transition = !g_gameSessionOnline.load();
+        std::uint64_t observationTicks = 0;
+        if (ReadDiagnosticClock(nullptr, &observationTicks))
+            DiagnosticCollector().Observe(state, observationTicks);
+        if (!shouldDraw && !noticeVisible)
             return false;
 
         if (info.waitSemaphoreCount != 0 && info.pWaitSemaphores == nullptr)
@@ -9855,7 +9875,9 @@ namespace
         if (snapshot.device == 0)
             return false;
 
+        ScopedTimer rendererLockWait(DiagnosticCollector(), Metric::RendererMutexAcquire);
         std::lock_guard<std::mutex> lock(g_rendererMutex);
+        rendererLockWait.Stop();
         // Deactivation clears the flag before acquiring this same renderer lock.
         if (!g_runtimeCallbacksActive.load()) return false;
         if (!BuildVulkanMinimapRendererLocked(snapshot))
@@ -9873,20 +9895,17 @@ namespace
         return first || second;
     }
 
-    void UpdateMinimapZoomHotkeys(SHORT (WINAPI* poll)(int) = GetAsyncKeyState, bool gameplay = true)
+    void UpdateMinimapZoomHotkeys(SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
     {
         int step = g_minimapZoomStep.load();
         bool changed = false;
-        const bool zoomIn = MinimapKeyPressed(g_minimapZoomInKey.load(), g_minimapZoomInSecondary.load(), poll);
-        const bool zoomOut = MinimapKeyPressed(g_minimapZoomOutKey.load(), g_minimapZoomOutSecondary.load(), poll);
-        if (!gameplay) return; // Drain menu-time presses without changing the map.
-        if (zoomIn)
+        if (MinimapKeyPressed(g_minimapZoomInKey.load(), g_minimapZoomInSecondary.load(), poll))
         {
             step = ClampValue(step + 1, MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
             changed = true;
         }
 
-        if (zoomOut)
+        if (MinimapKeyPressed(g_minimapZoomOutKey.load(), g_minimapZoomOutSecondary.load(), poll))
         {
             step = ClampValue(step - 1, MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM);
             changed = true;
@@ -9915,11 +9934,10 @@ namespace
             Log("[Minimap] size=" + std::to_string(scale) + "%");
     }
 
-    void UpdateMinimapVisibilityHotkey(SHORT (WINAPI* poll)(int) = GetAsyncKeyState, bool gameplay = true)
+    void UpdateMinimapVisibilityHotkey(SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
     {
         const int toggleKey = g_minimapToggleKey.load();
-        const bool pressed = MinimapKeyPressed(toggleKey, g_minimapToggleSecondary.load(), poll);
-        if (!pressed || !gameplay) return; // Consume presses made while a menu is open.
+        if (!MinimapKeyPressed(toggleKey, g_minimapToggleSecondary.load(), poll)) return;
 
         const bool visible = !g_minimapVisible.load();
         g_minimapVisible.store(visible);
@@ -9931,9 +9949,8 @@ namespace
         Log(oss.str());
     }
 
-    void UpdateMinimapRuntimeControls(ModContext* modContext)
+    void UpdateMinimapRuntimeControls(ModContext* modContext, bool* gameplayObserved = nullptr)
     {
-        std::lock_guard<std::recursive_mutex> controls(g_runtimeControlsMutex);
         const DWORD now = GetTickCount();
         if (now - g_lastConfigPollTick >= MINIMAP_CONFIG_POLL_MS)
         {
@@ -9941,10 +9958,12 @@ namespace
             RefreshMinimapConfig(modContext);
         }
 
-        const bool gameplay = IsMinimapGameplay();
-        UpdateMinimapVisibilityHotkey(GetAsyncKeyState, gameplay);
-        UpdateMinimapZoomHotkeys(GetAsyncKeyState, gameplay);
-        UpdateMinimapSizeHotkeys(IsMinimapGameFocused() && gameplay);
+        UpdateMinimapVisibilityHotkey();
+        UpdateMinimapZoomHotkeys();
+        const bool focused = IsMinimapGameFocused();
+        const bool gameplay = focused && IsMinimapGameplay();
+        if (gameplayObserved != nullptr) *gameplayObserved = gameplay;
+        UpdateMinimapSizeHotkeys(gameplay);
     }
 
     void LogVulkanPresentInfo(void* queue, const void* presentInfo)
@@ -10087,14 +10106,25 @@ namespace
 
     std::int32_t __fastcall HookQueuePresent(void* queue, const void* presentInfo)
     {
+        ScopedTimer present(DiagnosticCollector(), Metric::PresentCallback);
+        ScopedTimer callbackWait(DiagnosticCollector(), Metric::PresentCallbackMutexAcquire);
         std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
+        callbackWait.Stop();
+        DiagnosticCollector().MarkPresentCallbackMarker();
+        ScopedTimer localWork(DiagnosticCollector(), Metric::PresentLocalWork);
         const uintptr_t original = g_originalQueuePresent.load();
         auto* originalFn = reinterpret_cast<QueuePresentFn>(original);
         if (originalFn == nullptr)
             return -1;
-        if (!g_runtimeCallbacksActive.load()) return originalFn(queue,presentInfo);
+        if (!g_runtimeCallbacksActive.load())
+        {
+            localWork.Stop();
+            ScopedTimer originalTimer(DiagnosticCollector(), Metric::OriginalPresent);
+            return originalFn(queue,presentInfo);
+        }
 
-        UpdateMinimapRuntimeControls(g_modContext);
+        bool gameplayObserved = false;
+        UpdateMinimapRuntimeControls(g_modContext, &gameplayObserved);
         TryScanVulkanDeviceFunctions();
         LogVulkanPresentInfo(queue, presentInfo);
 
@@ -10107,8 +10137,11 @@ namespace
         const bool canDraw = presentInfo != nullptr &&
             SafeReadValue(reinterpret_cast<uintptr_t>(presentInfo), info) &&
             TryReadPresentTargets(info, firstSwapchain, imageIndex) &&
-            TrySubmitVulkanMinimap(queue, info, firstSwapchain, imageIndex, adjustedInfo, adjustedWaitSemaphore);
+            TrySubmitVulkanMinimap(queue, info, firstSwapchain, imageIndex, adjustedInfo, adjustedWaitSemaphore, gameplayObserved);
+        if (canDraw) DiagnosticCollector().Count(Metric::AdjustedPresent);
 
+        localWork.Stop();
+        ScopedTimer originalTimer(DiagnosticCollector(), Metric::OriginalPresent);
         return originalFn(queue, canDraw ? &adjustedInfo : presentInfo);
     }
 
@@ -10474,86 +10507,12 @@ namespace
         }
     }
 
-    bool PrepareMenuVisibilityCallsite(ModContext* context)
+    bool LoadVerifiedClient10(ModContext* context)
     {
-        g_originalMenuRenderer.store(g_exeBase + MinimapMenu10::RendererRva, std::memory_order_release);
-        if (g_menuVisibilityCallHook == nullptr)
-        {
-            g_menuVisibilityCallHook = InstallVerifiedCallHook(
-                RVA_MENU_RENDERER_CALL_1_0,
-                MinimapMenu10::RendererRva,
-                reinterpret_cast<uintptr_t>(&CaptureMenuVisibilityCallsiteHook));
-            std::uint64_t originalAlignedWord = 0;
-            if (g_menuVisibilityCallHook && ReadMenuCallsitePreimageWord(
-                g_exeBase + RVA_MENU_RENDERER_CALL_1_0, originalAlignedWord))
-            {
-                g_menuVisibilityCallsitePreimageWord.store(originalAlignedWord, std::memory_order_release);
-                g_menuVisibilityCallsitePreimageReady.store(true, std::memory_order_release);
-            }
-            else if (g_menuVisibilityCallHook)
-            {
-                DestroyCallSiteHook(g_menuVisibilityCallHook);
-                context->Log("[Minimap] current HUD visibility call-site preimage unavailable; map visibility will fail closed");
-            }
-        }
-        return g_menuVisibilityCallHook != nullptr;
-    }
-
-    bool ActivateCurrentMenuCallsite(
-        bool retained, RendererOwnershipAdapter::MenuAdmission admission)
-    {
-        return ActivateMenuCallsiteOnce(
-            g_menuVisibilityCallHook,
-            g_menuVisibilityCallsiteEverActivated,
-            g_menuVisibilityCallsitePublicationFinalized,
-            [retained, admission]() {
-                return retained || (RendererOwnershipAdapter::IsAdmitted(admission) &&
-                    IsCallsiteCalling(g_exeBase + RVA_MENU_RENDERER_CALL_1_0,
-                        g_exeBase + MinimapMenu10::RendererRva));
-            },
-            [](Mem::Detour* hook) { return IsRetainedCurrentMenuCallsiteOwned(hook); },
-            [](Mem::Detour* hook) {
-                if (!g_menuVisibilityCallsitePreimageReady.load(std::memory_order_acquire))
-                    return false;
-                return ActivateMenuDetourWithCompareExchange(
-                    hook, g_exeBase + RVA_MENU_RENDERER_CALL_1_0,
-                    g_menuVisibilityCallsitePreimageWord.load(std::memory_order_acquire),
-                    []() {});
-            });
-    }
-
-    bool ActivateMenuVisibilityAtBoundary(ModContext* context, bool& initialMenuPending)
-    {
-        return RendererOwnershipAdapter::ActivateMenuAtBoundary(
-            initialMenuPending,
-            g_menuVisibilityCallsiteEverActivated,
-            []() { return EvaluateCurrentMenuAdmission(); },
-            [context]() { return PrepareMenuVisibilityCallsite(context); },
-            [](bool retained, RendererOwnershipAdapter::MenuAdmission admission) {
-                return ActivateCurrentMenuCallsite(retained, admission);
-            });
-    }
-
-    bool RetryPendingMenuVisibilityAtUpdate(
-        bool modActive, ModContext* context, bool& initialMenuPending)
-    {
-        return RendererOwnershipAdapter::RetryPendingMenuAtUpdate(
-            modActive,
-            initialMenuPending,
-            g_menuVisibilityCallsiteEverActivated,
-            []() { return EvaluateCurrentMenuAdmission(); },
-            [context]() { return PrepareMenuVisibilityCallsite(context); },
-            [](bool retained, RendererOwnershipAdapter::MenuAdmission admission) {
-                return ActivateCurrentMenuCallsite(retained, admission);
-            });
-    }
-
-    bool LoadVerifiedClient10(ModContext* context, bool& initialMenuPending)
-    {
-        g_iterInit=reinterpret_cast<IterInitFn>(g_exeBase+0x9bab60);
-        g_iterNext=reinterpret_cast<IterNextFn>(g_exeBase+0x9b5a50);
+        g_iterInit=reinterpret_cast<IterInitFn>(g_exeBase+ClientRva(0x9bab60));
+        g_iterNext=reinterpret_cast<IterNextFn>(g_exeBase+ClientRva(0x9b5a50));
         if (!NamedClient10() || !MatchCamera10() || !MatchRenderer10()) {
-            context->Log("[Sparkweave Minimap] 1.0 core code changed; no hooks installed");
+            context->Log("[ESM Minimap] 1.0 core code changed; no hooks installed");
             g_iterInit=nullptr;g_iterNext=nullptr;return false;
         }
         const std::array<std::uint8_t,18> camera={0x40,0x55,0x57,0x48,0x8d,0xac,0x24,0xb8,0xfe,0xff,0xff,0x48,0x81,0xec,0x48,0x02,0,0};
@@ -10561,46 +10520,44 @@ namespace
         const std::array<std::uint8_t,5> ui={0x48,0x89,0x4c,0x24,0x08};
         const std::array<std::uint8_t,15> present={0x4c,0x89,0x44,0x24,0x18,0x48,0x89,0x54,0x24,0x10,0x48,0x89,0x4c,0x24,0x08};
         const std::array<std::uint8_t,16> dispatch={0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8b,0xec};
-        // Verify optional contracts before any entry hooks alter their code.
         ClearMenuVisibilityObservation();
         g_menuVisibilityHookActive.store(false, std::memory_order_release);
-        const bool menuCallsiteAlreadyPublished =
-            g_menuVisibilityCallsiteEverActivated.load(std::memory_order_acquire);
-        const auto menuAdmission = menuCallsiteAlreadyPublished
-            ? RendererOwnershipAdapter::MenuAdmission::rejected
-            : EvaluateCurrentMenuAdmission();
-        if (menuCallsiteAlreadyPublished)
-            initialMenuPending = false;
+        bool menuGuardsMatched = false;
+        if (g_menuVisibilityCallsiteEverActivated.load(std::memory_order_acquire))
+        {
+            menuGuardsMatched = g_menuVisibilityCallsitePublicationFinalized.load(std::memory_order_acquire) &&
+                IsRetainedCurrentMenuCallsiteOwned(g_menuVisibilityCallHook);
+            g_initialMenuVisibilityPending = !menuGuardsMatched;
+        }
         else
-            RendererOwnershipAdapter::RecordInitialMenuAdmission(initialMenuPending, menuAdmission);
-        const bool menuGuardsMatched = menuCallsiteAlreadyPublished
-            ? IsRetainedCurrentMenuCallsiteOwned(g_menuVisibilityCallHook)
-            : RendererOwnershipAdapter::IsAdmitted(menuAdmission);
-        const bool menuCallsitePrepared = menuGuardsMatched && PrepareMenuVisibilityCallsite(context);
+        {
+            MenuOwnershipSample menuSample{};
+            menuGuardsMatched = SampleCurrentMenuOwnership(menuSample, false, PublicCreativeCompat::ProofOrigin::AdmissionUpdate) &&
+                menuSample.admission != MenuAdmission::rejected;
+            g_initialMenuVisibilityPending = !menuGuardsMatched;
+            if (menuGuardsMatched)
+            {
+                menuGuardsMatched = PrepareMenuVisibilityCallsite(context);
+                g_initialMenuVisibilityPending = !menuGuardsMatched;
+            }
+        }
+        if (!menuGuardsMatched)
+            context->Log("[Minimap] current HUD visibility ownership is unknown or incomplete; map stays hidden until exact guards pass");
+        // Verify optional contracts before any entry hooks alter their code.
         g_liveMarkerLayoutSupported=HasVerifiedLiveMarkerLayout();
         g_clockLayoutSupported=HasVerifiedWorldClockLayout();
         g_weatherLayoutSupported=HasVerifiedWorldWeatherLayout();
         g_liveFogLayoutSupported=HasVerifiedLiveFogLayout();
         g_worldMapLayoutSupported=HasVerifiedWorldMapLayout();
         g_deathMarkerLayoutSupported=HasVerifiedDeathMarkerLayout();
-        const bool visibility=IsNamedSystemAt(0x1de8520,"knowledge_query_mapmarker_visibility",0x414dc0) && MatchVisibility10();
-        if (!menuGuardsMatched || !menuCallsitePrepared)
-        {
-            g_menuVisibilityHookActive.store(false, std::memory_order_release);
-            if (!menuCallsiteAlreadyPublished && RendererOwnershipAdapter::IsBusy(menuAdmission))
-                context->Log("[Minimap] renderer ownership query busy; first menu activation will retry at a natural active boundary");
-            else
-                context->Log(menuGuardsMatched
-                    ? "[Minimap] current HUD visibility call-site install failed; map visibility will fail closed"
-                    : "[Minimap] current HUD visibility guards changed; map visibility will fail closed");
-        }
-        g_playerCameraTransformHook=InstallEntryHook(0x2b29c0,camera,reinterpret_cast<void*>(&CapturePlayerCameraTransformHook),"1.0 local camera");
+        const bool visibility=IsNamedSystemAt(ClientRva(0x1de8520),"knowledge_query_mapmarker_visibility",ClientRva(0x414dc0)) && MatchVisibility10();
+        g_playerCameraTransformHook=InstallEntryHook(ClientRva(0x2b29c0),camera,reinterpret_cast<void*>(&CapturePlayerCameraTransformHook),"1.0 local camera");
         g_directCameraTrackingSupported=g_playerCameraTransformHook!=nullptr;
         if (g_liveMarkerLayoutSupported) {
-            g_getEcsWorld=reinterpret_cast<GetEcsWorldFn>(g_exeBase+0x9b2fe0);
-            g_lookupComponent=reinterpret_cast<LookupComponentFn>(g_exeBase+0x9a5e20);
-            g_playerWaypointsUiHook=InstallEntryHook(0x30e970,waypoint,reinterpret_cast<void*>(&CaptureWaypointsHook),"1.0 waypoints and pings");
-            g_playerUiDataHook=InstallEntryHook(0x317ce0,ui,reinterpret_cast<void*>(&CapturePlayerUiDataHook),"1.0 remote players");
+            g_getEcsWorld=reinterpret_cast<GetEcsWorldFn>(g_exeBase+ClientRva(0x9b2fe0));
+            g_lookupComponent=reinterpret_cast<LookupComponentFn>(g_exeBase+ClientRva(0x9a5e20));
+            g_playerWaypointsUiHook=InstallEntryHook(ClientRva(0x30e970),waypoint,reinterpret_cast<void*>(&CaptureWaypointsHook),"1.0 waypoints and pings");
+            g_playerUiDataHook=InstallEntryHook(ClientRva(0x317ce0),ui,reinterpret_cast<void*>(&CapturePlayerUiDataHook),"1.0 remote players");
             g_liveMarkerLayoutSupported=g_playerWaypointsUiHook && g_playerUiDataHook;
             if (!g_liveMarkerLayoutSupported) {
                 // These entry detours are still disabled. Never activate half a pair
@@ -10611,28 +10568,28 @@ namespace
             }
         }
         if (g_clockLayoutSupported) {
-            g_daytimeUiHook=InstallEntryHook(0x2b31a0,g_daytimeUiExpected,reinterpret_cast<void*>(&CaptureDaytimeUiHook),"1.0 world clock");
+            g_daytimeUiHook=InstallEntryHook(ClientRva(0x2b31a0),g_daytimeUiExpected,reinterpret_cast<void*>(&CaptureDaytimeUiHook),"1.0 world clock");
             g_clockLayoutSupported=g_daytimeUiHook!=nullptr;
         }
         if (g_weatherLayoutSupported) {
-            g_weatherSampleHook=InstallWeatherSampleHook(0x2fdb78,0xa9b9e0);
+            g_weatherSampleHook=InstallWeatherSampleHook(ClientRva(0x2fdb78),ClientRva(0xa9b9e0));
             g_weatherLayoutSupported=g_weatherSampleHook!=nullptr;
         }
         if (g_liveFogLayoutSupported) {
-            g_fogUpdateHook=InstallVerifiedCallHook(0x307104,0x39c290,reinterpret_cast<uintptr_t>(&CaptureFogUpdate));
+            g_fogUpdateHook=InstallVerifiedCallHook(ClientRva(0x307104),ClientRva(0x39c290),reinterpret_cast<uintptr_t>(&CaptureFogUpdate));
             g_liveFogLayoutSupported=g_fogUpdateHook!=nullptr;
-            if (g_liveFogLayoutSupported) g_updateFog=reinterpret_cast<UpdateFogFn>(g_exeBase+0x39c290);
+            if (g_liveFogLayoutSupported) g_updateFog=reinterpret_cast<UpdateFogFn>(g_exeBase+ClientRva(0x39c290));
         }
         if (g_worldMapLayoutSupported) {
-            g_clearMapMarkersHook=InstallEntryHook(0x2fee40,g_clearMapMarkersExpected,reinterpret_cast<void*>(&CaptureWorldMapHook),"1.0 world map");
+            g_clearMapMarkersHook=InstallEntryHook(ClientRva(0x2fee40),g_clearMapMarkersExpected,reinterpret_cast<void*>(&CaptureWorldMapHook),"1.0 world map");
             g_worldMapLayoutSupported=g_clearMapMarkersHook!=nullptr;
             g_deathMarkerLayoutSupported=g_deathMarkerLayoutSupported && g_worldMapLayoutSupported;
         }
-        if (visibility) g_mapMarkerVisibilityHook=InstallMapMarkerVisibilityLoopHook(0x415022,reinterpret_cast<void*>(&CaptureMapMarkerVisibilityRecordHook));
-        g_renderPresentFrameHook=InstallEntryHook(0xfd1a10,present,reinterpret_cast<void*>(&CaptureRenderPresentFrameHook),"1.0 render present");
-        g_vulkanDeviceTableInitHook=InstallEntryHook(0xfddfa0,dispatch,reinterpret_cast<void*>(&CaptureVulkanDeviceTableInitHook),"1.0 Vulkan dispatch");
+        if (visibility) g_mapMarkerVisibilityHook=InstallMapMarkerVisibilityLoopHook(ClientRva(0x415022),reinterpret_cast<void*>(&CaptureMapMarkerVisibilityRecordHook));
+        g_renderPresentFrameHook=InstallEntryHook(ClientRva(0xfd1a10),present,reinterpret_cast<void*>(&CaptureRenderPresentFrameHook),"1.0 render present");
+        g_vulkanDeviceTableInitHook=InstallEntryHook(ClientRva(0xfddfa0),dispatch,reinterpret_cast<void*>(&CaptureVulkanDeviceTableInitHook),"1.0 Vulkan dispatch");
         std::ostringstream message;
-        message<<"[Sparkweave Minimap] client 25988036 | camera="<<g_directCameraTrackingSupported
+        message<<"[ESM Minimap] client "<<(IsCurrentClientBuild() ? "26082781" : "25988036")<<" | camera="<<g_directCameraTrackingSupported
             <<" | markers="<<g_liveMarkerLayoutSupported<<" | clock="<<g_clockLayoutSupported
             <<" | weather="<<g_weatherLayoutSupported<<" | fog="<<g_liveFogLayoutSupported
             <<" | world="<<g_worldMapLayoutSupported<<" | deaths="<<g_deathMarkerLayoutSupported
@@ -10643,19 +10600,157 @@ namespace
         return g_directCameraTrackingSupported && g_renderPresentFrameHook && g_vulkanDeviceTableInitHook;
     }
 
+    constexpr std::size_t kAggregateTimingChunkPayloadBytes = 300;
+    constexpr std::size_t kAggregateTimingChunkMessageLimit = 400;
+    constexpr std::size_t kAggregateTimingChunkHeaderBudget = 96;
+    constexpr std::size_t kAggregateTimingMaximumChunks =
+        (MinimapAggregateTiming::kMaxFormattedLine + kAggregateTimingChunkPayloadBytes - 1) /
+        kAggregateTimingChunkPayloadBytes;
+    using AggregateTimingChunk = std::array<char, kAggregateTimingChunkMessageLimit + 1>;
+    static_assert(kAggregateTimingChunkHeaderBudget + kAggregateTimingChunkPayloadBytes <=
+        kAggregateTimingChunkMessageLimit, "Chunk header and payload must stay under the logger limit");
+
+    bool AppendAggregateTimingLiteral(char*& cursor, const char* end,
+        const char* text, std::size_t length) noexcept
+    {
+        if (cursor > end || length > static_cast<std::size_t>(end - cursor))
+            return false;
+        std::memcpy(cursor, text, length);
+        cursor += length;
+        return true;
+    }
+
+    template <typename Integer>
+    bool AppendAggregateTimingInteger(char*& cursor, char* end, Integer value) noexcept
+    {
+        const auto result = std::to_chars(cursor, end, value);
+        if (result.ec != std::errc{})
+            return false;
+        cursor = result.ptr;
+        return true;
+    }
+
+    bool FormatAggregateTimingChunk(const char* report, std::size_t reportBytes,
+        std::uint64_t sequence, std::size_t chunkIndex, std::size_t chunkCount,
+        AggregateTimingChunk& output) noexcept
+    {
+        if (report == nullptr || reportBytes == 0 || reportBytes >= MinimapAggregateTiming::kMaxFormattedLine ||
+            sequence == 0 || chunkIndex == 0 || chunkIndex > chunkCount || chunkCount == 0 ||
+            chunkCount > kAggregateTimingMaximumChunks ||
+            chunkCount != 1 + (reportBytes - 1) / kAggregateTimingChunkPayloadBytes)
+            return false;
+
+        const std::size_t offset = (chunkIndex - 1) * kAggregateTimingChunkPayloadBytes;
+        if (offset >= reportBytes)
+            return false;
+        const std::size_t payloadBytes = (std::min)(kAggregateTimingChunkPayloadBytes, reportBytes - offset);
+        char* cursor = output.data();
+        char* const end = output.data() + output.size() - 1;
+        constexpr char marker[] = "MM-PERF-88 seq=";
+        constexpr char chunkLabel[] = " chunk=";
+        constexpr char byteLabel[] = " report-bytes=";
+        constexpr char separator = '|';
+        if (!AppendAggregateTimingLiteral(cursor, end, marker, sizeof(marker) - 1) ||
+            !AppendAggregateTimingInteger(cursor, end, sequence) ||
+            !AppendAggregateTimingLiteral(cursor, end, chunkLabel, sizeof(chunkLabel) - 1) ||
+            !AppendAggregateTimingInteger(cursor, end, chunkIndex) ||
+            !AppendAggregateTimingLiteral(cursor, end, "/", 1) ||
+            !AppendAggregateTimingInteger(cursor, end, chunkCount) ||
+            !AppendAggregateTimingLiteral(cursor, end, byteLabel, sizeof(byteLabel) - 1) ||
+            !AppendAggregateTimingInteger(cursor, end, reportBytes) ||
+            !AppendAggregateTimingLiteral(cursor, end, &separator, 1))
+            return false;
+
+        const std::size_t headerBytes = static_cast<std::size_t>(cursor - output.data());
+        if (headerBytes > kAggregateTimingChunkHeaderBudget ||
+            payloadBytes > static_cast<std::size_t>(end - cursor) ||
+            headerBytes + payloadBytes > kAggregateTimingChunkMessageLimit)
+            return false;
+        for (std::size_t i = 0; i < payloadBytes; ++i)
+        {
+            const auto byte = static_cast<unsigned char>(report[offset + i]);
+            if (byte < 0x20 || byte > 0x7e || byte == '%')
+                return false;
+        }
+        std::memcpy(cursor, report + offset, payloadBytes);
+        cursor += payloadBytes;
+        *cursor = '\0';
+        return true;
+    }
+
+    void EmitAggregateTimingReport(ModContext* modContext)
+    {
+        if (modContext == nullptr) return;
+        static ULONGLONG lastReportTick = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (lastReportTick == 0)
+        {
+            lastReportTick = now;
+            return;
+        }
+        if (now - lastReportTick < 15000) return;
+        lastReportTick = now;
+
+        auto& collector = DiagnosticCollector();
+        Snapshot snapshot{};
+        bool drained = false;
+        {
+            ScopedTimer drain(collector, Metric::AggregateDrain);
+            drained = collector.Drain(snapshot);
+        }
+        if (!drained) return;
+
+        static thread_local std::array<char, MinimapAggregateTiming::kMaxFormattedLine> report{};
+        std::array<AggregateTimingChunk, kAggregateTimingMaximumChunks> chunks;
+        std::size_t written = 0;
+        std::size_t chunkCount = 0;
+        bool formatted = false;
+        bool chunksReady = false;
+        {
+            ScopedTimer format(collector, Metric::AggregateFormat);
+            formatted = FormatSnapshot(snapshot, report.data(), report.size(), &written);
+            if (formatted && written > 0 && written < report.size() && report[written] == '\0' &&
+                snapshot.sequence != 0)
+            {
+                chunkCount = 1 + (written - 1) / kAggregateTimingChunkPayloadBytes;
+                chunksReady = chunkCount <= chunks.size();
+                for (std::size_t i = 0; chunksReady && i < chunkCount; ++i)
+                    chunksReady = FormatAggregateTimingChunk(report.data(), written, snapshot.sequence,
+                        i + 1, chunkCount, chunks[i]);
+            }
+        }
+        if (!formatted || written == 0 || written >= report.size())
+        {
+            collector.RecordReportLoss(snapshot.sequence,
+                MinimapAggregateTiming::ReportLossReason::FormatCapacity);
+            return;
+        }
+        if (!chunksReady)
+        {
+            collector.RecordReportLoss(snapshot.sequence,
+                MinimapAggregateTiming::ReportLossReason::InvalidSnapshot);
+            return;
+        }
+
+        {
+            ScopedTimer submission(collector, Metric::LoggerSubmission);
+            for (std::size_t i = 0; i < chunkCount; ++i)
+                modContext->Log(chunks[i].data());
+        }
+    }
     class MinimapMod : public Mod
     {
         // Shroudtopia owns and overwrites Mod::loaded, even after a rejected Load.
         bool profileReady = false;
-        bool initialMenuPending = false;
     public:
         void Load(ModContext* modContext) override
         {
+            const bool diagnosticClockReady = InitializeDiagnosticCollector();
             g_runtimeCallbacksActive.store(false);
             g_menuVisibilityHookActive.store(false, std::memory_order_release);
+            g_initialMenuVisibilityPending = false;
             ClearMenuVisibilityObservation();
             profileReady = false;
-            initialMenuPending = false;
             if (!modContext->game.isClient)
             {
                 modContext->Log("[Minimap] client-only mod; skipping load on server");
@@ -10663,6 +10758,7 @@ namespace
             }
 
             g_modContext = modContext;
+            modContext->Log(diagnosticClockReady ? "[ESM Minimap] aggregate timing diagnostic schema=1 build=MM-PERF-88-20261021 qpc=ready" : "[ESM Minimap] aggregate timing diagnostic schema=1 build=MM-PERF-88-20261021 qpc=unavailable");
             g_shroudtopiaConfigPath = ResolveShroudtopiaConfigPath(modContext);
             RefreshMinimapConfig(modContext, true);
             g_exeBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
@@ -10670,15 +10766,16 @@ namespace
 
             wchar_t executable[32768] = {};
             const DWORD pathLength=GetModuleFileNameW(nullptr,executable,32768);
-            g_client10=pathLength>0 && pathLength<32768 && MinimapClient10::MatchesFile(executable);
+            g_clientProfile = pathLength>0 && pathLength<32768 ? MinimapClient10::IdentifyFile(executable) : MinimapClient10::Profile::Unsupported;
+            g_client10 = g_clientProfile != MinimapClient10::Profile::Unsupported;
             if (g_client10) {
-                loaded=profileReady=LoadVerifiedClient10(modContext, initialMenuPending);
+                loaded=profileReady=LoadVerifiedClient10(modContext);
                 if (!profileReady) Unload(modContext);
                 return;
             }
             if (!IsNamedSystemAt(0x1D43630,"player_camera_transform",0x2662A0) ||
                 !IsNamedSystemAt(0x1D4B0B0,"player_waypoints_ui",0x2A8370)) {
-                modContext->Log("[Sparkweave Minimap] unsupported client; no hooks installed");
+                modContext->Log("[ESM Minimap] unsupported client; no hooks installed");
                 return;
             }
             const bool namedClient = IsNamedSystemAt(0x1D43630, "player_camera_transform", 0x2662A0) &&
@@ -10884,7 +10981,6 @@ namespace
                 g_menuVisibilityCallHook, g_menuVisibilityHookActive,
                 g_menuVisibilityCaptureEpoch, g_menuVisibilitySnapshot);
             std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
-            std::lock_guard<std::recursive_mutex> controls(g_runtimeControlsMutex);
             profileReady = false;
             g_liveFogLayoutSupported = false;
             DestroyCallSiteHook(g_fogUpdateHook);
@@ -10918,7 +11014,7 @@ namespace
                 DestroyVulkanMinimapRendererLocked();
             }
             if (!RestoreVulkanTableHooks())
-                modContext->Log("[Sparkweave Minimap] dispatch restoration incomplete; inactive forwarding retained until process exit");
+                modContext->Log("[ESM Minimap] dispatch restoration incomplete; inactive forwarding retained until process exit");
 
             if (g_playerCameraTransformHook != nullptr)
             {
@@ -11013,7 +11109,7 @@ namespace
             ClearLiveMarkers();
             g_modContext = nullptr;
             g_client10 = false;
-            initialMenuPending = false;
+            g_initialMenuVisibilityPending = false;
             active = false;
             loaded = false;
             modContext->Log("[Minimap] inactive; callback code and originals remain available until process exit");
@@ -11021,7 +11117,7 @@ namespace
 
         void Activate(ModContext* modContext) override
         {
-            if (!profileReady) { modContext->Log("[Sparkweave Minimap] activation skipped: unsupported or incomplete client profile");return; }
+            if (!profileReady) { modContext->Log("[ESM Minimap] activation skipped: unsupported or incomplete client profile");return; }
             RefreshMinimapConfig(modContext, true);
             ClearMenuVisibilityObservation();
             const bool cameraOk = ActivateHook(g_playerCameraTransformHook);
@@ -11036,15 +11132,15 @@ namespace
             const bool waypointOk = ActivateHook(g_playerWaypointsUiHook);
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
             const bool menuUiOk = g_client10
-                ? ActivateMenuVisibilityAtBoundary(modContext, initialMenuPending)
+                ? ActivateMenuVisibilityAtBoundary(modContext, g_initialMenuVisibilityPending)
                 : false;
-            g_menuVisibilityHookActive.store(g_client10 && menuUiOk, std::memory_order_release);
             const bool renderOk = ActivateHook(g_renderPresentFrameHook);
             const bool vulkanOk = ActivateHook(g_vulkanDeviceTableInitHook);
             active = g_client10 ? (cameraOk && renderOk && vulkanOk) :
                 (cameraOk || uiOk || waypointOk || markerVisibilityOk || renderOk || vulkanOk);
             if (g_client10 && !active) { Deactivate(modContext);return; }
             g_runtimeCallbacksActive.store(active);
+            g_menuVisibilityHookActive.store(g_client10 && menuUiOk, std::memory_order_release);
             // Let the normal init hook capture the table first. A late-loaded
             // mod can use the bounded fallback from Update after this grace period.
             g_vulkanScanAttempts = 0;
@@ -11076,7 +11172,6 @@ namespace
                 g_menuVisibilityCallHook, g_menuVisibilityHookActive,
                 g_menuVisibilityCaptureEpoch, g_menuVisibilitySnapshot);
             std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
-            std::lock_guard<std::recursive_mutex> controls(g_runtimeControlsMutex);
             g_toggleNotice.clear();
             if (g_fogUpdateHook != nullptr)
             {
@@ -11140,16 +11235,17 @@ namespace
         {
             if (profileReady && g_runtimeCallbacksActive.load() && active)
             {
-                if (g_client10 && initialMenuPending)
+                if (g_client10 && g_initialMenuVisibilityPending)
                 {
                     const bool menuUiOk = RetryPendingMenuVisibilityAtUpdate(
-                        active, modContext, initialMenuPending);
+                        active, modContext, g_initialMenuVisibilityPending);
                     g_menuVisibilityHookActive.store(menuUiOk, std::memory_order_release);
                 }
                 UpdateMinimapRuntimeControls(modContext);
                 PollGameSessionLog();
                 ProbeVulkanTable();
             }
+            EmitAggregateTimingReport(modContext);
         }
 
         ModMetaData GetMetaData() override
@@ -11168,4 +11264,3 @@ BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID)
 {
     return TRUE;
 }
-

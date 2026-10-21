@@ -4,14 +4,18 @@
 #include <iostream>
 #include <iterator>
 int main(int argc,char**argv) {
- if(argc!=2)return 2;
+ if(argc!=2 && argc!=3)return 2;
+ const auto expectedProfile = argc==3 && std::string(argv[2])=="26082781"
+     ? MinimapClient10::Profile::Build26082781 : MinimapClient10::Profile::Build25988036;
  std::ifstream f(argv[1],std::ios::binary); std::vector<unsigned char> b((std::istreambuf_iterator<char>(f)),{});
  auto path=std::filesystem::temp_directory_path()/("minimap-profile-"+std::to_string(GetCurrentProcessId())+".exe");
- auto check=[&](const char* name,bool expected){std::ofstream o(path,std::ios::binary);o.write((char*)b.data(),b.size());o.close();bool got=MinimapClient10::MatchesFile(path);std::filesystem::remove(path);if(got!=expected){std::cerr<<"FAIL "<<name<<'\n';exit(1);}std::cout<<"PASS "<<name<<'\n';};
+ auto check=[&](const char* name,bool expected){std::ofstream o(path,std::ios::binary);o.write((char*)b.data(),b.size());o.close();const auto profile=MinimapClient10::IdentifyFile(path);bool got=MinimapClient10::MatchesFile(path);std::filesystem::remove(path);if(got!=expected || profile!=(expected ? expectedProfile : MinimapClient10::Profile::Unsupported)){std::cerr<<"FAIL "<<name<<'\n';exit(1);}std::cout<<"PASS "<<name<<'\n';};
  check("baseline",true); auto original=b;
  DWORD pe=0;memcpy(&pe,b.data()+60,4);
  b[pe+8]^=1;check("timestamp-only patch",true);b=original;
  b[pe+24+64]^=1;check("checksum-only patch",true);b=original;
+ b[pe+8]^=1;b[pe+24+64]^=1;check("timestamp and checksum only",true);b=original;
+ b.push_back(0);check("additional file bytes rejected",false);b=original;
  b[4096]^=1;check("code change rejected",false);b=original;
  b[pe+24+16]^=1;check("entrypoint change rejected",false);b=original;
  b[60]=255;b[61]=255;b[62]=255;b[63]=127;check("invalid PE offset rejected",false);b=original;

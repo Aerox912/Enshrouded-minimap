@@ -1,6 +1,5 @@
 build/
 dist/
-toolchain/
 x64/
 x86/
 .vs/

@@ -63,7 +63,10 @@ namespace
 
     void CheckFixture(const char* path)
     {
-        Check(MinimapClient10::MatchesExactFile(path), "fixture has the exact current executable SHA256");
+        const auto profile = MinimapClient10::IdentifyFile(path);
+        const bool currentBuild = profile == MinimapClient10::Profile::Build26082781;
+        const auto Rva = [=](std::uintptr_t old) { return MinimapClient10::Rva(profile, old); };
+        Check(profile != MinimapClient10::Profile::Unsupported, "fixture has the exact current executable SHA256");
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         Check(input.good(), "fixture opens read only");
         std::vector<std::uint8_t> file(static_cast<std::size_t>(input.tellg()));
@@ -79,57 +82,58 @@ namespace
                 static_cast<std::size_t>(section.VirtualAddress) + section.SizeOfRawData <= image.size(), "PE section bounds hold");
             std::memcpy(image.data() + section.VirtualAddress, file.data() + section.PointerToRawData, section.SizeOfRawData);
         }
-        Check(MinimapMenu10::MatchGuards(image.data(), image.size()), "current UI lifetime and read instructions match");
-        Check(!MinimapMenu10::MatchGuards(nullptr, image.size()), "null mapped image is rejected");
-        Check(!MinimapMenu10::MatchGuards(image.data(), 0), "empty mapped image is rejected");
+        Check(MinimapMenu10::MatchGuards(image.data(), image.size(), nullptr, currentBuild), "current UI lifetime and read instructions match");
+        Check(!MinimapMenu10::MatchGuards(nullptr, image.size(), nullptr, currentBuild), "null mapped image is rejected");
+        Check(!MinimapMenu10::MatchGuards(image.data(), 0, nullptr, currentBuild), "empty mapped image is rejected");
+        Check(!MinimapMenu10::MatchGuards(image.data(), image.size(), nullptr, !currentBuild), "opposite HUD profile rejects fixture");
         // Independent ranges from the static disassembly, not the production guard table.
         const std::pair<std::size_t, std::size_t> ranges[] = {
-            {0xc4e0c0, 18}, {0xc4e0d2, 54}, {0xc4e108, 32},
-            {0xbc0446, 7}, {0xbc0969, 7}, {0xbc078b, 37},
-            {0xbc09d4, 28}, {0xbc093a, 10}, {0xd6ade0, 8}
+            {Rva(0xc4e0c0), 18}, {Rva(0xc4e0d2), 54}, {Rva(0xc4e108), 32},
+            {Rva(0xbc0446), 7}, {Rva(0xbc0969), 7}, {Rva(0xbc078b), 37},
+            {Rva(0xbc09d4), 28}, {Rva(0xbc093a), 10}, {Rva(0xd6ade0), 8}
         };
         unsigned mutations = 0;
         for (const auto& range : ranges) {
-            Check(!MinimapMenu10::MatchGuards(image.data(), range.first + range.second - 1), "truncated critical guard is rejected");
+            Check(!MinimapMenu10::MatchGuards(image.data(), range.first + range.second - 1, nullptr, currentBuild), "truncated critical guard is rejected");
             for (std::size_t index = 0; index < range.second; ++index) {
                 image[range.first + index] ^= 1;
-                Check(!MinimapMenu10::MatchGuards(image.data(), image.size()), "each changed critical instruction byte is rejected");
+                Check(!MinimapMenu10::MatchGuards(image.data(), image.size(), nullptr, currentBuild), "each changed critical instruction byte is rejected");
                 image[range.first + index] ^= 1;
                 ++mutations;
             }
         }
         std::uint8_t originalPrefix[18]{};
-        std::memcpy(originalPrefix, image.data() + MinimapMenu10::RendererRva, sizeof(originalPrefix));
+        std::memcpy(originalPrefix, image.data() + Rva(MinimapMenu10::RendererRva), sizeof(originalPrefix));
         constexpr std::array<std::uint8_t, 18> expectedRendererPrefix = {
             0x4c,0x8b,0xdc,0x55,0x49,0x8d,0xab,0xe8,0xfd,0xff,0xff,0x48,0x81,0xec,0x10,0x03,0x00,0x00};
         Check(std::memcmp(originalPrefix, expectedRendererPrefix.data(), expectedRendererPrefix.size()) == 0,
             "fixture has the exact expected original renderer prefix");
-        std::memset(image.data() + MinimapMenu10::RendererRva, 0xCC, sizeof(originalPrefix));
-        Check(!MinimapMenu10::MatchGuards(image.data(), image.size()), "raw guards reject a replaced renderer entry");
+        std::memset(image.data() + Rva(MinimapMenu10::RendererRva), 0xCC, sizeof(originalPrefix));
+        Check(!MinimapMenu10::MatchGuards(image.data(), image.size(), nullptr, currentBuild), "raw guards reject a replaced renderer entry");
         Check(MinimapMenu10::MatchGuardsWithRendererPrefix(
-            image.data(), image.size(), originalPrefix, sizeof(originalPrefix)),
+            image.data(), image.size(), originalPrefix, sizeof(originalPrefix), nullptr, 0, nullptr, currentBuild),
             "the exact original renderer prefix permits only the owned entry replacement");
         auto wrongPrefix = std::array<std::uint8_t, 18>{};
         std::memcpy(wrongPrefix.data(), originalPrefix, sizeof(originalPrefix));
         wrongPrefix[0] ^= 1;
         Check(!MinimapMenu10::MatchGuardsWithRendererPrefix(
-            image.data(), image.size(), wrongPrefix.data(), wrongPrefix.size()),
+            image.data(), image.size(), wrongPrefix.data(), wrongPrefix.size(), nullptr, 0, nullptr, currentBuild),
             "a mismatched original prefix cannot waive the renderer guard");
         Check(!MinimapMenu10::MatchGuardsWithRendererPrefix(
-            image.data(), image.size(), originalPrefix, sizeof(originalPrefix) - 1),
+            image.data(), image.size(), originalPrefix, sizeof(originalPrefix) - 1, nullptr, 0, nullptr, currentBuild),
             "a short original prefix cannot waive the renderer guard");
-        image[0xc4e0d2] ^= 1;
+        image[Rva(0xc4e0d2)] ^= 1;
         Check(!MinimapMenu10::MatchGuardsWithRendererPrefix(
-            image.data(), image.size(), originalPrefix, sizeof(originalPrefix)),
+            image.data(), image.size(), originalPrefix, sizeof(originalPrefix), nullptr, 0, nullptr, currentBuild),
             "the renderer tail guard remains required after entry admission");
-        image[0xc4e0d2] ^= 1;
-        image[0xbc0446] ^= 1;
+        image[Rva(0xc4e0d2)] ^= 1;
+        image[Rva(0xbc0446)] ^= 1;
         Check(!MinimapMenu10::MatchGuardsWithRendererPrefix(
-            image.data(), image.size(), originalPrefix, sizeof(originalPrefix)),
+            image.data(), image.size(), originalPrefix, sizeof(originalPrefix), nullptr, 0, nullptr, currentBuild),
             "a caller guard remains required after entry admission");
-        image[0xbc0446] ^= 1;
-        std::memcpy(image.data() + MinimapMenu10::RendererRva, originalPrefix, sizeof(originalPrefix));
-        Check(MinimapMenu10::MatchGuards(image.data(), image.size()), "restored current fixture remains accepted");
+        image[Rva(0xbc0446)] ^= 1;
+        std::memcpy(image.data() + Rva(MinimapMenu10::RendererRva), originalPrefix, sizeof(originalPrefix));
+        Check(MinimapMenu10::MatchGuards(image.data(), image.size(), nullptr, currentBuild), "restored current fixture remains accepted");
         std::cout << "GUARD_MUTATIONS=" << mutations << '\n';
     }
 }
