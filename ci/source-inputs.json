@@ -4,7 +4,7 @@
   "sourceInputPurpose": "Frozen tested Minimap implementation snapshot, normalized to release version metadata in this source tree.",
   "candidateSourceZipSha256": "b6275d104963ce169a389b168f960b4f5bae9f30d49a22f578292a8954f014d2",
   "baselineSourceZipSha256": "56a31365f1873d517b091d0d4e8670060c5bbf6684a33aab7880e49fed31bb05",
-  "acceptedNativeSourceTreeSha256": "ce1bbeddda206a7ada527f58d9c2f923996fb4e500c96339c008010ac2c97a8a",
+  "acceptedNativeSourceTreeSha256": "7c498363fe338a21417a7f4291662fc64c93ffccce5616ad9cf607b00dd4b9ce",
   "nativePaths": [
     ".github/workflows/release.yml",
     "assets/embervale_bright_palette.json",
@@ -236,8 +236,8 @@
     },
     {
       "path": "ci/build.ps1",
-      "lengthBytes": 6708,
-      "sha256": "e7d7df88321c54f36e437a87147f3e30bc4ad1a28ac17cbf520a9c5af2a5ed57"
+      "lengthBytes": 7040,
+      "sha256": "d8c0fe470eb997e42cfb275238e54fbd7293a011da6c8b0cf1d16e3e24bd9de1"
     },
     {
       "path": "ci/pipeline-tests.ps1",
@@ -726,8 +726,8 @@
     },
     {
       "path": "tests/frame_failure_test.cpp",
-      "lengthBytes": 8326,
-      "sha256": "bca6dab5892c18b30c85df12a783aacb4dfd91399e6dc4a33c615d0add68cd39"
+      "lengthBytes": 8585,
+      "sha256": "bf3c6fc5ed4eabd55ceff84398d2cc47a4fceec6678ff97a7cdcba9272a233f9"
     },
     {
       "path": "tests/frame_failure_test.vcxproj",

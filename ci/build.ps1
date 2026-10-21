@@ -67,6 +67,12 @@ try {
     )
     $fixtureTests = @('client_1_0_test', 'patch_profile_test', 'menu_visibility_test', 'public_creative_compat_test')
     $results = @()
+    $frameFailureFixtureRoot = Join-Path $root 'build/test-fixtures/frame-failure'
+    $frameFailureModRoot = Join-Path $frameFailureFixtureRoot 'minimap_mod'
+    New-Item -ItemType Directory -Path $frameFailureModRoot -Force | Out-Null
+    foreach ($shader in @('embervale_minimap_frame.vert.spv', 'embervale_minimap_frame.frag.spv')) {
+        Copy-Item -LiteralPath (Join-Path $root "assets/$shader") -Destination $frameFailureModRoot -Force
+    }
     foreach ($name in $projects) {
         $project = Join-Path $root "tests/$name.vcxproj"
         if (-not (Test-Path -LiteralPath $project)) { throw "Required test project missing: $name" }
@@ -78,14 +84,10 @@ try {
         }
         $test = Get-ChildItem -LiteralPath "$root/build" -Recurse -File -Filter "$name.exe" | Select-Object -First 1
         if (-not $test) { throw "Missing test executable: $name" }
-        $arguments = if ($name -in $fixtureTests) { @($fixture.FullName) } else { @() }
-        if ($name -eq 'frame_failure_test') {
-            Push-Location (Join-Path $root 'assets')
-            try { & $test.FullName @arguments }
-            finally { Pop-Location }
-        } else {
-            & $test.FullName @arguments
-        }
+        $arguments = if ($name -in $fixtureTests) { @($fixture.FullName) }
+            elseif ($name -eq 'frame_failure_test') { @($frameFailureFixtureRoot) }
+            else { @() }
+        & $test.FullName @arguments
         if ($LASTEXITCODE) { throw "Test failed: $name" }
         $results += [ordered]@{ name = $name; status = 'PASSED' }
     }

@@ -93,7 +93,15 @@ namespace {
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "Expected the frame shader fixture root.\n";
+        return 2;
+    }
+    static ModContext testContext;
+    testContext.shroudtopia.mod_folder = argv[1];
+    g_modContext = &testContext;
+
     const char* stages[]={"buffer","staging-allocation","map","bind-buffer","image","image-allocation","bind-image",
         "image-view","sampler","descriptor-layout","descriptor-pool","descriptor-set","vertex-module","fragment-module","pipeline-layout","pipeline"};
     for(auto space:{0u,1000104002u,1000104008u}) {
