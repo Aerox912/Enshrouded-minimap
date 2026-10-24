@@ -1,0 +1,10 @@
+{
+  "source": "Project-supplied embervale-realmap.png",
+  "author": "Not identified; no separate credit line requested by project owner",
+  "source_sha256": "01e0d0e4b0a8814981e494117ab2c922a5c4b9938851cb51dccfe64ac7fa4d11",
+  "converted_sha256": "0eee1318166a336c30ff83d6a0d572640db58cd4ab41f9fb11875a6321df80be",
+  "conversion": "RGBA, 2048x2048 Lanczos, no crop/warp/recolour",
+  "world_bounds": "Existing 0..10240 north-up mapping retained; local landmark alignment checked in native SDR; broader regions and full-map alignment remain unverified.",
+  "styles": "Default: supplied HD map. Original: retained released map. Legacy bright settings select Default.",
+  "redistribution_permission": "Project owner confirmed permission for public GitHub and Nexus redistribution on 2026-10-17; no additional credit line requested."
+}

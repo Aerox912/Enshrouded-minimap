@@ -1,0 +1,23 @@
+{
+  "kitVersion": "2.0",
+  "scope": "Enshrouded/Sparkweave only",
+  "sourceManifest": "E:\\Repos\\esm-loader\\docs\\branding\\assets\\manifest.json",
+  "assets": [
+    {
+      "file": "sparkweave-logo-dark-v1.png",
+      "role": "canonical horizontal Sparkweave logo on opaque dark background",
+      "sha256": "37078CFCD68ECA989683C667AE5A8838FBC89D501CC145DFADC3A0612AF6ECDA",
+      "transparent": false,
+      "origin": "Original image generated for Nick with the built-in image generation tool on 2026-10-18",
+      "provenance": "../ASSET-PROVENANCE.md"
+    },
+    {
+      "file": "sparkweave-mods-banner-dark-v1.png",
+      "role": "wide feature and mod-family banner artwork",
+      "sha256": "504DD475FB7694D7C04612D4DA8810BE8FAF840AD0C246128A4B90F404D770A1",
+      "transparent": false,
+      "origin": "Original image generated for Nick with the built-in image generation tool on 2026-10-18",
+      "provenance": "../ASSET-PROVENANCE.md"
+    }
+  ]
+}

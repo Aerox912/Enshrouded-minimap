@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "handoffId": "MM-TOP-RIGHT-452-20261024-R1",
+  "status": "COMPONENT_BUILD_AND_FOCUSED_INDEPENDENT_REVIEW_PASS",
+  "version": "0.5.16-gpu-test.4",
+  "channel": "private-test",
+  "source": {
+    "root": "E:/Repos/Enshrouded-minimap/scratch/minimap-top-right-default-20261024/source",
+    "manifest": "E:/Repos/Enshrouded-minimap/scratch/minimap-top-right-default-20261024/result-manifest.json",
+    "manifestSha256": "282b8c3611b17f1b807afa948c9419d60f053db118ca31c7fd22705927ad2c05",
+    "fileCount": 224,
+    "changedPaths": [
+      "src/dllmain.cpp",
+      "assets/mod.json",
+      "README.md"
+    ]
+  },
+  "zip": {
+    "path": "E:/Build/minimap-top-right-default-20261024-r1/Shroudweave-Minimap-0.5.16-gpu-test.4-private.zip",
+    "sha256": "b115ef7482b6c929efda5b8bb52b527f173e24ea932d71cb24952e06a215d025",
+    "bytes": 16592929,
+    "entryCount": 52
+  },
+  "dll": {
+    "path": "E:/Build/minimap-top-right-default-20261024-r1/bin/minimap_mod.dll",
+    "sha256": "38876e8bf9ae41df6b112927c15eb328b7f8239b3911f7969a3e72cf4c96d8f1",
+    "bytes": 539136
+  },
+  "descriptorSha256": "7862298a6e0a1a41f3e57174f89115d3d099eaa20603e791ba5bc05a5f2647a3",
+  "build": {
+    "receipt": "E:/Build/minimap-top-right-default-20261024-r1/package-stage/BUILD-RECEIPT.json",
+    "receiptSha256": "d08d880bae3da31de34d902dd8553b90989c4a798dc05ee86e3000e4730d3c16",
+    "artifactManifest": "E:/Build/minimap-top-right-default-20261024-r1/ARTIFACT-MANIFEST.json",
+    "artifactManifestSha256": "d73bcf36319df774690d0a6db3d30fb0d80eb7fa606d4988f5ec9c9fbe05fd2c",
+    "configuration": "Release/x64",
+    "warnings": 0,
+    "errors": 0
+  },
+  "independentReview": {
+    "path": "E:/Scratch/tester-minimap-top-right-r1/VERDICT.json",
+    "sha256": "7702e67ef700aa1ecee68adf5853bbf0592b1183a47dbd7b1a058d3e9ab85d39",
+    "decision": "PASS_EXACT_TEST4_TOP_RIGHT_MINIMAP_ARTIFACT_AND_FOCUSED_DEFAULT_PRECEDENCE_ONLY",
+    "missingDefaultAddendum": "E:/Scratch/tester-minimap-top-right-r1/MISSING-DEFAULT-ADDENDUM.json",
+    "addendumSha256": "dd398083f8e4e4a50f3517fef7818dc5506bc6fae05e9a91d0098eee9d13627a",
+    "verified": "224 source inputs, 52 exact ZIP members, initial top-right, explicit saved-position precedence, API override preservation, missing file with null API and with API returning supplied fallback resolve top-right"
+  },
+  "preservation": {
+    "defaultPosition": "top-right",
+    "explicitPositionsTakePrecedence": true,
+    "sampleStep": 2,
+    "offset": 0,
+    "orientation": "north-up",
+    "hdAssetsAndCreative300Guards": "Unchanged; prior matching evidence reused",
+    "previousTest3Artifact": "Preserved unchanged"
+  },
+  "handoff": {
+    "owner": "Installer",
+    "target": "4.5.2 test composition",
+    "action": "Bind this exact private component and receipts for the next 4.5.2 test. Do not substitute test.3.",
+    "boundary": "This request keeps the live setup unchanged. No live application, game launch, server work, publication or push is authorized by this handoff. Preserve separate direct authorizations and all unrelated transaction/composition gates.",
+    "broadRetesting": false,
+    "installationAccepted": false,
+    "runtimeGameplayAccepted": false
+  }
+}

@@ -1,0 +1,45 @@
+name: Build Minimap 0.5.16 GPU test.4 Manager candidate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'releases/0.5.16-gpu-test.4/**'
+      - '.github/workflows/build-minimap-gpu-test-4.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'releases/0.5.16-gpu-test.4/**'
+      - '.github/workflows/build-minimap-gpu-test-4.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build-candidate:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify frozen source and exact candidate archive
+        run: python releases/0.5.16-gpu-test.4/verify_candidate.py
+      - name: Check frozen top-right and north-up defaults
+        run: python releases/0.5.16-gpu-test.4/verify_focused_defaults.py
+      - name: Build Minimap runtime candidate from frozen source
+        run: ./releases/0.5.16-gpu-test.4/build-candidate.ps1
+      - name: Replace only the runtime DLL and verify unchanged assets
+        run: python releases/0.5.16-gpu-test.4/write_artifact_manifest.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minimap-0.5.16-gpu-test.4-${{ github.sha }}
+          path: releases/0.5.16-gpu-test.4/dist/
+          if-no-files-found: error
+          retention-days: 90
