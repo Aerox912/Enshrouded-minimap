@@ -96,8 +96,8 @@ if (($oldExportSymbols -notcontains '1 0 CreateModInstance') -or ($newExportSymb
 if (($oldExportSymbols -join "`n") -cne ($newExportSymbols -join "`n")) { throw 'Rebuilt Minimap export names or ordinals differ from the frozen candidate.' }
 $oldDependencies = Invoke-Dumpbin -DumpArgs @('/dependents',$historicalDll) -Output (Join-Path $out 'historical-dependents.txt')
 $newDependencies = Invoke-Dumpbin -DumpArgs @('/dependents',$dll) -Output (Join-Path $out 'rebuilt-dependents.txt')
-$oldDlls = @($oldDependencies | Where-Object { $_.Trim() -match '\.dll$' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Sort-Object -Unique)
-$newDlls = @($newDependencies | Where-Object { $_.Trim() -match '\.dll$' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Sort-Object -Unique)
+$oldDlls = @($oldDependencies | ForEach-Object { if ($_ -match '^\s+([A-Za-z0-9_.-]+\.dll)\s*$') { $Matches[1].ToLowerInvariant() } } | Sort-Object -Unique)
+$newDlls = @($newDependencies | ForEach-Object { if ($_ -match '^\s+([A-Za-z0-9_.-]+\.dll)\s*$') { $Matches[1].ToLowerInvariant() } } | Sort-Object -Unique)
 if (($oldDlls -join "`n") -cne ($newDlls -join "`n")) { Write-Host "Historical dependencies: $($oldDlls -join ', ')"; Write-Host "Rebuilt dependencies: $($newDlls -join ', ')"; throw 'Rebuilt Minimap dependencies differ from the frozen candidate.' }
 $sha = { param([string]$p) (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant() }
 Copy-Item -LiteralPath $dll -Destination (Join-Path $dist 'minimap_mod.dll') -Force
