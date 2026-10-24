@@ -34,5 +34,11 @@
   "runtimeGameplayAccepted": false,
   "releasePublished": false,
   "historicalCandidateDllSha256": "38876e8bf9ae41df6b112927c15eb328b7f8239b3911f7969a3e72cf4c96d8f1",
-  "historicalCandidateDllBytes": 539136
+  "historicalCandidateDllBytes": 539136,
+  "focusedHarness": {
+    "originalHarnessSha256": "4ef4ec1fdae49f008b47b3afa1ffee8198ce7145b8d0e33cac49ff040803714b",
+    "originalProjectSha256": "fba84f271954fcaa38dbc97ccb066db1ce067c6c1de4f5d002558c1d2e6afd6c",
+    "fixtureSha256": "a77e278b4e34488e3987eb54dc6d1acf216001476c6aa3ad48d2d41c3957e8db",
+    "adaptation": "Only replace the original absolute dllmain.cpp include and source-root paths with relative paths into this frozen source tree. Assertions unchanged."
+  }
 }

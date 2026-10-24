@@ -40,11 +40,13 @@ manifest={
  'schemaVersion':2,'status':'CI_ARTIFACT_NEW_MINIMAP_RUNTIME_CANDIDATE','candidate':request['candidate'],'version':request['version'],
  'managerCandidate':request['managerCandidate'],'channel':request['channel'],'repository':'Aerox912/Enshrouded-minimap',
  'sourceCommit':os.environ['GITHUB_SHA'],'workflowRunId':int(os.environ['GITHUB_RUN_ID']),'workflowRunAttempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
+ 'mainPipeline':os.environ.get('GITHUB_EVENT_NAME')=='push' and os.environ.get('GITHUB_REF')=='refs/heads/main',
  'sourceManifestSha256':request['sourceManifestSha256'],'sourceFileCount':request['sourceFileCount'],
  'historicalInputArchiveSha256':request['candidateArchiveSha256'],'historicalInputDllSha256':request['historicalCandidateDllSha256'],
- 'newRuntimeDllSha256':dll_sha,'newRuntimeDllBytes':len(dll_bytes),'packageZipSha256':sha(target.read_bytes()),'packageZipBytes':target.stat().st_size,
+ 'newRuntimeDllSha256':dll_sha,'newRuntimeDllBytes':len(dll_bytes),'runtimeSha256':dll_sha,'runtimeBytes':len(dll_bytes),'packageZipSha256':sha(target.read_bytes()),'packageZipBytes':target.stat().st_size,
  'packageMemberCount':len(names),'replacedMember':member,'unchangedAssetMemberCount':len(unchanged),'unchangedAssetMemberManifestSha256':sha(asset_manifest_bytes),
- 'focusedDefaultsHarness':'verify_focused_defaults.py','runtimeGameplayAccepted':False,'releasePublished':False
+ 'focusedDefaultsHarnessStatus':receipt['focusedDefaultsHarness']['status'],'focusedDefaultsHarnessManifestSha256':sha((dist/'receipts/focused-default-harness-input.json').read_bytes()),
+ 'runtimeGameplayAccepted':False,'releasePublished':False
 }
 (dist/'ARTIFACT-MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
 print(json.dumps(manifest,sort_keys=True))
