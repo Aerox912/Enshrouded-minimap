@@ -96,9 +96,9 @@ if (($oldExportSymbols -notcontains '1 0 CreateModInstance') -or ($newExportSymb
 if (($oldExportSymbols -join "`n") -cne ($newExportSymbols -join "`n")) { throw 'Rebuilt Minimap export names or ordinals differ from the frozen candidate.' }
 $oldDependencies = Invoke-Dumpbin -DumpArgs @('/dependents',$historicalDll) -Output (Join-Path $out 'historical-dependents.txt')
 $newDependencies = Invoke-Dumpbin -DumpArgs @('/dependents',$dll) -Output (Join-Path $out 'rebuilt-dependents.txt')
-$oldDlls = @($oldDependencies | Where-Object { $_.Trim() -match '\.dll$' } | ForEach-Object { $_.Trim().ToLowerInvariant() })
-$newDlls = @($newDependencies | Where-Object { $_.Trim() -match '\.dll$' } | ForEach-Object { $_.Trim().ToLowerInvariant() })
-if (($oldDlls -join "`n") -cne ($newDlls -join "`n")) { throw 'Rebuilt Minimap dependencies differ from the frozen candidate.' }
+$oldDlls = @($oldDependencies | Where-Object { $_.Trim() -match '\.dll$' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Sort-Object -Unique)
+$newDlls = @($newDependencies | Where-Object { $_.Trim() -match '\.dll$' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Sort-Object -Unique)
+if (($oldDlls -join "`n") -cne ($newDlls -join "`n")) { Write-Host "Historical dependencies: $($oldDlls -join ', ')"; Write-Host "Rebuilt dependencies: $($newDlls -join ', ')"; throw 'Rebuilt Minimap dependencies differ from the frozen candidate.' }
 $sha = { param([string]$p) (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant() }
 Copy-Item -LiteralPath $dll -Destination (Join-Path $dist 'minimap_mod.dll') -Force
 foreach ($file in @($log,$binlog,$harnessBuildLog,$harnessBinLog,(Join-Path $out 'focused-default-test.log'),(Join-Path $out 'historical-headers.txt'),(Join-Path $out 'rebuilt-headers.txt'),(Join-Path $out 'historical-exports.txt'),(Join-Path $out 'rebuilt-exports.txt'),(Join-Path $out 'historical-dependents.txt'),(Join-Path $out 'rebuilt-dependents.txt'))) { Copy-Item -LiteralPath $file -Destination $receipts -Force }
