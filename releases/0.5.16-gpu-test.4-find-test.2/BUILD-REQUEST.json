@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "candidate": "MINIMAP-FIND-COMPAT-R2-20261024",
+  "component": "Shroudweave Minimap",
+  "version": "0.5.16-gpu-test.4-find-test.2",
+  "channel": "private-test",
+  "managerCandidate": "Shroudweave Manager 4.5.4",
+  "repository": "https://github.com/Aerox912/Enshrouded-minimap",
+  "sourcePath": "releases/0.5.16-gpu-test.4-find-test.2/source",
+  "sourceManifestPath": "releases/0.5.16-gpu-test.4-find-test.2/SOURCE-MANIFEST.json",
+  "sourceManifestSha256": "c764296fe292a2020dd5578a3501abe874bc7b88bc8a109299dbd0899e043c69",
+  "sourceFileCount": 224,
+  "sourcePatchSha256": "9cc34e91d5d1f7ef685b33dd3aaab88f9eed7b4afa5a09ae74e81ee543d1bfb5",
+  "candidateArchivePath": "releases/0.5.16-gpu-test.4-find-test.2/package/frozen-candidate.zip",
+  "candidateArchiveSha256": "6b29feac2e362243e44bb6c24ce6c866ce06564dd0fd4fa51f7eaf78fa41fe58",
+  "candidateArchiveBytes": 16623165,
+  "candidateArchiveMembers": 52,
+  "build": {
+    "platform": "Windows x64",
+    "configuration": "Release",
+    "toolset": "v143",
+    "msvcMajorMinor": "14.44",
+    "windowsSdk": "10.0.26100.0",
+    "binaryReproducibility": "Do not require historical DLL hash: original /Zi and /DEBUG build embeds timestamp, PDB GUID, and absolute PDB path.",
+    "candidatePolicy": "Rebuild exact frozen source in main CI; record fresh DLL hash; retain original asset archive and verify all non-DLL member bytes.",
+    "msvcToolsVersion": "14.44.35207"
+  },
+  "defaults": {
+    "placement": "top-right",
+    "orientation": "north-up",
+    "mapSampleStep": 2,
+    "offset": 0
+  },
+  "runtimeGameplayAccepted": false,
+  "releasePublished": false,
+  "historicalCandidateDllSha256": "38876e8bf9ae41df6b112927c15eb328b7f8239b3911f7969a3e72cf4c96d8f1",
+  "historicalCandidateDllBytes": 539136,
+  "focusedHarness": {
+    "originalHarnessSha256": "4ef4ec1fdae49f008b47b3afa1ffee8198ce7145b8d0e33cac49ff040803714b",
+    "originalProjectSha256": "fba84f271954fcaa38dbc97ccb066db1ce067c6c1de4f5d002558c1d2e6afd6c",
+    "fixtureSha256": "a77e278b4e34488e3987eb54dc6d1acf216001476c6aa3ad48d2d41c3957e8db",
+    "adaptation": "Only replace the original absolute dllmain.cpp include and source-root paths with relative paths into this frozen source tree. Assertions unchanged."
+  },
+  "acceptedSourceManifestPath": "releases/0.5.16-gpu-test.4-find-test.2/ACCEPTED-SOURCE-MANIFEST.json",
+  "acceptedSourceManifestSha256": "8798613c6d87c0df89ba9c73a6afd5c76486fdb6311af4aeb5b031f10665dccd",
+  "sourcePatchPath": "releases/0.5.16-gpu-test.4-find-test.2/source.patch",
+  "acceptedHandoffSha256": "42b4c3ac1a29109e5da94cbec1e7c35d50d36987dcc9b805379656f9997c79e0",
+  "acceptedSourceReviewSha256": "1067f73d95def8ee7c569b5233da89b362ab2e165242e88e67219fbde4b759e5"
+}

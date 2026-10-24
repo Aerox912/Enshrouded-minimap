@@ -1,0 +1,6 @@
+__pycache__/
+dist/
+tests/focused-default/top-right-default-test.cpp
+tests/focused-default/top-right-default-test.vcxproj
+tests/focused-default/focused-bin/
+tests/focused-default/focused-obj/

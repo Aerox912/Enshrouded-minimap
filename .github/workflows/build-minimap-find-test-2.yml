@@ -1,0 +1,49 @@
+name: Build Minimap 0.5.16 Find compatibility candidate
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'releases/0.5.16-gpu-test.4-find-test.2/**'
+      - '.github/workflows/build-minimap-find-test-2.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'releases/0.5.16-gpu-test.4-find-test.2/**'
+      - '.github/workflows/build-minimap-find-test-2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build-candidate:
+    runs-on: windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify frozen source, accepted patch, and candidate archive
+        run: python releases/0.5.16-gpu-test.4-find-test.2/verify_candidate.py
+      - name: Check focused map defaults
+        run: python releases/0.5.16-gpu-test.4-find-test.2/verify_focused_defaults.py
+      - name: Build Minimap DLL and run focused harness
+        run: ./releases/0.5.16-gpu-test.4-find-test.2/build-candidate.ps1
+      - name: Verify package and write immutable build receipt
+        run: python releases/0.5.16-gpu-test.4-find-test.2/write_artifact_manifest.py
+      - name: Upload versioned private CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shroudweave-minimap-0.5.16-gpu-test.4-find-test.2-${{ github.sha }}
+          path: releases/0.5.16-gpu-test.4-find-test.2/dist/
+          if-no-files-found: error
+          retention-days: 90
