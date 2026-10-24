@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "publicVersion": "0.5.12",
+  "baseSourceZipSha256": "ebad69b63f71a3c1ef6e73735a58b8738d88674805ac1b68c5924854202a47a2",
+  "baseRuntimeZipSha256": "caab300c02c815fac6eb44839dbef9886c614c37793ab60f3ccb10440540ee3b",
+  "acceptedSourceInputManifest": {
+    "path": "SOURCE-INPUT-MANIFEST.json",
+    "version": "0.5.12-local-r4",
+    "sha256": "1a8d7a82ce75ad3c240a26395ee5d97b156b784a147f016754b97ff12c543707"
+  },
+  "acceptedSourceTree": {
+    "pathPrefix": "source/",
+    "fileCount": 57,
+    "sha256": "2312a21aa78dbf79ae6a7d7a43b5ec1051e93dc3d5d652dc4ccddb90221ae45c"
+  },
+  "acceptedRuntimeDllSha256": "eda8ad629d2c8613cb7e6f8076c2bb346983e81f380646768ff208ae592d9182",
+  "manifestInputMetadataDeltas": [
+    {
+      "baseSha256": "0500c9dd7870067b54f8809d4702e0cea136711a154593b0f52ae394ae7b6666",
+      "path": "package/README.txt",
+      "overlaySha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c",
+      "overlayLengthBytes": 1409
+    },
+    {
+      "baseSha256": "f983e85fc26304509579507c36a824e621700746e6c7125191316088aea6af86",
+      "path": "package/mods/minimap_mod/mod.json",
+      "overlaySha256": "b402a91a3f5a36ef2bc7e8b14dbf1d4789f18c593f4787a5f554b0d62642a995",
+      "overlayLengthBytes": 1286
+    }
+  ],
+  "publicWrapper": {
+    "mapping": "The stable 0.5.12 ZIPs are metadata overlays on the accepted local-r4 runtime/source snapshots.",
+    "buildDriverVersion": "0.5.12-local-r4",
+    "reproduction": "The frozen BUILD.ps1 targets 0.5.12-local-r4 and was not run to emit the public wrapper."
+  }
+}

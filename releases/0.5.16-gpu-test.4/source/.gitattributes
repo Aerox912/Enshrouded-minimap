@@ -1,0 +1,9 @@
+*.bin binary
+*.rgba binary
+*.spv binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.dll binary
+
+* -text

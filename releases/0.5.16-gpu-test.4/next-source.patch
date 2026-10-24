@@ -1,0 +1,69 @@
+diff --git a/src/dllmain.cpp b/src/dllmain.cpp
+index a59b3b7..61cf5e7 100644
+--- a/src/dllmain.cpp
++++ b/src/dllmain.cpp
+@@ -1501,7 +1501,7 @@ namespace
+     std::atomic<MinimapOrientation> g_minimapOrientation{ MinimapOrientation::NorthUp };
+     std::atomic<int> g_minimapOffset{ 0 };
+ 
+-    std::atomic<int> g_minimapPlacement{ static_cast<int>(MinimapPlacement::BottomRight) };
++    std::atomic<int> g_minimapPlacement{ static_cast<int>(MinimapPlacement::TopRight) };
+ 
+     std::array<std::uint8_t, LOCAL_PLAYER_UI_RENDER_SETUP_STOLEN_SIZE> g_localPlayerUiRenderSetupExpected = {
+         0x48, 0x89, 0x7C, 0x24, 0x18,
+@@ -1866,7 +1866,7 @@ namespace
+     void RefreshMinimapConfig(ModContext* modContext, bool forceLog = false)
+     {
+         ScopedTimer capture(DiagnosticCollector(), Metric::ConfigPoll);
+-        std::string configuredPosition = "bottom-right";
++        std::string configuredPosition = "top-right";
+         std::string positionSource = "default";
+         if (!TryReadMinimapConfigStringFromFile(modContext, "position", configuredPosition, positionSource) &&
+             modContext != nullptr && modContext->config.GetString)
+
+diff --git a/assets/mod.json b/assets/mod.json
+index 9fbfd66..3386cb0 100644
+--- a/assets/mod.json
++++ b/assets/mod.json
+@@ -12,7 +12,7 @@
+   "shroudtopia": {
+     "default": {
+       "active": true,
+-      "position": "bottom-right",
++      "position": "top-right",
+       "offset": 0,
+       "map_orientation": "north-up",
+       "toggle_key": "F10",
+
+diff --git a/README.md b/README.md
+index 2220841..7d1955c 100644
+--- a/README.md
++++ b/README.md
+@@ -25,7 +25,7 @@ draws the minimap directly inside the Enshrouded frame.
+ - Displays world time and local weather in a matching frame below the map.
+ - Covers unexplored terrain and original location icons with live fog of war, enabled by default.
+ - Keeps navigation markers visible through fog, including custom pins and placed Flame Altars.
+-- Defaults to bottom-right with north-up orientation. Rotation remains optional.
++- Defaults to top-right with north-up orientation. Rotation remains optional.
+ - Supports top-, middle-, and bottom-left or right positions, plus one signed
+   vertical offset shared by every position (zero by default; positive moves up).
+ - Uses a premium compass-style frame asset.
+@@ -143,7 +143,7 @@ Do not replace the whole file or remove other mod entries.
+ ```json
+ "minimap_mod": {
+   "active": true,
+-  "position": "bottom-right",
++  "position": "top-right",
+   "offset": 0,
+   "map_orientation": "north-up",
+   "map_style": "default",
+@@ -185,7 +185,7 @@ Example:
+   "mods": {
+     "minimap_mod": {
+       "active": true,
+-      "position": "bottom-right",
++      "position": "top-right",
+       "offset": 0,
+       "map_orientation": "north-up",
+       "toggle_key": "F10",
+

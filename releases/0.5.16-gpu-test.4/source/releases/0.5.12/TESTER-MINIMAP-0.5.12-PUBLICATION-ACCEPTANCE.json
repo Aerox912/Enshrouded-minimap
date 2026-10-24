@@ -1,0 +1,76 @@
+{
+  "decision": "ACCEPT_EXACT_STANDALONE_MINIMAP_0.5.12_FOR_PUBLICATION",
+  "reviewer": "Tester",
+  "candidate": "minimap-public-0.5.12-20261019-metadata-r3",
+  "version": "0.5.12",
+  "releasePolicy": "Only critical blockers hold release; noncritical follow-up",
+  "runtime": {
+    "path": "E:\\Build\\minimap-public-0.5.12-20261019-metadata-r3\\Sparkweave-Minimap-0.5.12.zip",
+    "sha256": "7e7bbb3b73c4cf442109bc9e20cda0d570517f5f4cad752d883938493d4fc653",
+    "bytes": 16540425,
+    "members": 22,
+    "dllSha256": "eda8ad629d2c8613cb7e6f8076c2bb346983e81f380646768ff208ae592d9182",
+    "dllBytes": 401408
+  },
+  "source": {
+    "path": "E:\\Build\\minimap-public-0.5.12-20261019-metadata-r3\\Sparkweave-Minimap-0.5.12-source.zip",
+    "sha256": "6bef1b62ad2eb8058428466755957bd152e79f0b2c2bb8e35b4732db7a6e558b",
+    "bytes": 37866800,
+    "members": 90,
+    "unchangedNativeFiles": 57,
+    "nativeSourceTreeSha256": "2312a21aa78dbf79ae6a7d7a43b5ec1051e93dc3d5d652dc4ccddb90221ae45c",
+    "nativeTreeCanonicalDefinition": [
+      {
+        "rowFormat": "relative-path-tab-sha",
+        "sort": "case-insensitive",
+        "trailingLf": false
+      }
+    ],
+    "sourceCommit": null,
+    "sourceCommitEstablished": false,
+    "authoritativeIdentity": "Exact accepted frozen archives and manifests, not dirty main checkout or an invented Git commit."
+  },
+  "acceptedOriginals": {
+    "runtimeZipSha256": "caab300c02c815fac6eb44839dbef9886c614c37793ab60f3ccb10440540ee3b",
+    "sourceZipSha256": "ebad69b63f71a3c1ef6e73735a58b8738d88674805ac1b68c5924854202a47a2",
+    "historical75InputManifestSha256": "1a8d7a82ce75ad3c240a26395ee5d97b156b784a147f016754b97ff12c543707"
+  },
+  "evidence": {
+    "independentChecksSha256": "6b7226c342535f04fe10de51e191bb7dd9ff87240eef59374c44ea7f0eb7f853",
+    "currentFullSourceInventorySha256": "57793732e471652667b7d705848a531fa9e669828628b9c0b421f8c7495a9096",
+    "effective75InputInventorySha256": "ba22704bf0e4450de2f7986ca23a0418907ad069a087e2405d4265037d67fa4c",
+    "runtimeSourcePairingVerified": true,
+    "defaultSettingsUnchanged": true,
+    "licensesAndCreditsUnchanged": true,
+    "originalProvenance64HexVerified": true,
+    "historical75InputChangesPreciselyMapped": true,
+    "installedAcceptedDllIdentityReused": true,
+    "nickGameplayAcceptanceReused": true,
+    "nativeAndContractVulkanEvidenceReused": true,
+    "nativeSuitesRerun": false,
+    "gameplayRetestPerformed": false,
+    "newMeasuredFpsClaim": false
+  },
+  "releaseNotesVerified": [
+    "North-up default; rotating remains optional.",
+    "Death-marker visibility and red skull appearance.",
+    "Minimap hides while a controller menu is open.",
+    "GPU terrain rendering with CPU fallback; optimization ongoing; no measured FPS claim."
+  ],
+  "scope": {
+    "standaloneMinimapOnly": true,
+    "includesCreativeOrOtherMods": false,
+    "managerCreativeFreeClimbingAreReleaseGates": false,
+    "existingNexusListingUpdateAuthorized": true,
+    "publicationPerformedByTester": false,
+    "liveWrites": false
+  },
+  "provenanceCorrection": "metadata-r2 source ZIP4bd251... retained but superseded: its original source hash was63characters. Exact metadata-r3 fixes both provenance fields to the independently rehashed full64character input digest.",
+  "limitations": [
+    "Frozen BUILD.ps1 still targets0.5.12-local-r4; public0.5.12 is a transparent metadata overlay, not output produced by rerunning that driver.",
+    "Runtime DLL, shaders, assets and defaults are byte-identical to acceptedr4; native/gameplay/GPU suites were not rerun.",
+    "No matching r4 Git commit established; source identity is the exact retained archive and manifest.",
+    "No measured FPS/performance improvement or new HDR/controller capability is claimed."
+  ],
+  "criticalBlockers": []
+}

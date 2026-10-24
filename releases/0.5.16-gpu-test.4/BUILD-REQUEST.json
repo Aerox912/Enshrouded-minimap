@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "candidate": "MM-TOP-RIGHT-DEFAULT-20261024-R1",
+  "component": "Shroudweave Minimap",
+  "version": "0.5.16-gpu-test.4",
+  "channel": "private-test",
+  "managerCandidate": "4.5.3 Regular and Admin",
+  "repository": "https://github.com/Aerox912/Enshrouded-minimap",
+  "sourcePath": "releases/0.5.16-gpu-test.4/source",
+  "sourceManifestPath": "releases/0.5.16-gpu-test.4/SOURCE-MANIFEST.json",
+  "sourceManifestSha256": "282b8c3611b17f1b807afa948c9419d60f053db118ca31c7fd22705927ad2c05",
+  "sourceFileCount": 224,
+  "sourcePatchSha256": "fe7d4009b4df7796b488ec3dbb41a6b9612b8374e78a9713c85aff268367555e",
+  "candidateArchivePath": "releases/0.5.16-gpu-test.4/package/frozen-candidate.zip",
+  "candidateArchiveSha256": "b115ef7482b6c929efda5b8bb52b527f173e24ea932d71cb24952e06a215d025",
+  "candidateArchiveBytes": 16592929,
+  "candidateArchiveMembers": 52,
+  "build": {
+    "platform": "Windows x64",
+    "configuration": "Release",
+    "toolset": "v143",
+    "msvcMajorMinor": "14.44",
+    "windowsSdk": "10.0.26100.0",
+    "binaryReproducibility": "Do not require historical DLL hash: original /Zi and /DEBUG build embeds timestamp, PDB GUID, and absolute PDB path.",
+    "candidatePolicy": "Rebuild exact frozen source in main CI; record fresh DLL hash; retain original asset archive and verify all non-DLL member bytes.",
+    "msvcToolsVersion": "14.44.35207"
+  },
+  "defaults": {
+    "placement": "top-right",
+    "orientation": "north-up",
+    "mapSampleStep": 2,
+    "offset": 0
+  },
+  "runtimeGameplayAccepted": false,
+  "releasePublished": false,
+  "historicalCandidateDllSha256": "38876e8bf9ae41df6b112927c15eb328b7f8239b3911f7969a3e72cf4c96d8f1",
+  "historicalCandidateDllBytes": 539136
+}
