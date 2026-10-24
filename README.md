@@ -143,7 +143,7 @@ Do not replace the whole file or remove other mod entries.
 ```json
 "minimap_mod": {
   "active": true,
-  "position": "bottom-right",
+  "position": "top-right",
   "offset": 0,
   "map_orientation": "north-up",
   "map_style": "default",
@@ -185,7 +185,7 @@ Example:
   "mods": {
     "minimap_mod": {
       "active": true,
-      "position": "bottom-right",
+      "position": "top-right",
       "offset": 0,
       "map_orientation": "north-up",
       "toggle_key": "F10",
