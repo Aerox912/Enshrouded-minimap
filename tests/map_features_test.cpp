@@ -331,12 +331,12 @@ namespace
         CaptureWorldMapMarkers(ui, GetTickCount());
         g_showWorldMarkers = false; g_minimapMaxDrawnPoints = 8;
         std::memset(pixels, 0, sizeof(pixels)); clears = 0;
-        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
+        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130, 116);
         Check(clears == 4 && pixels[155][210].r > 0.8f && pixels[155][210].g < 0.3f && pixels[155][210].b < 0.3f,
             "death layer renders red skulls independently of POI visibility, limits and deduplication");
         Check(pixels[159][207].r < 0.1f, "skull fallback keeps dark eye sockets");
         g_showDeathMarkers = false; clears = 0;
-        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
+        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130, 116);
         Check(clears == 0, "disabled death layer issues no draw commands");
         g_showDeathMarkers = true; g_showWorldMarkers = true;
         g_minimapMaxDrawnPoints = MINIMAP_DEFAULT_MAX_DRAWN_POINTS;
@@ -348,7 +348,7 @@ namespace
             for (float zoom : {0.5f, 12.0f})
             {
                 std::memset(pixels, 0, sizeof(pixels)); clears = 0;
-                DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, zoom, heading, 160, 160, 130);
+                DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, zoom, heading, 160, 160, 130, 116);
                 bool outside = false;
                 for (int y=0; y<320; ++y) for (int x=0; x<512; ++x)
                     if ((x-160)*(x-160)+(y-160)*(y-160)>130*130 && pixels[y][x].r != 0) outside=true;
@@ -832,7 +832,7 @@ namespace
         g_deathMarkers={{Fixed(220),0,Fixed(260),0x1AD8F96Eu,false}};
         CapturedWaypoint waypoint{}; waypoint.x=Fixed(260); waypoint.z=Fixed(260);
         std::memset(pixels,0,sizeof(pixels)); clears=0;
-        DrawLiveMarkers(renderer,nullptr,{waypoint},240,240,1,0,256,160,100);
+        DrawLiveMarkers(renderer,nullptr,{waypoint},240,240,1,0,256,160,100,86);
         auto anyInk=[](int cx,int cy) {
             for(int y=cy-15;y<=cy+15;++y) for(int x=cx-15;x<=cx+15;++x)
                 if(pixels[y][x].r>0.5f || pixels[y][x].g>0.5f || pixels[y][x].b>0.5f) return true;
