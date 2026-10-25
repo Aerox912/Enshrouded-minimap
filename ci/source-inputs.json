@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "version": "0.5.16-gpu-reporter-test.2",
   "sourceInputPurpose": "Reviewed reporter runtime plus exact prior Find112 shared-HUD proof restoration and reviewed CI logic; normal test revision2.",
-  "acceptedNativeSourceTreeSha256": "38514a3f2d372aca325bed93fe6edc3bc2e066a19874bce00aac773b57476d1d",
+  "acceptedNativeSourceTreeSha256": "287e998122514f53e097f557abfc6fc94aaea2fbf337f8414a21eaea21e5cf0e",
   "nativePaths": [
     ".gitattributes",
     ".github/workflows/release.yml",
@@ -1382,8 +1382,8 @@
     },
     {
       "path": "tests/markers_test.cpp",
-      "lengthBytes": 14897,
-      "sha256": "c07f14e58fcc12e783d9cf151991570136dd463fc5625655eda429f5d88a4974"
+      "lengthBytes": 14921,
+      "sha256": "72372b79d7e5ec84f21821c1ea60be79a2897ecb987260073f79865bfd8897e6"
     },
     {
       "path": "tests/markers_test.vcxproj",

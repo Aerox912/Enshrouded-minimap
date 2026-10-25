@@ -239,14 +239,14 @@ int main(int argc, char** argv)
         "green ping diamond has a dark arrow centre");
     g_playerArrow.attempted = true; // Exercise procedural fallback when the asset is absent.
     clearCalls = 0;
-    DrawRemotePlayerArrow(renderer, nullptr, 96, 32, 1.5707963f);
+    DrawRemotePlayerArrow(renderer, nullptr, 96, 32, 1.5707963f, 64, 64, 60);
     Check(clearCalls <= 8 && pixels[32][105].g > pixels[32][105].r && pixels[21][96].r == 0.2f,
         "green player arrow rotates and batches draw commands");
 
     Check(TryLoadPlayerArrowFromPath("assets/embervale_player_arrow.rgba", g_playerArrow), "load the actual local-player arrow asset");
     for (auto& row : pixels) for (auto& pixel : row) pixel = {};
     clearCalls = 0;
-    DrawRemotePlayerArrow(renderer, nullptr, 24, 64, 0);
+    DrawRemotePlayerArrow(renderer, nullptr, 24, 64, 0, 64, 64, 60);
     Check(clearCalls > 0 && clearCalls <= 8, "actual player artwork uses bounded green palette batches");
     bool greenPixel = false;
     for (const auto& row : pixels)
