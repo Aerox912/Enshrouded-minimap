@@ -9,6 +9,7 @@ $manifest = Get-Content -LiteralPath (Join-Path $root 'assets\mod.json') -Raw | 
 $version = $manifest.version
 $semVerPattern = '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
 if ($version -notmatch $semVerPattern) { throw 'Expected a valid SemVer version.' }
+if ($version -cnotin @('0.5.15', '0.5.16-gpu-reporter-test.2')) { throw 'Expected an approved Minimap pipeline version.' }
 $dll = Get-Item -LiteralPath $DllPath -ErrorAction Stop
 if ($dll.PSIsContainer -or $dll.Name -ne 'minimap_mod.dll') { throw 'Expected the built minimap_mod.dll.' }
 $commit = (& git -C $root rev-parse HEAD).Trim()
@@ -28,7 +29,7 @@ if ($receipt.runtimeDllSha256 -cne $dllHash -or
     $receipt.nativeSourceTreeSha256 -cne $inventory.acceptedNativeSourceTreeSha256) {
   throw 'Build receipt does not account for this package.'
 }
-if ($version -ceq '0.5.15') {
+if ($version -cin @('0.5.15', '0.5.16-gpu-reporter-test.2')) {
   $expectedTests = @(
     'tracking_test', 'renderer_test', 'markers_test', 'map_features_test',
     'client_1_0_test', 'frame_failure_test', 'hdr_test', 'patch_profile_test',
@@ -44,7 +45,7 @@ if ($version -ceq '0.5.15') {
     @($receipt.tests | Where-Object { $_.name -in $fixtureTests -and $_.status -ne 'SKIPPED' }).Count -eq 0
   }
   $nonFixtureStatusesValid = @($receipt.tests | Where-Object { $_.name -notin $fixtureTests -and $_.status -ne 'PASSED' }).Count -eq 0
-  if ($receipt.version -cne $version -or $receipt.sourceCommit -cne $commit -or
+  if ($inventory.version -cne $version -or $receipt.version -cne $version -or $receipt.sourceCommit -cne $commit -or
       $receipt.sourceInventorySha256 -cne (Get-FileHash -LiteralPath (Join-Path $root 'ci/source-inputs.json') -Algorithm SHA256).Hash.ToLowerInvariant() -or
       $receipt.nativeSourceTreeSha256 -cne $inventory.acceptedNativeSourceTreeSha256 -or
       $receipt.runtimeDllBytes -ne $dll.Length -or

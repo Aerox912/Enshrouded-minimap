@@ -2,12 +2,13 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent $PSScriptRoot
 $inventory = & "$PSScriptRoot/verify-source.ps1"
-if ($inventory.version -cne '0.5.15') { throw 'Pipeline is pinned to Minimap 0.5.15.' }
+if ($inventory.version -cnotin @('0.5.15', '0.5.16-gpu-reporter-test.2')) { throw 'Expected an approved Minimap pipeline version.' }
+$version = $inventory.version
 
 $metadata = Get-Content -LiteralPath "$root/assets/mod.json" -Raw | ConvertFrom-Json
-if ($metadata.version -cne '0.5.15') { throw 'Mod metadata is not version 0.5.15.' }
-if (-not (Select-String -LiteralPath "$root/src/dllmain.cpp" -Pattern '"0\.5\.15"' -Quiet)) {
-    throw 'Native ModInfo version is not 0.5.15.'
+if ($metadata.version -cne $version) { throw 'Mod metadata and source inventory versions differ.' }
+if (-not (Select-String -LiteralPath "$root/src/dllmain.cpp" -Pattern ('"' + [regex]::Escape($version) + '"') -Quiet)) {
+    throw 'Native ModInfo and source inventory versions differ.'
 }
 
 $workflow = Get-Content -LiteralPath "$root/.github/workflows/release.yml" -Raw
@@ -63,13 +64,13 @@ try {
     # Package an isolated fixture to check archive layout without loading the fixture DLL.
     $fixture = Join-Path $work 'package-fixture'
     $fixtureFiles = @{
-        'assets/mod.json' = '{"id":"minimap_mod","version":"0.5.15"}'
+        'assets/mod.json' = (@{id='minimap_mod';version=$version} | ConvertTo-Json -Compress)
         'src/probe.cpp' = '// fixture only'
-        'README.md' = '# Shroudweave Minimap 0.5.15'
+        'README.md' = "# Shroudweave Minimap $version"
         'README-INSTALL.txt' = 'fixture install instructions'
         'CREDITS.md' = 'fixture credits'
         'LICENSE' = 'fixture license'
-        'docs/releases/v0.5.15.md' = '# Shroudweave Minimap 0.5.15'
+        "docs/releases/v$version.md" = "# Shroudweave Minimap $version"
         'tests/README.md' = 'fixture test notes'
         'ci/unrelated.log' = 'must not ship'
     }
@@ -89,7 +90,7 @@ try {
     Copy-Item -LiteralPath "$root/package-release.ps1" -Destination $fixture
     $fixtureInventory = @{
         schemaVersion = 1
-        version = '0.5.15'
+        version = $version
         nativePaths = @('src/probe.cpp')
         acceptedNativeSourceTreeSha256 = $nativeHash
         files = $fixtureRecords
@@ -110,7 +111,7 @@ try {
     $incompleteOutput = Join-Path $work 'incomplete-package-output'
     New-Item -ItemType Directory -Path $incompleteOutput | Out-Null
     @{
-        version = '0.5.15'
+        version = $version
         sourceCommit = (& git -C $fixture rev-parse HEAD).Trim()
         sourceInventorySha256 = (Get-FileHash -LiteralPath "$fixture/ci/source-inputs.json" -Algorithm SHA256).Hash.ToLowerInvariant()
         nativeSourceTreeSha256 = $nativeHash
@@ -148,7 +149,7 @@ try {
     )
     @{
         schema = 'shroudweave-minimap-actions-build-v1'
-        version = '0.5.15'
+        version = $version
         sourceCommit = (& git -C $fixture rev-parse HEAD).Trim()
         sourceInventorySha256 = (Get-FileHash -LiteralPath "$fixture/ci/source-inputs.json" -Algorithm SHA256).Hash.ToLowerInvariant()
         nativeSourceTreeSha256 = $nativeHash
@@ -159,7 +160,7 @@ try {
         publication = 'NOT PERFORMED; Actions artifact only'
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'BUILD-RECEIPT.json') -Encoding utf8
     & "$fixture/package-release.ps1" -DllPath $fixtureDll -OutputDirectory $output
-    $zipPath = Join-Path $output 'enshrouded-minimap-v0.5.15.zip'
+    $zipPath = Join-Path $output "enshrouded-minimap-v$version.zip"
     if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw 'Versioned package archive was not created.' }
     $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
     try {
@@ -170,7 +171,7 @@ try {
             'README-INSTALL.txt',
             'CREDITS.md',
             'LICENSE',
-            'docs/releases/v0.5.15.md',
+            "docs/releases/v$version.md",
             'tests/README.md'
         )) {
             if ($required -notin $entries) { throw "Package is missing required entry: $required" }
@@ -180,10 +181,10 @@ try {
         $reader = [IO.StreamReader]::new($entry.Open())
         try { $packagedMetadata = $reader.ReadToEnd() | ConvertFrom-Json }
         finally { $reader.Dispose() }
-        if ($packagedMetadata.version -cne '0.5.15') { throw 'Packaged metadata version differs from 0.5.15.' }
+        if ($packagedMetadata.version -cne $version) { throw 'Packaged metadata version differs from source inventory.' }
     } finally { $zip.Dispose() }
 
-    Write-Output 'PASS: pinned source identity, tamper rejection, 0.5.15 pipeline configuration, and complete standalone package layout.'
+    Write-Output "PASS: pinned source identity, tamper rejection, $version pipeline configuration, and complete standalone package layout."
 } finally {
     $expectedPrefix = [IO.Path]::GetFullPath((Join-Path $root 'build')) + [IO.Path]::DirectorySeparatorChar
     if (-not [IO.Path]::GetFullPath($work).StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {

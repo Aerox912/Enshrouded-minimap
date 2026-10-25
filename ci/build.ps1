@@ -13,7 +13,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
     $inventory = & "$PSScriptRoot/verify-source.ps1"
-    if ($inventory.version -cne '0.5.15') { throw 'Pipeline is pinned to Minimap 0.5.15.' }
+    if ($inventory.version -cnotin @('0.5.15', '0.5.16-gpu-reporter-test.2')) { throw 'Expected an approved Minimap pipeline version.' }
     $metadata = Get-Content -LiteralPath "$root/assets/mod.json" -Raw | ConvertFrom-Json
     if ($metadata.version -cne $inventory.version) { throw 'Manifest and source inventory versions differ.' }
 

@@ -165,7 +165,7 @@
             fog.enabled ? 1.f : 0.f, validFog ? 1.f : 0.f,
             renderer.colorSpace == 1000104002 ? 1.f : renderer.colorSpace == 1000104008 ? 2.f : 0.f, 0.f,
             float(renderer.widgetCenterX), float(renderer.widgetCenterY), renderer.widgetScale, 0.f,
-            float(cx - radius), float(cy - radius), 0.f, 0.f
+            float(cx - radius), float(cy - radius), 0.f, IsSquareMinimap(renderer) ? 1.f : 0.f
         };
         void* set = reinterpret_cast<void*>(slot.frameDescriptorSet);
         void* layout = reinterpret_cast<void*>(slot.framePipelineLayout);

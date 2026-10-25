@@ -137,6 +137,21 @@ int main(int argc, char** argv) {
     g_staticPois.attempted=true; g_minimapVisible=true;
     g_playerPosition.valid=true;g_playerPosition.lastUpdateTick=GetTickCount();
     g_playerPosition.x=g_playerPosition.z=std::int64_t(5120)*4294967296LL;
+    static ModContext testContext;
+    if (argc > 2) testContext.shroudtopia.mod_folder = argv[2];
+    g_modContext = &testContext;
+    if (argc > 1 && std::strcmp(argv[1], "--dispatch-only") == 0)
+    {
+        for (int percent : {50, 75, 100, 125, 150, 175, 200})
+        {
+            g_minimapScalePercent = percent;
+            const auto drawsBefore = terrainDraws;
+            Check(RecordVulkanMinimapCommandLocked(0), "terrain command records at every supported widget scale");
+            Check(terrainDraws == drawsBefore + 1 && g_renderer.terrainGpuDrawn,
+                "map terrain dispatches through the GPU quad at every supported widget scale");
+        }
+        return 0;
+    }
     RunCpuOptimizationChecks();
     if (argc > 1 && std::strcmp(argv[1], "--cpu-only") == 0) return 0;
     for(int percent:{50,75,100,125,150,175,200}) {

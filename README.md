@@ -1,6 +1,12 @@
-# Shroudweave Minimap 0.5.15
+# Shroudweave Minimap 0.5.16-gpu-reporter-test.2
 
 Compatible with Creative Mode 3.0.0.
+
+This local private marker-glow candidate builds on the accepted .16 startup R2
+candidate and requires its compatible base assets.
+Keep the existing HD map images, player-arrow image, frame artwork and settings.
+The overlay waits for observed successful swapchain creation; missed early capture
+stays pending. Real startup recovery and GPU behavior remain unverified.
 
 This release reduces compatibility-check overhead and skips marker-summary work when it is not needed. North-up orientation, HD map assets, and existing configuration behavior remain supported.
 
@@ -25,7 +31,7 @@ draws the minimap directly inside the Enshrouded frame.
 - Displays world time and local weather in a matching frame below the map.
 - Covers unexplored terrain and original location icons with live fog of war, enabled by default.
 - Keeps navigation markers visible through fog, including custom pins and placed Flame Altars.
-- Defaults to bottom-right with north-up orientation. Rotation remains optional.
+- Defaults to top-right with north-up orientation. Rotation remains optional.
 - Supports top-, middle-, and bottom-left or right positions, plus one signed
   vertical offset shared by every position (zero by default; positive moves up).
 - Uses a premium compass-style frame asset.
@@ -76,7 +82,8 @@ game launch. Changed configuration values apply live. F10 also shows a brief On/
 
 ## Download
 
-Download the versioned release archive from the project’s GitHub Releases page.
+This local private update is not a published release. It requires the accepted
+.16 startup R2 candidate and its matching map, frame and player-arrow assets.
 
 Requires Windows x64 Enshrouded,
 the [matching Shroudtopia 1.0 compatibility files](https://www.nexusmods.com/enshrouded/mods/143?tab=files), and the
@@ -87,9 +94,12 @@ client; no server component is required.
 ## Installing the Zip
 
 1. Close Enshrouded.
-2. Download the Shroudweave Minimap 0.5.15 ZIP from the project’s GitHub Releases page.
+2. Use the local `0.5.16-gpu-reporter-test.2` update ZIP with the accepted
+   .16 startup R2 candidate and its existing assets.
 3. Back up any existing `mods/minimap_mod` folder outside the `mods` directory.
-4. Extract the ZIP into your Enshrouded game directory. The resulting mod folder is:
+4. Extract the update ZIP into your Enshrouded game directory, keeping the
+   existing base map images, player-arrow image, frame artwork and other `.16`
+   assets. The resulting mod folder is:
 
 ```text
 C:\Program Files (x86)\Steam\steamapps\common\Enshrouded\mods\minimap_mod
@@ -143,7 +153,7 @@ Do not replace the whole file or remove other mod entries.
 ```json
 "minimap_mod": {
   "active": true,
-  "position": "bottom-right",
+  "position": "top-right",
   "offset": 0,
   "map_orientation": "north-up",
   "map_style": "default",
@@ -177,6 +187,17 @@ all six positions, moves up when positive and down when negative, and scales
 with output resolution. Screen and HUD safety limits still apply.
 `map_orientation` defaults to `north-up`; set it to `rotating` to keep the map
 following player heading.
+`player_arrow_glow` defaults to `true`. Set it to `false` to disable the GPU
+halo around the local and other-player arrows. `player_arrow_glow_style`
+supports `same-colour` (the default) and `contrasting`; an invalid value uses
+`same-colour`.
+
+`ping_glow`, `waypoint_glow`, and `death_marker_glow` each default to `true` and
+can be disabled independently. Ping and waypoint styles default to
+`same-colour`; set `ping_glow_style` or `waypoint_glow_style` to `contrasting`
+for amber ping or cyan waypoint halos. Death markers use the fixed D2 dark
+backplate, red rim and restrained red halo. Existing show/hide settings still
+control marker visibility.
 
 Example:
 
@@ -185,7 +206,7 @@ Example:
   "mods": {
     "minimap_mod": {
       "active": true,
-      "position": "bottom-right",
+      "position": "top-right",
       "offset": 0,
       "map_orientation": "north-up",
       "toggle_key": "F10",
@@ -203,6 +224,13 @@ Example:
       "map_style": "default",
       "icon_style": "original",
       "heading_smoothing_ms": 55,
+      "player_arrow_glow": true,
+      "player_arrow_glow_style": "same-colour",
+      "ping_glow": true,
+      "ping_glow_style": "same-colour",
+      "waypoint_glow": true,
+      "waypoint_glow_style": "same-colour",
+      "death_marker_glow": true,
       "map_sample_step": 2,
       "max_icons": 64
     }
@@ -370,7 +398,7 @@ installation steps above; building and packaging do not modify the game.
 
 ## Version
 
-Release version: `0.5.15`.
+Private update version: `0.5.16-gpu-reporter-test.2`.
 
 The mod resolves hook signatures near the known Enshrouded client addresses at
 load time, which makes small game updates less likely to break the minimap.

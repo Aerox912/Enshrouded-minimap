@@ -119,5 +119,15 @@ namespace MinimapMenu10
             const auto captured = value >> 8;
             return (value & 0xff) == 1 && now >= captured && now - captured <= MaxAgeMs;
         }
+#if defined(ESM_PRESENT_DECISION_TRACE)
+        bool AllowsGameplay(std::uint64_t now, std::uint64_t* packedObserved) const
+        {
+            const auto value = packed.load();
+            if (packedObserved != nullptr)
+                *packedObserved = value;
+            const auto captured = value >> 8;
+            return (value & 0xff) == 1 && now >= captured && now - captured <= MaxAgeMs;
+        }
+#endif
     };
 }

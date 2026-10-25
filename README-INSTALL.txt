@@ -1,20 +1,19 @@
-Shroudweave Minimap 0.5.15
+Shroudweave Minimap 0.5.16-gpu-reporter-test.1
+PRIVATE TEST ARTIFACT. Local source and artifacts only; no public release or repository Actions.
 
-Close Enshrouded. Install the matching Shroudtopia loader/proxy from Optional Files.
-Back up existing shroudtopia.dll and winmm.dll, then extract both beside enshrouded.exe.
-Keep shroudtopia.json and other mods. Resolve any other winmm.dll owner before replacing it.
-Extract the Minimap ZIP into the game folder: mods/minimap_mod/minimap_mod.dll.
-Keep only one minimap_mod folder.
+For a fresh Manager installation, use the full Manager component ZIP. It includes the
+complete accepted .16 runtime asset set, all 11 shader binaries, square-map art,
+license and credits.
 
-In shroudtopia.json, merge into the existing mods object:
-"minimap_mod": { "active": true, "map_style": "default", "position": "bottom-right", "offset": 0, "map_orientation": "north-up" }
-Use map_style "original" for original colors. Do not overwrite other mod settings.
+For an existing complete Minimap .15/.16 installation, use the compact normal update.
+It updates the native module and the new icon-atlas shader pair and square-map art;
+existing HD map images and base data remain a dependency. Use Manager's settings
+integration so existing values are preserved. No global shroudtopia.json is included.
 
-Compatible with Creative Mode 3.0.0.
+Defaults remain round, north-up, top-right, offset 0. Square mode remains optional.
+Arrow, ping, waypoint and death-marker glow styles remain enabled by default.
 
-The release reduces compatibility-check overhead and skips marker-summary work
-when it is not needed. It retains the existing map assets and configuration.
-
-F10: hide/show. Plus/minus: zoom. F9/F11: smaller/larger.
-See README.md for settings, credits and tested scope.
-To roll back: close the game and restore the backed-up mod and loader files.
+The separate 0.5.16-gpu-linux-diag-test.2 ZIP is a private Linux HUD diagnostic update for an
+existing complete Minimap installation. It has no normal Manager component identity
+or descriptor. Its trace uses the accepted five-second cadence and bounded records;
+this artifact does not establish Linux/Proton runtime acceptance.

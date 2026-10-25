@@ -35,6 +35,9 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="Shared" />
+  <PropertyGroup Condition="'$(EnableMinimapPresentDecisionDiagnostics)'=='true'">
+    <MinimapPresentDecisionDiagnosticsDefinition>ESM_PRESENT_DECISION_TRACE=1</MinimapPresentDecisionDiagnosticsDefinition>
+  </PropertyGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
@@ -57,7 +60,7 @@
       <WarningLevel>Level3</WarningLevel>
       <ExceptionHandling>Async</ExceptionHandling>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;MINIMAPMOD_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;MINIMAPMOD_EXPORTS;_WINDOWS;_USRDLL;$(MinimapPresentDecisionDiagnosticsDefinition);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
@@ -76,7 +79,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;MINIMAPMOD_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;MINIMAPMOD_EXPORTS;_WINDOWS;_USRDLL;$(MinimapPresentDecisionDiagnosticsDefinition);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
@@ -95,8 +98,10 @@
     <ClInclude Include="src\live_markers.h" />
     <ClInclude Include="src\map_appearance.h" />
     <ClInclude Include="src\client_1_0_profile.h" />
+    <ClInclude Include="src\vulkan_startup.h" />
     <ClInclude Include="src\client_1_0_guards.h" />
     <ClInclude Include="src\aggregate_timing.h" />
+    <ClInclude Include="src\present_decision_trace.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\dllmain.cpp" />

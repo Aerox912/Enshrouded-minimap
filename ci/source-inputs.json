@@ -1,19 +1,39 @@
 {
   "schemaVersion": 1,
-  "version": "0.5.15",
-  "sourceInputPurpose": "Frozen tested Minimap implementation snapshot, normalized to release version metadata in this source tree.",
-  "candidateSourceZipSha256": "b6275d104963ce169a389b168f960b4f5bae9f30d49a22f578292a8954f014d2",
-  "baselineSourceZipSha256": "56a31365f1873d517b091d0d4e8670060c5bbf6684a33aab7880e49fed31bb05",
-  "acceptedNativeSourceTreeSha256": "61e63b07e1005817f968262bce0c583ec21ddf9674745932a85d77445f1ce6dc",
+  "version": "0.5.16-gpu-reporter-test.2",
+  "sourceInputPurpose": "Reviewed reporter runtime plus exact prior Find112 shared-HUD proof restoration and reviewed CI logic; normal test revision2.",
+  "acceptedNativeSourceTreeSha256": "38514a3f2d372aca325bed93fe6edc3bc2e066a19874bce00aac773b57476d1d",
   "nativePaths": [
+    ".gitattributes",
     ".github/workflows/release.yml",
+    ".gitignore",
+    "BUILD-TEST.md",
+    "CREDITS.md",
+    "LICENSE",
+    "README-INSTALL.txt",
+    "README.md",
     "assets/embervale_bright_palette.json",
     "assets/embervale_bright_palette.rgb",
     "assets/embervale_fowr.bin",
+    "assets/embervale_minimap_arrow_glow.frag",
+    "assets/embervale_minimap_arrow_glow.frag.spv",
+    "assets/embervale_minimap_arrow_glow.vert",
+    "assets/embervale_minimap_arrow_glow.vert.spv",
     "assets/embervale_minimap_frame.frag.spv",
     "assets/embervale_minimap_frame.rgba",
     "assets/embervale_minimap_frame.vert.spv",
+    "assets/embervale_minimap_icon_atlas.frag",
+    "assets/embervale_minimap_icon_atlas.frag.spv",
+    "assets/embervale_minimap_icon_atlas.vert",
+    "assets/embervale_minimap_icon_atlas.vert.spv",
     "assets/embervale_minimap_icons.bin",
+    "assets/embervale_minimap_marker_glow.frag",
+    "assets/embervale_minimap_marker_glow.frag.spv",
+    "assets/embervale_minimap_marker_glow.vert",
+    "assets/embervale_minimap_marker_glow.vert.spv",
+    "assets/embervale_minimap_square_frame.frag",
+    "assets/embervale_minimap_square_frame.frag.spv",
+    "assets/embervale_minimap_square_frame.rgba",
     "assets/embervale_minimap_terrain.frag",
     "assets/embervale_minimap_terrain.frag.spv",
     "assets/embervale_minimap_terrain.vert",
@@ -27,31 +47,149 @@
     "assets/mod.json",
     "assets/realmap-provenance.json",
     "assets/src/mod.lua",
+    "baseline-manifest.json",
     "build-release.ps1",
+    "ci/build-arrow-glow-private.ps1",
     "ci/build.ps1",
     "ci/pipeline-tests.ps1",
-    "CREDITS.md",
+    "ci/verify-source.ps1",
+    "docs/CLIENT-1.0.md",
+    "docs/SQUARE-FRAME-PROVENANCE.md",
+    "docs/death-markers.md",
+    "docs/live-fog-weather.md",
+    "docs/live-markers.md",
+    "docs/map-appearance.md",
+    "docs/nexus-description.bbcode",
+    "docs/pr4-feature-parity.md",
+    "docs/release-0.5.7.md",
+    "docs/releases/v0.5.0.md",
+    "docs/releases/v0.5.1.md",
+    "docs/releases/v0.5.15.md",
+    "docs/releases/v0.5.2.md",
+    "docs/releases/v0.5.3.md",
+    "docs/releases/v0.5.4.md",
+    "docs/world-clock.md",
     "include/memory_utils.h",
     "include/shroudtopia.h",
-    "LICENSE",
+    "install.ps1",
     "minimap_mod.vcxproj",
     "minimap_mod.vcxproj.filters",
     "package-release.ps1",
+    "releases/0.5.12/.gitattributes",
+    "releases/0.5.12/BUILD-MANIFEST.json",
+    "releases/0.5.12/BUILD-TEST.md",
+    "releases/0.5.12/BUILD.ps1",
+    "releases/0.5.12/CHANGELOG.md",
+    "releases/0.5.12/GLSLANG-PROVENANCE.md",
+    "releases/0.5.12/README.md",
+    "releases/0.5.12/RELEASE-PROVENANCE.md",
+    "releases/0.5.12/RUNTIME-README.txt",
+    "releases/0.5.12/SOURCE-INPUT-MANIFEST.json",
+    "releases/0.5.12/SOURCE-OVERLAY-MANIFEST.json",
+    "releases/0.5.12/Sparkweave-Minimap-0.5.12-source.zip",
+    "releases/0.5.12/TESTER-MINIMAP-0.5.12-PUBLICATION-ACCEPTANCE.json",
+    "releases/0.5.12/branding/ASSET-PROVENANCE.md",
+    "releases/0.5.12/branding/assets/manifest.json",
+    "releases/0.5.12/branding/assets/sparkweave-logo-dark-v1.png",
+    "releases/0.5.12/branding/assets/sparkweave-mods-banner-dark-v1.png",
+    "releases/0.5.12/branding/esm-logo-dark-v1.png",
+    "releases/0.5.12/branding/provenance.json",
+    "releases/0.5.12/package/README.txt",
+    "releases/0.5.12/package/mods/minimap_mod/CREDITS.md",
+    "releases/0.5.12/package/mods/minimap_mod/LICENSE",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_fowr.bin",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_minimap_frame.frag.spv",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_minimap_frame.rgba",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_minimap_frame.vert.spv",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_minimap_icons.bin",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_player_arrow.rgba",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_pois.bin",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_realmap_1024.rgba",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_realmap_1280.rgba",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_realmap_512.rgba",
+    "releases/0.5.12/package/mods/minimap_mod/embervale_realmap_default_2048.rgba",
+    "releases/0.5.12/package/mods/minimap_mod/mod.json",
+    "releases/0.5.12/package/mods/minimap_mod/realmap-provenance.json",
+    "releases/0.5.12/package/mods/minimap_mod/src/mod.lua",
+    "releases/0.5.12/source/CREDITS.md",
+    "releases/0.5.12/source/LICENSE",
+    "releases/0.5.12/source/assets/embervale_minimap_frame.frag.spv",
+    "releases/0.5.12/source/assets/embervale_minimap_frame.rgba",
+    "releases/0.5.12/source/assets/embervale_minimap_frame.vert.spv",
+    "releases/0.5.12/source/assets/embervale_minimap_icons.bin",
+    "releases/0.5.12/source/assets/embervale_minimap_terrain.frag",
+    "releases/0.5.12/source/assets/embervale_minimap_terrain.frag.spv",
+    "releases/0.5.12/source/assets/embervale_minimap_terrain.vert",
+    "releases/0.5.12/source/assets/embervale_minimap_terrain.vert.spv",
+    "releases/0.5.12/source/assets/embervale_player_arrow.rgba",
+    "releases/0.5.12/source/assets/embervale_realmap_1024.rgba",
+    "releases/0.5.12/source/assets/embervale_realmap_1280.rgba",
+    "releases/0.5.12/source/assets/embervale_realmap_512.rgba",
+    "releases/0.5.12/source/assets/embervale_realmap_default_2048.rgba",
+    "releases/0.5.12/source/include/memory_utils.h",
+    "releases/0.5.12/source/include/shroudtopia.h",
+    "releases/0.5.12/source/minimap_mod.vcxproj",
+    "releases/0.5.12/source/src/client_1_0_guards.h",
+    "releases/0.5.12/source/src/client_1_0_profile.h",
+    "releases/0.5.12/source/src/dllmain.cpp",
+    "releases/0.5.12/source/src/live_markers.h",
+    "releases/0.5.12/source/src/map_appearance.h",
+    "releases/0.5.12/source/src/menu_visibility_1_0.h",
+    "releases/0.5.12/source/src/pch.cpp",
+    "releases/0.5.12/source/src/pch.h",
+    "releases/0.5.12/source/src/renderer_ownership_adapter.h",
+    "releases/0.5.12/source/src/renderer_ownership_api.h",
+    "releases/0.5.12/source/src/terrain_gpu.h",
+    "releases/0.5.12/source/src/toggle_notice.h",
+    "releases/0.5.12/source/tests/README.md",
+    "releases/0.5.12/source/tests/client_1_0_test.cpp",
+    "releases/0.5.12/source/tests/client_1_0_test.vcxproj",
+    "releases/0.5.12/source/tests/control_test.cpp",
+    "releases/0.5.12/source/tests/control_test.vcxproj",
+    "releases/0.5.12/source/tests/frame_failure_test.cpp",
+    "releases/0.5.12/source/tests/frame_failure_test.vcxproj",
+    "releases/0.5.12/source/tests/hdr_test.cpp",
+    "releases/0.5.12/source/tests/hdr_test.vcxproj",
+    "releases/0.5.12/source/tests/map_features_test.cpp",
+    "releases/0.5.12/source/tests/map_features_test.vcxproj",
+    "releases/0.5.12/source/tests/markers_test.cpp",
+    "releases/0.5.12/source/tests/markers_test.vcxproj",
+    "releases/0.5.12/source/tests/menu_visibility_test.cpp",
+    "releases/0.5.12/source/tests/menu_visibility_test.vcxproj",
+    "releases/0.5.12/source/tests/patch_profile_test.cpp",
+    "releases/0.5.12/source/tests/patch_profile_test.vcxproj",
+    "releases/0.5.12/source/tests/perf_verify/perf_verify_gpu_test.cpp",
+    "releases/0.5.12/source/tests/perf_verify/perf_verify_gpu_test.vcxproj",
+    "releases/0.5.12/source/tests/renderer_ownership_adapter_test.cpp",
+    "releases/0.5.12/source/tests/renderer_ownership_adapter_test.vcxproj",
+    "releases/0.5.12/source/tests/renderer_test.cpp",
+    "releases/0.5.12/source/tests/renderer_test.vcxproj",
+    "releases/0.5.12/source/tests/terrain_test.cpp",
+    "releases/0.5.12/source/tests/terrain_test.vcxproj",
+    "releases/0.5.12/source/tests/tracking_test.cpp",
+    "releases/0.5.12/source/tests/tracking_test.vcxproj",
     "src/aggregate_timing.cpp",
     "src/aggregate_timing.h",
+    "src/arrow_glow_policy.h",
+    "src/client_1_0_file_layout.h",
+    "src/client_1_0_file_signatures.h",
     "src/client_1_0_guards.h",
     "src/client_1_0_profile.h",
     "src/dllmain.cpp",
     "src/live_markers.h",
     "src/map_appearance.h",
+    "src/marker_glow_policy.h",
     "src/menu_visibility_1_0.h",
     "src/pch.cpp",
     "src/pch.h",
+    "src/present_decision_trace.h",
     "src/public_creative_compat.h",
     "src/renderer_ownership_adapter.h",
     "src/renderer_ownership_api.h",
     "src/terrain_gpu.h",
     "src/toggle_notice.h",
+    "src/vulkan_startup.h",
+    "tests/README.md",
     "tests/aggregate_timing_calibration.cpp",
     "tests/aggregate_timing_calibration.vcxproj",
     "tests/aggregate_timing_cross_state_race_test.cpp",
@@ -69,6 +207,8 @@
     "tests/aggregate_timing_report_chunk_test.vcxproj",
     "tests/aggregate_timing_state_scope_test.cpp",
     "tests/aggregate_timing_state_scope_test.vcxproj",
+    "tests/arrow_glow_test.cpp",
+    "tests/arrow_glow_test.vcxproj",
     "tests/client_1_0_test.cpp",
     "tests/client_1_0_test.vcxproj",
     "tests/compat_copy_test.cpp",
@@ -81,6 +221,8 @@
     "tests/hdr_test.vcxproj",
     "tests/map_features_test.cpp",
     "tests/map_features_test.vcxproj",
+    "tests/marker_glow_test.cpp",
+    "tests/marker_glow_test.vcxproj",
     "tests/marker_summary_extracted.inc",
     "tests/marker_summary_harness.cpp",
     "tests/marker_summary_test.vcxproj",
@@ -94,18 +236,37 @@
     "tests/perf_verify/perf_verify_gpu_test.vcxproj",
     "tests/prepare_marker_summary_test.py",
     "tests/prepare_public_creative_fixture.py",
+    "tests/present_decision_trace_compileout_test.cpp",
+    "tests/present_decision_trace_test.cpp",
+    "tests/present_decision_trace_test.vcxproj",
+    "tests/profile_file_layout_fallback_test.cpp",
+    "tests/profile_file_layout_fallback_test.vcxproj",
+    "tests/profile_file_layout_fixtures.py",
     "tests/public_creative_compat_test.cpp",
     "tests/public_creative_compat_test.vcxproj",
     "tests/public_creative_timing_red.vcxproj",
-    "tests/README.md",
     "tests/renderer_ownership_adapter_test.cpp",
     "tests/renderer_ownership_adapter_test.vcxproj",
     "tests/renderer_test.cpp",
     "tests/renderer_test.vcxproj",
+    "tests/reporter_renderer_optimization_test.cpp",
+    "tests/reporter_renderer_optimization_test.vcxproj",
+    "tests/run_profile_file_layout_fallback_test.ps1",
+    "tests/square_art_pipeline_test.cpp",
+    "tests/square_art_pipeline_test.vcxproj",
+    "tests/square_map_test.cpp",
+    "tests/square_map_test.vcxproj",
+    "tests/swapchain_startup_test.cpp",
+    "tests/terrain_dispatch_test.cpp",
+    "tests/terrain_dispatch_test.vcxproj",
     "tests/terrain_test.cpp",
     "tests/terrain_test.vcxproj",
     "tests/tracking_test.cpp",
     "tests/tracking_test.vcxproj",
+    "timing-baseline-sanitized.json",
+    "tools/extract-color-palette.py",
+    "tools/generate_client_1_0_guards.py",
+    "tools/preview-map-style.cpp",
     "tools/preview-map-style.vcxproj"
   ],
   "files": [
@@ -116,13 +277,38 @@
     },
     {
       "path": ".github/workflows/release.yml",
-      "lengthBytes": 1698,
-      "sha256": "c8868a3e38062357c6f9458b9b8b5bc5febb0016cf7fb0973225bdd7e4574c3f"
+      "lengthBytes": 2143,
+      "sha256": "a5d711f760802b3d4f4653835108977287d06aedf77f05cb4fc3da8c7b363330"
     },
     {
       "path": ".gitignore",
       "lengthBytes": 219,
       "sha256": "85802e962972deb3ae50f096200cf600bc7f108adeec67733117296d1c6171cb"
+    },
+    {
+      "path": "BUILD-TEST.md",
+      "lengthBytes": 2794,
+      "sha256": "776ade42d11167d07c9d4ca37634b87c437ade7ad12bf01f2d13c4df11d4798d"
+    },
+    {
+      "path": "CREDITS.md",
+      "lengthBytes": 2132,
+      "sha256": "b3f421106fd7f838437265fa19f5bc7b42b1faaa00612fd724079fd89cd021e2"
+    },
+    {
+      "path": "LICENSE",
+      "lengthBytes": 1092,
+      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
+    },
+    {
+      "path": "README-INSTALL.txt",
+      "lengthBytes": 1163,
+      "sha256": "3af91a9634fc8ba670eac9b69e302ae375db23dddc46c295a0c5eecf00675e9f"
+    },
+    {
+      "path": "README.md",
+      "lengthBytes": 18520,
+      "sha256": "0fcaea914368594fd7f78ec9bba527dcdb940c2df5a5af4183278c1b576e2317"
     },
     {
       "path": "assets/embervale_bright_palette.json",
@@ -140,6 +326,26 @@
       "sha256": "d74ac585b641134d7cd2f27b61acfbfc5fa93b53502775f58a0552df71790357"
     },
     {
+      "path": "assets/embervale_minimap_arrow_glow.frag",
+      "lengthBytes": 1970,
+      "sha256": "b838d774091b2709aac3c8ab3f2e7c691b40b4fc7d941da3f1abe23bfbb2e021"
+    },
+    {
+      "path": "assets/embervale_minimap_arrow_glow.frag.spv",
+      "lengthBytes": 5500,
+      "sha256": "5de52b3e77a3a25143c78562187b82c85a325c5911403b8ef120c88a258b4d70"
+    },
+    {
+      "path": "assets/embervale_minimap_arrow_glow.vert",
+      "lengthBytes": 606,
+      "sha256": "ee31785e4bdb9a722a60de5ba22caba9c2cc9eea47f05d5bfd6374acb47a29dd"
+    },
+    {
+      "path": "assets/embervale_minimap_arrow_glow.vert.spv",
+      "lengthBytes": 2160,
+      "sha256": "c33254347d85c286b2f76a228de3c8d1fccb123e40b24cb52b9980618f801913"
+    },
+    {
       "path": "assets/embervale_minimap_frame.frag.spv",
       "lengthBytes": 564,
       "sha256": "89a4c2a07c238c67611761c2ae34103e477c184ac7d4280b9253bd6e091430c7"
@@ -155,19 +361,74 @@
       "sha256": "33780a301f503cf115eceee3a6c9714758caea82eab2ba260adc2660f7fc1f1f"
     },
     {
+      "path": "assets/embervale_minimap_icon_atlas.frag",
+      "lengthBytes": 4607,
+      "sha256": "6d5032b4703a175fdad6bce034c3df022457b8ac122c65002aee99a533ff55bc"
+    },
+    {
+      "path": "assets/embervale_minimap_icon_atlas.frag.spv",
+      "lengthBytes": 12224,
+      "sha256": "b918a285f6d5504fd7892001173febdb1bf2e8208e0a14ec1ef8798f0791fb42"
+    },
+    {
+      "path": "assets/embervale_minimap_icon_atlas.vert",
+      "lengthBytes": 626,
+      "sha256": "1cf0d5968092c72ea50f398fcb9a718fe23adb08a7de761ee6f775cb5e05910a"
+    },
+    {
+      "path": "assets/embervale_minimap_icon_atlas.vert.spv",
+      "lengthBytes": 2228,
+      "sha256": "8bc1ee269be287faaee628215e872404e679172868b3aa554a549e6733da3c86"
+    },
+    {
       "path": "assets/embervale_minimap_icons.bin",
       "lengthBytes": 180612,
       "sha256": "6b9eca6a8974d1baeb3d02377d4167cba5fb0ea50448c6ba6acf74539fbb4692"
     },
     {
+      "path": "assets/embervale_minimap_marker_glow.frag",
+      "lengthBytes": 1711,
+      "sha256": "e010c7c26163ddf48060f1bbb6b35fbe294f9a208aa17d2c784953be5e45e120"
+    },
+    {
+      "path": "assets/embervale_minimap_marker_glow.frag.spv",
+      "lengthBytes": 4404,
+      "sha256": "bc23d874d37e9a50b8eb98454680e3150be3bb1ef01b54baf98683e951388401"
+    },
+    {
+      "path": "assets/embervale_minimap_marker_glow.vert",
+      "lengthBytes": 682,
+      "sha256": "2fda64b887d0652a6bbac178f307c08e97e4c0c9955d81a489a4f177c5484ec6"
+    },
+    {
+      "path": "assets/embervale_minimap_marker_glow.vert.spv",
+      "lengthBytes": 2308,
+      "sha256": "c17468cd9158807fea6692defe0cdef9c32015175827c67aa9a0f803c6723678"
+    },
+    {
+      "path": "assets/embervale_minimap_square_frame.frag",
+      "lengthBytes": 473,
+      "sha256": "8766b4a7b8b4c064c75b9c7f0a3891ed37238303a23e29dc10e8b3281737ce7b"
+    },
+    {
+      "path": "assets/embervale_minimap_square_frame.frag.spv",
+      "lengthBytes": 932,
+      "sha256": "78238640c2c8ab08e4dd77c8e589a9cfffd4661aa72dd70cd9b39f1409cbe850"
+    },
+    {
+      "path": "assets/embervale_minimap_square_frame.rgba",
+      "lengthBytes": 6290064,
+      "sha256": "6d0da23c7910f00de966735bb37bcfac2201cb1e19adf85d2d1cebec81281d76"
+    },
+    {
       "path": "assets/embervale_minimap_terrain.frag",
-      "lengthBytes": 3926,
-      "sha256": "e1c4213d678460c20649d291ae66e06c7e995f12e110ffed39be2460d44e77de"
+      "lengthBytes": 4070,
+      "sha256": "de150b7eaf688da95a24604163270b938ee4a83da79f86379c88d253d0d251ad"
     },
     {
       "path": "assets/embervale_minimap_terrain.frag.spv",
-      "lengthBytes": 14832,
-      "sha256": "14010f74b07a2629469b8fe6adf8ec47b27a80659a4f5414ed4df840b6fae6ec"
+      "lengthBytes": 15532,
+      "sha256": "9edb558c1b7917faaa1ab1412102821e0ff357b5da232d08d3d3640555767d0a"
     },
     {
       "path": "assets/embervale_minimap_terrain.vert",
@@ -211,8 +472,8 @@
     },
     {
       "path": "assets/mod.json",
-      "lengthBytes": 1296,
-      "sha256": "d08d60c92e2be97d8a5ce7a5b96180141a70c6f4cf590108dd76136d9d87d765"
+      "lengthBytes": 1601,
+      "sha256": "c3bd5f1955e2c1cc6e209808773062ecba3f9c613aa4fa3a3d1ff7b4f0eab9f8"
     },
     {
       "path": "assets/realmap-provenance.json",
@@ -235,24 +496,34 @@
       "sha256": "81b917bf2d7d0faa0319be69c9ede5dae93d6eadb1364602ba80cb4e821102c8"
     },
     {
+      "path": "ci/build-arrow-glow-private.ps1",
+      "lengthBytes": 17862,
+      "sha256": "513541a3bb9859f2e61d0a5a833a182b5993b3e38f27362a758327f073751625"
+    },
+    {
       "path": "ci/build.ps1",
-      "lengthBytes": 7088,
-      "sha256": "8de2fe088e6dd4f08ab5bf00c2a0740a11f8cf0990c31072c75257d0c217ab90"
+      "lengthBytes": 7133,
+      "sha256": "d5779819b58fc139dbb76313e5457f4e78ffb6b047a857223591c95c24e20bed"
     },
     {
       "path": "ci/pipeline-tests.ps1",
-      "lengthBytes": 10067,
-      "sha256": "4884f98b974d26eeb80da4840f14347125c1f4b9c34e55448897dd039e8fe348"
+      "lengthBytes": 10245,
+      "sha256": "fa6f78742728ccbeaa48e507b410f9394471f103d4995323529c4e83ddef56f9"
     },
     {
-      "path": "CREDITS.md",
-      "lengthBytes": 2132,
-      "sha256": "b3f421106fd7f838437265fa19f5bc7b42b1faaa00612fd724079fd89cd021e2"
+      "path": "ci/verify-source.ps1",
+      "lengthBytes": 1591,
+      "sha256": "d0d0f0135f79811bd35b2288873910b12b8321b31f53656963f0ec0843ba2e06"
     },
     {
       "path": "docs/CLIENT-1.0.md",
       "lengthBytes": 2352,
       "sha256": "58dc9704db3ac837679f5f6c33013a3e4f1d2622bdc3fe35081832eeb49d7301"
+    },
+    {
+      "path": "docs/SQUARE-FRAME-PROVENANCE.md",
+      "lengthBytes": 1771,
+      "sha256": "4020d409bbab239881a4e3cc1802e3ee4cabaeb7cd8464884ce692db8048b172"
     },
     {
       "path": "docs/death-markers.md",
@@ -340,14 +611,9 @@
       "sha256": "2b0c39f36593482495460bc089ecebac1f5d901438a5b44ed852646c491d5910"
     },
     {
-      "path": "LICENSE",
-      "lengthBytes": 1092,
-      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
-    },
-    {
       "path": "minimap_mod.vcxproj",
-      "lengthBytes": 5864,
-      "sha256": "0727fd29087c77de9c18fc72425fe7dc7da5cf5e6e740d2ea91c2750143ca94e"
+      "lengthBytes": 6295,
+      "sha256": "457a7ea377121516d0dcf46215a02705588ddf3a1b9c8dc6f6b2e7c929889a99"
     },
     {
       "path": "minimap_mod.vcxproj.filters",
@@ -356,18 +622,73 @@
     },
     {
       "path": "package-release.ps1",
-      "lengthBytes": 6104,
-      "sha256": "17750eddc8280fd106e87086e1e924f3e8a07bfacbe35e3528be9c8b6655d615"
+      "lengthBytes": 6198,
+      "sha256": "b5a90e642e9b547f7ae548f879cc8c52a70a575178c9deab0a463aef39c61835"
     },
     {
-      "path": "README-INSTALL.txt",
-      "lengthBytes": 1086,
-      "sha256": "ab8d36a29966d2479a9a429453d56be46a31c9dd45c4ea2e194564a65a140683"
+      "path": "releases/0.5.12/.gitattributes",
+      "lengthBytes": 7,
+      "sha256": "2b4a36b3152af89c2af116c71c13e3d20ee2acb0c8cbc4b468d8e2d388727ae0"
     },
     {
-      "path": "README.md",
-      "lengthBytes": 16961,
-      "sha256": "438b3877e0555f8784c4e5affcdc43780da8df7e891cd78edd6830d68c8cf6f4"
+      "path": "releases/0.5.12/BUILD-MANIFEST.json",
+      "lengthBytes": 950,
+      "sha256": "99477cece8a6bc30156e2002b335105a0fa882d26c159423cdab97cad37b96b4"
+    },
+    {
+      "path": "releases/0.5.12/BUILD-TEST.md",
+      "lengthBytes": 8885,
+      "sha256": "1dcae6b223654c236bec17027a1f56896803d10d5272feed3d5baf432fe23652"
+    },
+    {
+      "path": "releases/0.5.12/BUILD.ps1",
+      "lengthBytes": 58434,
+      "sha256": "2775783438795dd7084d56a5c0d0191b8418e08096489af02d41b07029a37251"
+    },
+    {
+      "path": "releases/0.5.12/CHANGELOG.md",
+      "lengthBytes": 301,
+      "sha256": "4af58905cc7fdc7d714394f1de61355aaad4bc91ab30330147abd4ce0fe6c11c"
+    },
+    {
+      "path": "releases/0.5.12/GLSLANG-PROVENANCE.md",
+      "lengthBytes": 1253,
+      "sha256": "3250dd56ebfc129b1130594a895a9aeee74659e92d3eb4841d3e4a2be8b53293"
+    },
+    {
+      "path": "releases/0.5.12/README.md",
+      "lengthBytes": 1229,
+      "sha256": "7c6a251f087b98e47581784b732fb0e194f7bcdc4b64e7dd6ad513b3f28c7a39"
+    },
+    {
+      "path": "releases/0.5.12/RELEASE-PROVENANCE.md",
+      "lengthBytes": 1116,
+      "sha256": "7f6b34752bcc0f14882cbfd6706de4929a2d052c6529ffd92cf3b6308b1105eb"
+    },
+    {
+      "path": "releases/0.5.12/RUNTIME-README.txt",
+      "lengthBytes": 1409,
+      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
+    },
+    {
+      "path": "releases/0.5.12/SOURCE-INPUT-MANIFEST.json",
+      "lengthBytes": 11463,
+      "sha256": "1a8d7a82ce75ad3c240a26395ee5d97b156b784a147f016754b97ff12c543707"
+    },
+    {
+      "path": "releases/0.5.12/SOURCE-OVERLAY-MANIFEST.json",
+      "lengthBytes": 1605,
+      "sha256": "c31f57cc84649c08b5ec33a7bd5f4771ea2ccf224c5b1f481b1c301cfbce0a3b"
+    },
+    {
+      "path": "releases/0.5.12/Sparkweave-Minimap-0.5.12-source.zip",
+      "lengthBytes": 37866800,
+      "sha256": "6bef1b62ad2eb8058428466755957bd152e79f0b2c2bb8e35b4732db7a6e558b"
+    },
+    {
+      "path": "releases/0.5.12/TESTER-MINIMAP-0.5.12-PUBLICATION-ACCEPTANCE.json",
+      "lengthBytes": 3790,
+      "sha256": "5ee831d70756ab98d85cc3f48a9bee8d4d9eb8b26a1c9a463b756222ae9629b1"
     },
     {
       "path": "releases/0.5.12/branding/ASSET-PROVENANCE.md",
@@ -400,34 +721,19 @@
       "sha256": "1dbb64b12923c44fec5f72d2a90940ff56c9eefadb21fbcbb5968f928d07b012"
     },
     {
-      "path": "releases/0.5.12/BUILD-MANIFEST.json",
-      "lengthBytes": 950,
-      "sha256": "99477cece8a6bc30156e2002b335105a0fa882d26c159423cdab97cad37b96b4"
-    },
-    {
-      "path": "releases/0.5.12/BUILD-TEST.md",
-      "lengthBytes": 8885,
-      "sha256": "1dcae6b223654c236bec17027a1f56896803d10d5272feed3d5baf432fe23652"
-    },
-    {
-      "path": "releases/0.5.12/BUILD.ps1",
-      "lengthBytes": 58434,
-      "sha256": "2775783438795dd7084d56a5c0d0191b8418e08096489af02d41b07029a37251"
-    },
-    {
-      "path": "releases/0.5.12/CHANGELOG.md",
-      "lengthBytes": 301,
-      "sha256": "4af58905cc7fdc7d714394f1de61355aaad4bc91ab30330147abd4ce0fe6c11c"
-    },
-    {
-      "path": "releases/0.5.12/GLSLANG-PROVENANCE.md",
-      "lengthBytes": 1253,
-      "sha256": "3250dd56ebfc129b1130594a895a9aeee74659e92d3eb4841d3e4a2be8b53293"
+      "path": "releases/0.5.12/package/README.txt",
+      "lengthBytes": 1409,
+      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
     },
     {
       "path": "releases/0.5.12/package/mods/minimap_mod/CREDITS.md",
       "lengthBytes": 2295,
       "sha256": "7771f7af6faa9b5e021a0cfe344b199776af8445b98dfa8f3aa41e53f60953f8"
+    },
+    {
+      "path": "releases/0.5.12/package/mods/minimap_mod/LICENSE",
+      "lengthBytes": 1092,
+      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
     },
     {
       "path": "releases/0.5.12/package/mods/minimap_mod/embervale_fowr.bin",
@@ -485,11 +791,6 @@
       "sha256": "0eee1318166a336c30ff83d6a0d572640db58cd4ab41f9fb11875a6321df80be"
     },
     {
-      "path": "releases/0.5.12/package/mods/minimap_mod/LICENSE",
-      "lengthBytes": 1092,
-      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
-    },
-    {
       "path": "releases/0.5.12/package/mods/minimap_mod/mod.json",
       "lengthBytes": 1286,
       "sha256": "b402a91a3f5a36ef2bc7e8b14dbf1d4789f18c593f4787a5f554b0d62642a995"
@@ -505,34 +806,289 @@
       "sha256": "141e48c2a4c877b173ea355f2502ce36d291cf208a0b725290eb4c2fd897008d"
     },
     {
-      "path": "releases/0.5.12/package/README.txt",
-      "lengthBytes": 1409,
-      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
+      "path": "releases/0.5.12/source/CREDITS.md",
+      "lengthBytes": 2295,
+      "sha256": "7771f7af6faa9b5e021a0cfe344b199776af8445b98dfa8f3aa41e53f60953f8"
     },
     {
-      "path": "releases/0.5.12/README.md",
-      "lengthBytes": 1229,
-      "sha256": "7c6a251f087b98e47581784b732fb0e194f7bcdc4b64e7dd6ad513b3f28c7a39"
+      "path": "releases/0.5.12/source/LICENSE",
+      "lengthBytes": 1092,
+      "sha256": "491d66efe4635417224dec65b8df6e08565068b8c204a78a45fa4effab17c987"
     },
     {
-      "path": "releases/0.5.12/RELEASE-PROVENANCE.md",
-      "lengthBytes": 1116,
-      "sha256": "7f6b34752bcc0f14882cbfd6706de4929a2d052c6529ffd92cf3b6308b1105eb"
+      "path": "releases/0.5.12/source/assets/embervale_minimap_frame.frag.spv",
+      "lengthBytes": 564,
+      "sha256": "89a4c2a07c238c67611761c2ae34103e477c184ac7d4280b9253bd6e091430c7"
     },
     {
-      "path": "releases/0.5.12/RUNTIME-README.txt",
-      "lengthBytes": 1409,
-      "sha256": "48180a90daccf5a1a8ee15fb6f175450ebe26e46e0030350ef6dc64d58bcc37c"
+      "path": "releases/0.5.12/source/assets/embervale_minimap_frame.rgba",
+      "lengthBytes": 4194304,
+      "sha256": "d27a18fc58b9ae8f384c6eea014e4af06aa6ca5142b33ddbed2f5bd0b0abe92a"
     },
     {
-      "path": "releases/0.5.12/SOURCE-INPUT-MANIFEST.json",
-      "lengthBytes": 11463,
-      "sha256": "1a8d7a82ce75ad3c240a26395ee5d97b156b784a147f016754b97ff12c543707"
+      "path": "releases/0.5.12/source/assets/embervale_minimap_frame.vert.spv",
+      "lengthBytes": 2968,
+      "sha256": "33780a301f503cf115eceee3a6c9714758caea82eab2ba260adc2660f7fc1f1f"
     },
     {
-      "path": "releases/0.5.12/SOURCE-OVERLAY-MANIFEST.json",
-      "lengthBytes": 1605,
-      "sha256": "c31f57cc84649c08b5ec33a7bd5f4771ea2ccf224c5b1f481b1c301cfbce0a3b"
+      "path": "releases/0.5.12/source/assets/embervale_minimap_icons.bin",
+      "lengthBytes": 180612,
+      "sha256": "6b9eca6a8974d1baeb3d02377d4167cba5fb0ea50448c6ba6acf74539fbb4692"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_minimap_terrain.frag",
+      "lengthBytes": 3926,
+      "sha256": "e1c4213d678460c20649d291ae66e06c7e995f12e110ffed39be2460d44e77de"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_minimap_terrain.frag.spv",
+      "lengthBytes": 14832,
+      "sha256": "14010f74b07a2629469b8fe6adf8ec47b27a80659a4f5414ed4df840b6fae6ec"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_minimap_terrain.vert",
+      "lengthBytes": 406,
+      "sha256": "5075c3da129abad8126dc579c5d01e4998753832685519d9af0febe13fd7e3a6"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_minimap_terrain.vert.spv",
+      "lengthBytes": 1792,
+      "sha256": "e7414f2a4b75dbc2f3af966fd4c0e69e3926970704fd082e0d617deec69f6de1"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_player_arrow.rgba",
+      "lengthBytes": 1048576,
+      "sha256": "5602886a9822b8277cac4b46d1884d7bc5e46e989cec7428f7a21a94483c4a4e"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_realmap_1024.rgba",
+      "lengthBytes": 4194304,
+      "sha256": "37e203453da1913179f593c2e75d2ff0394e754b7403eaef96af9b5257ecca81"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_realmap_1280.rgba",
+      "lengthBytes": 6553600,
+      "sha256": "41224fb4f69751badfd743e2cf8090f73271734b59ec65acebe164f8da8f229b"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_realmap_512.rgba",
+      "lengthBytes": 1048576,
+      "sha256": "743f5efcc9a6441a7da0a6a08118fb499da11d864d4797e3ec397fb5f99ec5ce"
+    },
+    {
+      "path": "releases/0.5.12/source/assets/embervale_realmap_default_2048.rgba",
+      "lengthBytes": 16777216,
+      "sha256": "0eee1318166a336c30ff83d6a0d572640db58cd4ab41f9fb11875a6321df80be"
+    },
+    {
+      "path": "releases/0.5.12/source/include/memory_utils.h",
+      "lengthBytes": 12282,
+      "sha256": "b798b25344417d2b193243f45c44ec5a51bf97a8af63d4a6138697333ffc848b"
+    },
+    {
+      "path": "releases/0.5.12/source/include/shroudtopia.h",
+      "lengthBytes": 3535,
+      "sha256": "30aa69219fcb8dc9a9f3079b8087710c5d7e146abd3bb5b4cbdfe4a102134e00"
+    },
+    {
+      "path": "releases/0.5.12/source/minimap_mod.vcxproj",
+      "lengthBytes": 5791,
+      "sha256": "bb4130c2a194156da13533c8504c88b75f0ef538d19c42843140dcb78f7fdcab"
+    },
+    {
+      "path": "releases/0.5.12/source/src/client_1_0_guards.h",
+      "lengthBytes": 16112,
+      "sha256": "172507cde7caac1fb4c9294d50c285253ed6aecb5757205f0836d702d8acfb41"
+    },
+    {
+      "path": "releases/0.5.12/source/src/client_1_0_profile.h",
+      "lengthBytes": 3982,
+      "sha256": "91a1314329e074bc57a60ed0896e25575a40142c766298fb47d7f71dfe68f989"
+    },
+    {
+      "path": "releases/0.5.12/source/src/dllmain.cpp",
+      "lengthBytes": 504847,
+      "sha256": "b16bd1f808e71679b01fecda51b6e267b0b72a4992f7acf6f7f3886aab5ec85c"
+    },
+    {
+      "path": "releases/0.5.12/source/src/live_markers.h",
+      "lengthBytes": 1687,
+      "sha256": "4cea56dd89d8cfd49c3f5add3488d609a7fd8b731bb8381561ba8392436bdc74"
+    },
+    {
+      "path": "releases/0.5.12/source/src/map_appearance.h",
+      "lengthBytes": 2341,
+      "sha256": "61f43bb9debc241a4ea4082963ccf3d78a05df07e1d5372ac7ac840c3aed5fc4"
+    },
+    {
+      "path": "releases/0.5.12/source/src/menu_visibility_1_0.h",
+      "lengthBytes": 4325,
+      "sha256": "ac7192b4039781c9a9d150601bf97f5e0fa9a046e8f834c0a0543d151a51e2c3"
+    },
+    {
+      "path": "releases/0.5.12/source/src/pch.cpp",
+      "lengthBytes": 18,
+      "sha256": "f1a03d6510be0ca46b84609263a9ca9167fbe905a7c07e40bcc0b07658e1eaff"
+    },
+    {
+      "path": "releases/0.5.12/source/src/pch.h",
+      "lengthBytes": 93,
+      "sha256": "517cd943acb8410b196d2d921e2ec182c636809e2672383e1a8fc9cb2263900b"
+    },
+    {
+      "path": "releases/0.5.12/source/src/renderer_ownership_adapter.h",
+      "lengthBytes": 4748,
+      "sha256": "9b74c5125aa2efb738caa2e069647c9f2f6440a03ff9264a31635cdbab7b9728"
+    },
+    {
+      "path": "releases/0.5.12/source/src/renderer_ownership_api.h",
+      "lengthBytes": 1204,
+      "sha256": "6e6b431fc0f634d7b2dbc4d2fe9f73719c5106bdffb5c128302285d9905b45a7"
+    },
+    {
+      "path": "releases/0.5.12/source/src/terrain_gpu.h",
+      "lengthBytes": 11742,
+      "sha256": "a1656310c9f5790ec67c132059ae9bbd79ff2cf6fa038df0cbf73e2079eaaf02"
+    },
+    {
+      "path": "releases/0.5.12/source/src/toggle_notice.h",
+      "lengthBytes": 736,
+      "sha256": "59092b2520c1c1311e33a5f68b74d7dd3d900bc869161975de6de400913562bc"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/README.md",
+      "lengthBytes": 10222,
+      "sha256": "507c2872844f80fee70bf06ed6efde6388a4492d6138cf028f283c3c6ec1f836"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/client_1_0_test.cpp",
+      "lengthBytes": 16556,
+      "sha256": "49f9a4be374ae490c406cf0ac1f4358b00cd19f67d56db71a926624f50961168"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/client_1_0_test.vcxproj",
+      "lengthBytes": 1988,
+      "sha256": "c17f8c7ca5108d13700ca51340f1089d0343083f4dd5d3b61a182cd05ba07565"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/control_test.cpp",
+      "lengthBytes": 31825,
+      "sha256": "df0f3803bcc7a67cde6872ea04ac6d9ec955fb2a3ca6448d4c660107d7c4f9d9"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/control_test.vcxproj",
+      "lengthBytes": 2057,
+      "sha256": "e35081979ecbb84d70e7bbba3dde27c1870014f6ae1112c48f060ee8deda616e"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/frame_failure_test.cpp",
+      "lengthBytes": 8119,
+      "sha256": "90be635cc75317861bf175e679c20c698d9f7f66a4ccaeb16fe1b3815a122b16"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/frame_failure_test.vcxproj",
+      "lengthBytes": 2069,
+      "sha256": "276a80ac3a91278613f0a72e4ac99f08d090d9e9a15b5da06f58a496c1175ff1"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/hdr_test.cpp",
+      "lengthBytes": 2946,
+      "sha256": "ff1ac58683d868e83dfe095bf9402683e7baf4e8695d3c962ab21586b1e99130"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/hdr_test.vcxproj",
+      "lengthBytes": 2049,
+      "sha256": "450d63cf85b7574a36e3b36f610ce452a1e1231f6a3b174529ee86d128a24be6"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/map_features_test.cpp",
+      "lengthBytes": 93216,
+      "sha256": "877b3eefc72d934d8a8f6a244fd877875df0304e21938be0c32b7862a5f7ab95"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/map_features_test.vcxproj",
+      "lengthBytes": 1990,
+      "sha256": "1903164972699f2a38737ec5a4c393c2b72ffada6d6ad3246d630b29c74f7152"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/markers_test.cpp",
+      "lengthBytes": 19306,
+      "sha256": "906534e04e91e835832937a7b40a1f3fe7600926145adbecf2acb638f8415485"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/markers_test.vcxproj",
+      "lengthBytes": 1980,
+      "sha256": "90634f26b820b5b73d66acc33171b737064aadeb5785d13af886887e03563e07"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/menu_visibility_test.cpp",
+      "lengthBytes": 8197,
+      "sha256": "1b582e5bab6182c1316cb30ad711512c6b4665f95907aa2d329a55ab5f84c505"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/menu_visibility_test.vcxproj",
+      "lengthBytes": 1791,
+      "sha256": "bae14d9e7ae6cd6192e66569c80fc023a59b88b1f88e04abd0b5b803df532343"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/patch_profile_test.cpp",
+      "lengthBytes": 1187,
+      "sha256": "e73397274edcfb76ad57be0c54af16eb7722d31096180fc43a88828e20171715"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/patch_profile_test.vcxproj",
+      "lengthBytes": 1996,
+      "sha256": "cc476dd60b88c905520530393ac3ea33cf9d09c5b410371f91983a23c06e1270"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/perf_verify/perf_verify_gpu_test.cpp",
+      "lengthBytes": 43361,
+      "sha256": "0d33d72438a5a37d6d9317186d04f280a3a9f6286c7de267c18eeab8b9a9648c"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/perf_verify/perf_verify_gpu_test.vcxproj",
+      "lengthBytes": 1964,
+      "sha256": "cadaf31a6ac536e85e1078097dc240bebb79e5d19456c6ea026376f5be321ca5"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/renderer_ownership_adapter_test.cpp",
+      "lengthBytes": 14668,
+      "sha256": "cccaeeacaaac968a362b5b6e192b47f2e06fc70688ba41b54c3b014c209e4b52"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/renderer_ownership_adapter_test.vcxproj",
+      "lengthBytes": 1784,
+      "sha256": "29f3ed8de448415e31050231ba40c50d2e79841987ee6dce746e893bef54bbf1"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/renderer_test.cpp",
+      "lengthBytes": 18123,
+      "sha256": "04077b4bdb4b5896d24f469ac0216038f53a10a5b6672b647cc98c6a3c87a029"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/renderer_test.vcxproj",
+      "lengthBytes": 2056,
+      "sha256": "6bc3216a850be20b2229c680f14fe910fbed9165f09743bd5f1d18ccc99e24b3"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/terrain_test.cpp",
+      "lengthBytes": 24395,
+      "sha256": "1fe6149280e95ecfd52e7b2a16df8abb84722c20ac1b08719ca3fe800b24b055"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/terrain_test.vcxproj",
+      "lengthBytes": 2057,
+      "sha256": "58a0ac671f0643ad0ef6e6c86db450411f8f131541f3aff7d8109aa6332c3ebe"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/tracking_test.cpp",
+      "lengthBytes": 7535,
+      "sha256": "d3ff02c5367b42c9a97e42a0a1f592dd6f3804d519bbd96df67a1c2bc3bb1aed"
+    },
+    {
+      "path": "releases/0.5.12/source/tests/tracking_test.vcxproj",
+      "lengthBytes": 2056,
+      "sha256": "058c916a2c9d9b650a7a62bbbeccc68752b7862c9f0802382c7c50de67e67def"
     },
     {
       "path": "src/aggregate_timing.cpp",
@@ -545,19 +1101,34 @@
       "sha256": "c2ce67f2cdd344d44fe635a6f828cc4eba04366bca6da595753d56b3a4714f7b"
     },
     {
+      "path": "src/arrow_glow_policy.h",
+      "lengthBytes": 2298,
+      "sha256": "cb3f5051e4fa536cf462eef16290f0cdd7a32d8b5716b24f0bcf85e98b88ff3e"
+    },
+    {
+      "path": "src/client_1_0_file_layout.h",
+      "lengthBytes": 12509,
+      "sha256": "b97e4cbd2e44bb432d1767f8eeabebf1646f39f65a53532087b50fea0a9fa0e4"
+    },
+    {
+      "path": "src/client_1_0_file_signatures.h",
+      "lengthBytes": 18909,
+      "sha256": "b00584004721e627544eaaa01937b81bdd49cb1926b33bb71a0a28b76a6827dd"
+    },
+    {
       "path": "src/client_1_0_guards.h",
       "lengthBytes": 31830,
       "sha256": "1997e0d38e9d69b8e391133ec43bdd8609768e47906481f3d31becabf2a2a81f"
     },
     {
       "path": "src/client_1_0_profile.h",
-      "lengthBytes": 7616,
-      "sha256": "2c900c78dbde37f2dc8ce10c141a838267a078bbc271d5ee5ad335c1c83f3a1f"
+      "lengthBytes": 8148,
+      "sha256": "de3c99071d283126bd4060cdfd25437dfb0d535d3c68ba1111eb99582043ed22"
     },
     {
       "path": "src/dllmain.cpp",
-      "lengthBytes": 509771,
-      "sha256": "40d52a4b439c866f1e07b27c63e21031e5743e7778db90b91877f487e9035cbf"
+      "lengthBytes": 620108,
+      "sha256": "94fcc572f3eabbecb23fb5581a6b157d5f62fafee146d1b9e9f1f0a29993bfff"
     },
     {
       "path": "src/live_markers.h",
@@ -570,9 +1141,14 @@
       "sha256": "2864ba336b6b73b244230edb8291f86e3a7131e279c0db5c6f0c889086e5dcc8"
     },
     {
+      "path": "src/marker_glow_policy.h",
+      "lengthBytes": 1503,
+      "sha256": "58ffb8d6b3179181406cdbf79c45d09225ea2c365a2092defdd4b05fa187b259"
+    },
+    {
       "path": "src/menu_visibility_1_0.h",
-      "lengthBytes": 7155,
-      "sha256": "be53a15e94f619775bdda1f538c3a9dd446fa60d9057dcbbdbf9ad641e30d012"
+      "lengthBytes": 7581,
+      "sha256": "150ab87ac4a0e6424570878a7022978837a5e4209cb0b6823462fe2589125dd3"
     },
     {
       "path": "src/pch.cpp",
@@ -585,9 +1161,14 @@
       "sha256": "517cd943acb8410b196d2d921e2ec182c636809e2672383e1a8fc9cb2263900b"
     },
     {
+      "path": "src/present_decision_trace.h",
+      "lengthBytes": 20035,
+      "sha256": "3723dbc74b44138de04491da0a77478404ea179ec9e5dce9d69c7727f48cd1b6"
+    },
+    {
       "path": "src/public_creative_compat.h",
-      "lengthBytes": 24452,
-      "sha256": "88a05e993c3474aac2ea9895626ba1d140c164ec845d26cff9b3a60e09a43461"
+      "lengthBytes": 32831,
+      "sha256": "178e64e51123ad6502c462427069e15567e5199b0aab8d8e5ca342afbcc911e2"
     },
     {
       "path": "src/renderer_ownership_adapter.h",
@@ -601,13 +1182,23 @@
     },
     {
       "path": "src/terrain_gpu.h",
-      "lengthBytes": 11742,
-      "sha256": "a1656310c9f5790ec67c132059ae9bbd79ff2cf6fa038df0cbf73e2079eaaf02"
+      "lengthBytes": 11776,
+      "sha256": "1164b21df4e98826c005fb8659af2178ee3290c486f0ccea5c07402b4184a973"
     },
     {
       "path": "src/toggle_notice.h",
       "lengthBytes": 736,
       "sha256": "59092b2520c1c1311e33a5f68b74d7dd3d900bc869161975de6de400913562bc"
+    },
+    {
+      "path": "src/vulkan_startup.h",
+      "lengthBytes": 10187,
+      "sha256": "e90849ca0b6ebd5da484fd27133c62228427b5be9ecc23f97640318063b45c6e"
+    },
+    {
+      "path": "tests/README.md",
+      "lengthBytes": 9388,
+      "sha256": "01b57ddbfdb38d3e0a7ecde410c222c7525454aeb77c39d87eb1c87ba3b32747"
     },
     {
       "path": "tests/aggregate_timing_calibration.cpp",
@@ -695,6 +1286,16 @@
       "sha256": "2622de30e7e186cbf811676ec7d47f1c897322e48afc4f4ace5d137310c8ec12"
     },
     {
+      "path": "tests/arrow_glow_test.cpp",
+      "lengthBytes": 28689,
+      "sha256": "80f7d44652e80dc033ff223c5aedff22cbf9f366b254287d565f8b0ea369772a"
+    },
+    {
+      "path": "tests/arrow_glow_test.vcxproj",
+      "lengthBytes": 2136,
+      "sha256": "45d3d3f914eb250cbab24537b39340f8b2f1e9da843bd8c9add8977aca587c16"
+    },
+    {
       "path": "tests/client_1_0_test.cpp",
       "lengthBytes": 15751,
       "sha256": "2442b8cda9031480f03a55b93a9be570f0282389429aeefbeac84102fd7e54ff"
@@ -755,6 +1356,16 @@
       "sha256": "4362ea2a41a43e9a5a0fffaf4f5fd9db701fa9b3bcf2dd58e5c305bc79cd18c9"
     },
     {
+      "path": "tests/marker_glow_test.cpp",
+      "lengthBytes": 20236,
+      "sha256": "9eb175239325569c26bad1300239001e64aa039d922b4e92c60691afe2480b7c"
+    },
+    {
+      "path": "tests/marker_glow_test.vcxproj",
+      "lengthBytes": 2069,
+      "sha256": "4f6409104221e02558fb89b718721a513bc5dc59dba41a0afb1b6572cf8e246c"
+    },
+    {
       "path": "tests/marker_summary_extracted.inc",
       "lengthBytes": 5686,
       "sha256": "c33844acb2bc8d3a584dce9f8a188b7d3cadb7a2a54ab1ab0b39c8e9bf6cbf89"
@@ -806,8 +1417,8 @@
     },
     {
       "path": "tests/perf_verify/perf_verify_gpu_test.vcxproj",
-      "lengthBytes": 1964,
-      "sha256": "cadaf31a6ac536e85e1078097dc240bebb79e5d19456c6ea026376f5be321ca5"
+      "lengthBytes": 2100,
+      "sha256": "d94741303c0ebfd86bec145a2729afe617890caefdd32aad39bbc4f13ade920a"
     },
     {
       "path": "tests/prepare_marker_summary_test.py",
@@ -820,24 +1431,49 @@
       "sha256": "2b31837c2fa43dcc1cd6a94bc7c101d3a4d2c71674d5c40afa4d9e6702d1d7da"
     },
     {
+      "path": "tests/present_decision_trace_compileout_test.cpp",
+      "lengthBytes": 612,
+      "sha256": "4ad9d99ccdb7bb637bfbc0fb0bc887e9b4701bb312e10e893e773ed2c600598f"
+    },
+    {
+      "path": "tests/present_decision_trace_test.cpp",
+      "lengthBytes": 28644,
+      "sha256": "699ed16c5acaf59e5ac3b0fafd7cf7cee2b87432d20644e1a5dee188ebd3e9c9"
+    },
+    {
+      "path": "tests/present_decision_trace_test.vcxproj",
+      "lengthBytes": 2332,
+      "sha256": "7f5cf1a18314bd80177b5048bbf016b872ba6a394976cb6cd03636f8a8e79fba"
+    },
+    {
+      "path": "tests/profile_file_layout_fallback_test.cpp",
+      "lengthBytes": 2066,
+      "sha256": "0040af337a2d7f13bc111af294eb773b55cd755129c093c44ccefcf64cfff458"
+    },
+    {
+      "path": "tests/profile_file_layout_fallback_test.vcxproj",
+      "lengthBytes": 2177,
+      "sha256": "53cdce8306c4320213f32c68a2aba53d2c7a0b3fe399f8469bf51952db702e1f"
+    },
+    {
+      "path": "tests/profile_file_layout_fixtures.py",
+      "lengthBytes": 33653,
+      "sha256": "5c84763097208f517c668060470be5e0db18cdb71c64f63083b3ab79fb75f62a"
+    },
+    {
       "path": "tests/public_creative_compat_test.cpp",
-      "lengthBytes": 42730,
-      "sha256": "13674da2a6c0ff99d31c9cde32cb6e7ecfcd53135da363329802dc392a3f4f5f"
+      "lengthBytes": 67802,
+      "sha256": "b7dcb1fe3fb7cbee7ff12d22dcf3df54d99342681884d06529654c224a7f1059"
     },
     {
       "path": "tests/public_creative_compat_test.vcxproj",
-      "lengthBytes": 2180,
-      "sha256": "2bf80dc490cbf834bd849b1afc64a33487190fab43a3463eefc63d76c9d02d67"
+      "lengthBytes": 2264,
+      "sha256": "9cb82fa78e33c2351175e34d1fec55e4e495574ee2681a0f609ca0793b930f49"
     },
     {
       "path": "tests/public_creative_timing_red.vcxproj",
       "lengthBytes": 2138,
       "sha256": "461f5a7ba2339d0e97655c538c48a408c97a3da854701942a57a7d8f2b8522e1"
-    },
-    {
-      "path": "tests/README.md",
-      "lengthBytes": 9388,
-      "sha256": "01b57ddbfdb38d3e0a7ecde410c222c7525454aeb77c39d87eb1c87ba3b32747"
     },
     {
       "path": "tests/renderer_ownership_adapter_test.cpp",
@@ -851,8 +1487,8 @@
     },
     {
       "path": "tests/renderer_test.cpp",
-      "lengthBytes": 14800,
-      "sha256": "e5ef22ac7e12d82ae7f44437a49f9dc7db09787a6a7d986d891bd3d6671bc487"
+      "lengthBytes": 14952,
+      "sha256": "4e149ca804280d102634fa08d1898b29815432cc3bd55170f9f639b23d522cc6"
     },
     {
       "path": "tests/renderer_test.vcxproj",
@@ -860,9 +1496,59 @@
       "sha256": "8437c264e1b5305000df1e58dab21c6e13411f71167631fb4c53618f3ec00439"
     },
     {
+      "path": "tests/reporter_renderer_optimization_test.cpp",
+      "lengthBytes": 56503,
+      "sha256": "53f219c02b0f9facd73cac739d053b96191cf15995c03f455d11b92d310f2753"
+    },
+    {
+      "path": "tests/reporter_renderer_optimization_test.vcxproj",
+      "lengthBytes": 2101,
+      "sha256": "23fe3ffb2f5a0222f52a3e50ec3b5aa1306e6cac606f850b60964e4101bd24f4"
+    },
+    {
+      "path": "tests/run_profile_file_layout_fallback_test.ps1",
+      "lengthBytes": 3708,
+      "sha256": "710e763b60d8fe2db06c08434787471dfc06420122fa798d269793ebf6bd0f24"
+    },
+    {
+      "path": "tests/square_art_pipeline_test.cpp",
+      "lengthBytes": 20736,
+      "sha256": "18497a84cb40c8f7dac88e89dc0bcb210fc89d89f34b083c8584f42f7ef87e2a"
+    },
+    {
+      "path": "tests/square_art_pipeline_test.vcxproj",
+      "lengthBytes": 2057,
+      "sha256": "8a445bd35fb52ada360f734cdd9e626f732a0fac9e52e8dc64af898d6612c54c"
+    },
+    {
+      "path": "tests/square_map_test.cpp",
+      "lengthBytes": 21703,
+      "sha256": "cd1c8c222ded242519af81da3b8f643cb73d7d86de95262b7d787da094078825"
+    },
+    {
+      "path": "tests/square_map_test.vcxproj",
+      "lengthBytes": 2061,
+      "sha256": "7d64d1acd94dc2d3358386bb06b232133b52c403056d188432676afe2f0697a5"
+    },
+    {
+      "path": "tests/swapchain_startup_test.cpp",
+      "lengthBytes": 36760,
+      "sha256": "66c3622dd95ca0b6352e0f0f39c9c5b00de719b9f4c0cd94bf753306b918cd27"
+    },
+    {
+      "path": "tests/terrain_dispatch_test.cpp",
+      "lengthBytes": 14587,
+      "sha256": "f245f2817b60a74b9ab9c0332d2480a48729416a1c84890bd114bb2741dcd014"
+    },
+    {
+      "path": "tests/terrain_dispatch_test.vcxproj",
+      "lengthBytes": 2154,
+      "sha256": "ee710a3b88bb87ff15ff6b7a9b99a5cf8016b16a73de56801dfa9bd00ba8aa78"
+    },
+    {
       "path": "tests/terrain_test.cpp",
-      "lengthBytes": 24395,
-      "sha256": "1fe6149280e95ecfd52e7b2a16df8abb84722c20ac1b08719ca3fe800b24b055"
+      "lengthBytes": 25108,
+      "sha256": "727c0d7b648a5136ce67a14bd5d9c12788765c92dcd761d0e1fe51ad13995d75"
     },
     {
       "path": "tests/terrain_test.vcxproj",
@@ -906,5 +1592,8 @@
     }
   ],
   "fixtures": [],
-  "previousRelease": null
+  "previousRelease": null,
+  "acceptedComponentSourceManifestSha256": "761305da0202477350311b861603b363818de3e167cc5502b428079357c9b126",
+  "restoredFindSourceCommit": "eda7212c3416c9581c698d87f90b35b9bdc81e85",
+  "restoredFindHeaderSha256": "178e64e51123ad6502c462427069e15567e5199b0aab8d8e5ca342afbcc911e2"
 }
