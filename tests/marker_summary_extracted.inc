@@ -44,7 +44,7 @@ constexpr DWORD VISIBLE_MAP_MARKER_PRUNE_MS = 2000;
 
         return left.kind == right.kind || left.markerId == right.markerId;
     }
-std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_visibleMapMarkers; DWORD g_lastVisibleMapMarkerPruneTick=0,g_lastVisibleMapMarkerSummaryTick=0; std::atomic<bool> g_debugLoggingEnabled{false};
+std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_visibleMapMarkers; DWORD g_lastVisibleMapMarkerPruneTick=0,g_lastVisibleMapMarkerSummaryTick=0; std::atomic<bool> g_debugLoggingEnabled{false}; std::uint64_t g_markerPositionRetryEpoch=0;
     void PruneVisibleMapMarkersLocked(DWORD now)
     {
         if (now - g_lastVisibleMapMarkerPruneTick < VISIBLE_MAP_MARKER_PRUNE_MS)
@@ -66,6 +66,14 @@ std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_v
 // MM_BG_BEGIN
         MM_BG_COUNT(PrunedMarkers, bgBeforePrune - g_visibleMapMarkers.size());
 // MM_BG_END
+    }
+    bool SameMarkerResolverSnapshot(const CapturedMapMarkerVisibility& a, const CapturedMapMarkerVisibility& b)
+    {
+        return a.markerAddress == b.markerAddress && a.stateAddress == b.stateAddress &&
+            a.entityAddress == b.entityAddress && a.unknownAddress == b.unknownAddress &&
+            a.markerId == b.markerId && a.markerType == b.markerType && a.kind == b.kind &&
+            a.visibility == b.visibility && a.positionRetryEpoch == b.positionRetryEpoch &&
+            std::memcmp(a.raw, b.raw, sizeof(a.raw)) == 0;
     }
     void PublishVisibleMapMarker(CapturedMapMarkerVisibility&& marker)
     {

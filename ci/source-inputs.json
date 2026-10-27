@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "version": "0.5.16",
   "sourceInputPurpose": "Complete Minimap 0.5.16 release source and packaging inputs; production diagnostics disabled. Includes tested minimap behavior and full required runtime assets.",
-  "acceptedNativeSourceTreeSha256": "c72a7b9737e853194f2cf0bd5945ef0e51e66415ca01a14dda50bce337d2b17c",
+  "acceptedNativeSourceTreeSha256": "f8621fc97fadadd89c0c7a229da7fdf9296642e636a0251d442cba83e0de4eea",
   "nativePaths": [
     ".gitattributes",
     ".github/workflows/release.yml",
@@ -1387,13 +1387,13 @@
     },
     {
       "path": "tests/marker_summary_extracted.inc",
-      "lengthBytes": 6802,
-      "sha256": "1634cdd907b5696c654e4ff934d0d842ee0018958ce2f0795a731deb6000f2df"
+      "lengthBytes": 7400,
+      "sha256": "56224829dd895da9420e2cfb6a2f36bf7e60db3eeeec9246547ca1a429011764"
     },
     {
       "path": "tests/marker_summary_harness.cpp",
-      "lengthBytes": 3656,
-      "sha256": "d9e4327d08cd3cb05940b075ebd8281db30a12f9643e9702ddc749aa9fd3b195"
+      "lengthBytes": 3719,
+      "sha256": "44361a341802c1992d8176029719448d6ce33df41992edec7e59eb8a80b5258f"
     },
     {
       "path": "tests/marker_summary_test.vcxproj",
@@ -1442,8 +1442,8 @@
     },
     {
       "path": "tests/prepare_marker_summary_test.py",
-      "lengthBytes": 1698,
-      "sha256": "08f1d5f8435cc2147798d0cbe4de8e985dccd9aa1d44db84538099fd1422a4dc"
+      "lengthBytes": 1803,
+      "sha256": "689d2b7611b2f99cac672ce6bbe22f22956d37635f9a19cdad96e134a6e9cb2c"
     },
     {
       "path": "tests/prepare_public_creative_fixture.py",

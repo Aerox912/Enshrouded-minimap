@@ -2,12 +2,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
 #include <utility>
+#include "../src/background_diagnostic.h"
 DWORD fakeNow=200000;
 DWORD TestTick(){return fakeNow;}
 #define GetTickCount TestTick
