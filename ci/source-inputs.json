@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "version": "0.5.16",
   "sourceInputPurpose": "Complete Minimap 0.5.16 release source and packaging inputs; production diagnostics disabled. Includes tested minimap behavior and full required runtime assets.",
-  "acceptedNativeSourceTreeSha256": "df30305d8e5f59a715b15a049971f493559304857ab7d255b30a8ba9e11f09b6",
+  "acceptedNativeSourceTreeSha256": "c72a7b9737e853194f2cf0bd5945ef0e51e66415ca01a14dda50bce337d2b17c",
   "nativePaths": [
     ".gitattributes",
     ".github/workflows/release.yml",
@@ -1387,8 +1387,8 @@
     },
     {
       "path": "tests/marker_summary_extracted.inc",
-      "lengthBytes": 5686,
-      "sha256": "c33844acb2bc8d3a584dce9f8a188b7d3cadb7a2a54ab1ab0b39c8e9bf6cbf89"
+      "lengthBytes": 6802,
+      "sha256": "1634cdd907b5696c654e4ff934d0d842ee0018958ce2f0795a731deb6000f2df"
     },
     {
       "path": "tests/marker_summary_harness.cpp",
