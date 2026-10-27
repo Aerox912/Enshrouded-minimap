@@ -1,8 +1,8 @@
 {
   "id": "minimap_mod",
-  "version": "0.5.15",
+  "version": "0.5.16",
   "name": "Shroudweave Minimap",
-  "description": "In-game minimap and world clock for Enshrouded. Compatible with Creative Mode 3.0.0.",
+  "description": "In-game minimap and world clock for Enshrouded.",
   "author": "Aerox912; original minimap by elxokker",
   "authors": [
     "elxokker",
@@ -12,8 +12,9 @@
   "shroudtopia": {
     "default": {
       "active": true,
-      "position": "bottom-right",
+      "position": "top-right",
       "offset": 0,
+      "map_shape": "round",
       "map_orientation": "north-up",
       "toggle_key": "F10",
       "render_camera_fallback": true,
@@ -27,6 +28,13 @@
       "map_style": "default",
       "icon_style": "original",
       "heading_smoothing_ms": 55,
+      "player_arrow_glow": true,
+      "player_arrow_glow_style": "same-colour",
+      "ping_glow": true,
+      "ping_glow_style": "same-colour",
+      "waypoint_glow": true,
+      "waypoint_glow_style": "same-colour",
+      "death_marker_glow": true,
       "map_sample_step": 2,
       "max_icons": 64,
       "show_clock": true,

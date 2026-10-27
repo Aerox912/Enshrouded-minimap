@@ -1,20 +1,14 @@
-Shroudweave Minimap 0.5.15
+SHROUDWEAVE MINIMAP 0.5.16
 
-Close Enshrouded. Install the matching Shroudtopia loader/proxy from Optional Files.
-Back up existing shroudtopia.dll and winmm.dll, then extract both beside enshrouded.exe.
-Keep shroudtopia.json and other mods. Resolve any other winmm.dll owner before replacing it.
-Extract the Minimap ZIP into the game folder: mods/minimap_mod/minimap_mod.dll.
-Keep only one minimap_mod folder.
+1. Close Enshrouded. Back up mods/minimap_mod outside the mods folder and back up shroudtopia.json.
+2. Install the maintained Shroudtopia Shroudweave loader from https://www.nexusmods.com/enshrouded/mods/216 following its instructions. Keep an existing working loader setup and configuration when updating only Minimap.
+3. Extract this complete Minimap package into the game folder. The DLL, images and shaders belong in mods/minimap_mod. Overwrite matching Minimap files when updating.
+4. Keep shroudtopia.json and other mods/settings. Change options inside its existing mods.minimap_mod section; do not create duplicate sections.
+5. Launch normally. F10 toggles the map, + and - zoom, F9/F11 resize. The numpad equivalents are also enabled by default.
 
-In shroudtopia.json, merge into the existing mods object:
-"minimap_mod": { "active": true, "map_style": "default", "position": "bottom-right", "offset": 0, "map_orientation": "north-up" }
-Use map_style "original" for original colors. Do not overwrite other mod settings.
+Defaults: round, north-up, HD map, top-right, offset 0, sample step 2, glow on. Existing configured preferences remain in effect.
+Square is optional. It may need a small offset to avoid the Journal or other HUD elements: -16 worked in one tested setup, but adjust for your display. Positive offset moves up, negative moves down.
 
-Compatible with Creative Mode 3.0.0.
+See README.md for the complete default configuration and release notes. Performance changes may help; an FPS gain is not guaranteed. For problems, send the full shroudtopia.log and a screenshot.
 
-The release reduces compatibility-check overhead and skips marker-summary work
-when it is not needed. It retains the existing map assets and configuration.
-
-F10: hide/show. Plus/minus: zoom. F9/F11: smaller/larger.
-See README.md for settings, credits and tested scope.
-To roll back: close the game and restore the backed-up mod and loader files.
+Original Minimap by elxokker; maintained by Aerox912. Shroudtopia by s0T7x / Miguel Oppermann. Original MIT license and credits are included. Game artwork belongs to Keen Games.

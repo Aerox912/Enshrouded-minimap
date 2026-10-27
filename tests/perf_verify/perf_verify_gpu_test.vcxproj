@@ -29,6 +29,11 @@
     </ClCompile>
     <Link><SubSystem>Console</SubSystem></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="perf_verify_gpu_test.cpp" /></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="perf_verify_gpu_test.cpp" />
+    <ClCompile Include="..\..\src\aggregate_timing.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

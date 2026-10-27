@@ -45,7 +45,8 @@ void main() {
                     cellAt(floor(gl_FragCoord.y),p.origin.y,p.geometry.y,2*radius+1,step));
     vec2 local = cell - radius + floor(min(vec2(step),vec2(2*radius+1)-cell)/2);
     float distanceSq = dot(local,local);
-    if (distanceSq > radius*radius) discard;
+    float edgeDistance = max(abs(local.x),abs(local.y));
+    if (p.geometry.w > .5 ? edgeDistance > radius : distanceSq > radius*radius) discard;
     precise vec2 north = vec2(p.orientation.x*local.x-p.orientation.y*local.y,
                       p.orientation.y*local.x+p.orientation.x*local.y);
     precise vec2 world = p.view.xy + vec2(north.x,-north.y)*p.view.z;
@@ -54,7 +55,7 @@ void main() {
     c = clamp((c-.42)*vec3(1.20,1.22,1.16)+.42,vec3(0),vec3(1));
     precise float strength = p.orientation.w/100, lift = strength*.62, style = min(1,strength/.55);
     c = (c+(1-c)*lift)*vec3(1,1-.035*style,1-.115*style);
-    precise float distance = sqrt(distanceSq)/radius;
+    precise float distance = p.geometry.w > .5 ? edgeDistance/radius : sqrt(distanceSq)/radius;
     precise float vignette = (1.02-.01*style)-(.34-.24*style)*distance*distance;
     c = clamp(c*vignette+.004,vec3(0),vec3(1));
     if (p.mode.x != 0) {

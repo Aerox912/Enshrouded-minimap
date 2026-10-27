@@ -1,4 +1,4 @@
-name: Build Minimap 0.5.15
+name: Build Shroudweave Minimap
 
 on:
   push:
@@ -32,9 +32,16 @@ jobs:
       - name: Build, run focused tests, and package
         shell: pwsh
         run: ./ci/build.ps1 -OutputDirectory ./dist
+      - name: Read verified package version
+        id: package
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath ./dist/BUILD-RECEIPT.json -Raw | ConvertFrom-Json).version
+          if ($version -cnotin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-perf-glow-test.1')) { throw 'Unexpected package version' }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - uses: actions/upload-artifact@v4
         with:
-          name: shroudweave-minimap-v0.5.15-${{ github.sha }}
+          name: shroudweave-minimap-v${{ steps.package.outputs.version }}-${{ github.sha }}
           path: |
             dist/*.zip
             dist/*.sha256

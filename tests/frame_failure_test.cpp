@@ -63,6 +63,7 @@ namespace {
             *p=mapped.data();return VK_SUCCESS;
         };
         f.unmapMemory=[](void*,void*) {};
+        f.flushMappedMemoryRanges=[](void*,std::uint32_t,const VkMappedMemoryRange*) -> std::int32_t {return VK_SUCCESS;};
         f.bindBufferMemory=Bind;f.bindImageMemory=Bind;
         f.createImageView=[](void*,const VkImageViewCreateInfo*,const void*,void** h)->std::int32_t {return Create("image-view",h);};
         f.destroyImageView=Destroy;
