@@ -6,11 +6,22 @@
 #include <fstream>
 #include <filesystem>
 #include <vector>
+#include "client_1_0_file_layout.h"
 #pragma comment(lib, "bcrypt.lib")
 
 namespace MinimapClient10
 {
     enum class Profile { Unsupported, Build25988036, Build26082781 };
+
+    // Verified only in Build26082781. Never map this callsite by a build delta.
+    constexpr std::uintptr_t VulkanStartupCallsiteRva(Profile profile)
+    {
+        return profile == Profile::Build26082781 ? 0xFBF573 : 0;
+    }
+    constexpr std::uintptr_t VulkanStartupInitializerRva(Profile profile)
+    {
+        return profile == Profile::Build26082781 ? 0xFE0BE0 : 0;
+    }
 
     // Steam client build 25988036. Metadata-only variants retain identical code and data.
     constexpr const char* Sha256 = "82e5020a8736348cd0374f004b2f5e5ef456b5bd27aa5420df34c7dd241cfeeb";
@@ -153,6 +164,8 @@ namespace MinimapClient10
             return Profile::Build25988036;
         if (MatchesExactFile(path, CurrentSha256) || MatchesMetadataVariant(path, 35338312,
             "42a9c848e662094b0177075db851c611af816fd9cc8d9b3ad4168f109bd28c62"))
+            return Profile::Build26082781;
+        if (FileLayout::MatchesCurrentProfileLayout(path))
             return Profile::Build26082781;
         return Profile::Unsupported;
     }

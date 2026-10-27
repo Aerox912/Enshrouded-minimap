@@ -102,7 +102,7 @@ namespace
 
     bool Submit(std::uint32_t index = 0)
     {
-        return SubmitVulkanMinimapFrameLocked(reinterpret_cast<void*>(0x2), present, index, adjusted, &adjustedSemaphore);
+        return SubmitVulkanMinimapFrameLocked(reinterpret_cast<void*>(0x2), present, index, adjusted, &adjustedSemaphore, true);
     }
 
     void CheckVulkanFallbackScan()
@@ -169,6 +169,9 @@ int main()
     snapshot.format = g_renderer.format = 37;
     snapshot.images = g_renderer.images = { 0x910, 0x911 };
     snapshot.generation = g_renderer.swapchainGeneration = 1;
+    snapshot.createDevice = snapshot.device;
+    snapshot.createHandle = snapshot.handle;
+    snapshot.createGeneration = snapshot.generation;
     Check(BuildVulkanMinimapRendererLocked(snapshot), "unchanged swapchain reuses the renderer");
     snapshot.images[0] = 0x912;
     Check(!RendererMatchesSwapchain(g_renderer, snapshot, 1920, 1080, 37), "changed image handles invalidate same-handle renderer");

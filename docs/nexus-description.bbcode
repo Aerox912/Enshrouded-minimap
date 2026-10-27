@@ -1,36 +1,95 @@
-[size=5][color=#d6b979][b]Find your way through Embervale[/b][/color][/size]
-A rotating minimap with a weather clock, live fog of war and multiplayer markers. This mod builds on [url=https://www.nexusmods.com/enshrouded/mods/97]elxokker's original minimap[/url], maintained by Aerox912. Install it on your PC; no server mod is needed.
+[b]Shroudweave Minimap 0.5.16[/b]
 
-[size=4][color=#7fc7cc][b]New in 0.5.7[/b][/color][/size]
-[b]F9 makes the minimap smaller. F11 makes it larger.[/b] Sizes run from 50% to 200% in 25% steps, including 75%. The frame, markers and clock resize together while terrain zoom stays unchanged. F10 also shows a brief On/Off notice.
+A client-side minimap with the HD map, live fog of war, player and location markers, and a weather clock. No server mod needed. Round north-up stays the default, and Creative Mode 3.0.0 guards remain in place.
 
-[size=4][color=#d6b979][b]On the map[/b][/color][/size]
+[b]What's new in 0.5.16[/b]
 [list]
-[*]Original location icons, smooth rotation and adjustable terrain lighting.
-[*]A 24-hour clock with local Clear, Rain, Snow and Blizzard conditions.
-[*]Fog follows your character's exploration. Players, pings, waypoints, custom pins, placed Flame Altars and tombstones stay visible through it.
-[*]Independent switches for the clock, weather, fog and marker groups.
+[*]Optional square map with a matching gold frame and corrected square terrain rendering.
+[*]Glow for players, pings and waypoints, with same-colour or contrasting styles. All glow is on by default. Death markers get a dark backplate and red rim.
+[*]Top-right is the default for new configurations. Existing configured positions are kept.
+[*]Renderer startup and frame-upload fixes to address missing rendering/borders.
+[*]GPU terrain and icon drawing, cached clock/weather geometry, and less repeated background work.
 [/list]
-[size=4][color=#7fc7cc][b]Controls & size[/b][/color][/size]
-[b]F10 / numpad *[/b] show or hide · [b]+ / -[/b] terrain zoom · [b]F9 / F11[/b] smaller / larger.
+The performance changes may help. Hopefully they improve your FPS, but a gain is not guaranteed. Not every reported border issue is confirmed resolved either.
 
-Edit [b]mods.minimap_mod[/b] in [b]shroudtopia.json[/b]:
-[list]
-[*][b]scale_percent[/b]: 50, 75, 100 (default), 125, 150, 175 or 200. Hotkey resizing lasts for the session; this sets your startup size.
-[*][b]size_decrease_key / size_increase_key[/b]: F9 / F11 by default. Use a key name, virtual-key code or "none" to disable.
-[*][b]position[/b]: bottom-right, top-right or middle-right.
-[*][b]show_clock / show_weather / show_fog_of_war[/b]: true or false. Configuration changes apply live.
-[/list]
-[size=4][color=#d6b979][b]Install or update[/b][/color][/size]
-Requires Windows x64, [url=https://www.nexusmods.com/enshrouded/mods/43]Shroudtopia 0.1.1[/url] and the [url=https://aka.ms/vc14/vc_redist.x64.exe]Visual C++ x64 runtime[/url]. EML alone cannot load this mod.
-[list=1]
-[*]Close Enshrouded and install the requirements.
-[*]Back up your existing [b]mods/minimap_mod[/b] folder outside the mods directory.
-[*]Extract the ZIP into the game folder. Check for [b]Enshrouded/mods/minimap_mod/minimap_mod.dll[/b].
-[/list]
-Keep one minimap folder and your existing shroudtopia.json. To uninstall, close the game and remove mods/minimap_mod.
+[b]Installation[/b]
+1. Close Enshrouded. Back up mods/minimap_mod outside the mods folder and back up shroudtopia.json.
+2. Install [url=https://www.nexusmods.com/enshrouded/mods/216]Shroudtopia Shroudweave[/url] using its instructions. The loader has a separate listing because several mods use it, so everyone can use one shared download and update page.
+3. Extract the complete Minimap 0.5.16 ZIP into the game folder, overwriting matching Minimap files. The DLL, images and shaders belong in mods/minimap_mod. This full release includes the required assets.
+4. Keep your existing shroudtopia.json and other mods/settings. Edit the existing mods.minimap_mod section when changing options; don't add a duplicate section.
 
-[size=4][color=#7fc7cc][b]Compatibility & credits[/b][/color][/size]
-Targets Steam client data revision 1076226. Automated checks cover resizing, input, configuration and rendering; gameplay testing of the new sizes is pending. Snow, blizzard and dungeon tombstones still need gameplay checks. [url=https://github.com/Aerox912/Enshrouded-minimap/issues]Report an issue[/url] with your game build and what happened.
+[b]Options[/b]
+Round north-up, the HD map, sample step 2, top-right and offset 0 are the defaults. Existing configured values remain in effect.
 
-Original minimap and assets by [b]elxokker (xoker)[/b]. Thanks to [b]s0T7x / Miguel Oppermann[/b] for Shroudtopia and [b]o-shabashov[/b] for marker findings. Enshrouded and its artwork belong to [b]Keen Games[/b]. [url=https://github.com/Aerox912/Enshrouded-minimap]Source, MIT license and full credits[/url].
+map_shape: round or square. Square stays north-up; round also supports map_orientation: rotating.
+position: top-right, middle-right, bottom-right, top-left, middle-left or bottom-left.
+offset: positive moves up, negative moves down, relative to your chosen position. Scales with resolution and is clamped to the screen.
+
+Square may need a small offset to avoid the Journal or other HUD elements. offset: -16 moved it down enough in one tested setup. Adjust it for your display; the default stays 0.
+
+map_style: default uses the HD map, original uses the original texture.
+icon_style: original keeps plain markers, world-map adds gold frames and brighter backplates. You can mix these independently. Check the Images tab for an impression of these settings.
+
+player_arrow_glow, ping_glow, waypoint_glow and death_marker_glow can each be turned off. The first three have a matching _style setting: same-colour is the default, contrasting is the alternative. Death markers use the dark backplate with red rim.
+
+[b]Controls[/b]
+F10 or numpad *: show/hide. + and -: zoom. F9/F11: smaller/larger.
+Keys are configurable below. Readable names such as F8, Insert, Delete, numpadplus and letters work, along with hexadecimal values. Use none to disable a binding.
+
+[b]Default settings[/b]
+Merge this section into your existing shroudtopia.json, beside Enshrouded.exe. Keep other mods' settings. If mods.minimap_mod already exists, edit it rather than adding it again.
+[code]
+{
+  "mods": {
+    "minimap_mod": {
+      "active": true,
+      "position": "top-right",
+      "offset": 0,
+      "map_shape": "round",
+      "map_orientation": "north-up",
+      "toggle_key": "F10",
+      "render_camera_fallback": true,
+      "debug_logging": false,
+      "show_other_players": true,
+      "show_pings": true,
+      "show_waypoints": true,
+      "show_world_markers": true,
+      "show_death_markers": true,
+      "map_light": 55,
+      "map_style": "default",
+      "icon_style": "original",
+      "heading_smoothing_ms": 55,
+      "player_arrow_glow": true,
+      "player_arrow_glow_style": "same-colour",
+      "ping_glow": true,
+      "ping_glow_style": "same-colour",
+      "waypoint_glow": true,
+      "waypoint_glow_style": "same-colour",
+      "death_marker_glow": true,
+      "map_sample_step": 2,
+      "max_icons": 64,
+      "show_clock": true,
+      "show_weather": true,
+      "show_fog_of_war": true,
+      "toggle_key_secondary": "0x6A",
+      "zoom_in_key": "0xBB",
+      "zoom_in_key_secondary": "0x6B",
+      "zoom_out_key": "0xBD",
+      "zoom_out_key_secondary": "0x6D",
+      "scale_percent": 100,
+      "size_decrease_key": "F9",
+      "size_increase_key": "F11"
+    }
+  }
+}
+[/code]
+
+[b]Still being worked on[/b]
+Native map POI filters are not yet mirrored completely. Current-location/region labels and Hollow Halls interior maps are not included. Linux/Proton issues remain under investigation.
+
+For missing maps or frames, please send the full shroudtopia.log from startup and a screenshot. For FPS reports, compare visible and hidden in the same spot after the toggle banner clears.
+
+[b]Credits and source[/b]
+Original Minimap by [url=https://github.com/elxokker/Enshrouded-minimap]elxokker (xoker)[/url], maintained by Aerox912. Shroudtopia loader/API by s0T7x / Miguel Oppermann. Thanks to o-shabashov for marker-layout findings and display ideas, and everyone helping test. Enshrouded and its game artwork belong to Keen Games.
+
+This is an independent maintained fork under MIT. Original credits, copyright and license are preserved. [url=https://github.com/Aerox912/Enshrouded-minimap]Source and README[/url] | [url=https://github.com/Aerox912/Enshrouded-minimap/blob/main/LICENSE]License[/url]

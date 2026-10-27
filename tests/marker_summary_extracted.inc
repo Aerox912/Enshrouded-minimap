@@ -8,6 +8,7 @@ constexpr DWORD VISIBLE_MAP_MARKER_PRUNE_MS = 2000;
         uintptr_t markerAddress = 0;
         uintptr_t stateAddress = 0;
         uintptr_t entityAddress = 0;
+        uintptr_t unknownAddress = 0;
         std::int64_t x = 0;
         std::int64_t y = 0;
         std::int64_t z = 0;
@@ -17,6 +18,9 @@ constexpr DWORD VISIBLE_MAP_MARKER_PRUNE_MS = 2000;
         std::uint8_t visibility = 0;
         DWORD lastUpdateTick = 0;
         bool hasWorldPosition = false;
+        DWORD positionFailureTick = 0;
+        bool positionRetryPending = false;
+        std::uint64_t positionRetryEpoch = 0;
     };
     float FixedToWorld(std::int64_t value)
     {
@@ -40,19 +44,36 @@ constexpr DWORD VISIBLE_MAP_MARKER_PRUNE_MS = 2000;
 
         return left.kind == right.kind || left.markerId == right.markerId;
     }
-std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_visibleMapMarkers; DWORD g_lastVisibleMapMarkerPruneTick=0,g_lastVisibleMapMarkerSummaryTick=0; std::atomic<bool> g_debugLoggingEnabled{false};
+std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_visibleMapMarkers; DWORD g_lastVisibleMapMarkerPruneTick=0,g_lastVisibleMapMarkerSummaryTick=0; std::atomic<bool> g_debugLoggingEnabled{false}; std::uint64_t g_markerPositionRetryEpoch=0;
     void PruneVisibleMapMarkersLocked(DWORD now)
     {
         if (now - g_lastVisibleMapMarkerPruneTick < VISIBLE_MAP_MARKER_PRUNE_MS)
             return;
 
         g_lastVisibleMapMarkerPruneTick = now;
+// MM_BG_BEGIN
+        MM_BG_SCOPE(CachePrune, 1);
+#if defined(ESM_BACKGROUND_DIAGNOSTICS)
+        const auto bgBeforePrune = g_visibleMapMarkers.size();
+#endif
+// MM_BG_END
         g_visibleMapMarkers.erase(
             std::remove_if(g_visibleMapMarkers.begin(), g_visibleMapMarkers.end(), [now](const CapturedMapMarkerVisibility& marker)
             {
                 return now - marker.lastUpdateTick > VISIBLE_MAP_MARKER_STALE_MS;
             }),
             g_visibleMapMarkers.end());
+// MM_BG_BEGIN
+        MM_BG_COUNT(PrunedMarkers, bgBeforePrune - g_visibleMapMarkers.size());
+// MM_BG_END
+    }
+    bool SameMarkerResolverSnapshot(const CapturedMapMarkerVisibility& a, const CapturedMapMarkerVisibility& b)
+    {
+        return a.markerAddress == b.markerAddress && a.stateAddress == b.stateAddress &&
+            a.entityAddress == b.entityAddress && a.unknownAddress == b.unknownAddress &&
+            a.markerId == b.markerId && a.markerType == b.markerType && a.kind == b.kind &&
+            a.visibility == b.visibility && a.positionRetryEpoch == b.positionRetryEpoch &&
+            std::memcmp(a.raw, b.raw, sizeof(a.raw)) == 0;
     }
     void PublishVisibleMapMarker(CapturedMapMarkerVisibility&& marker)
     {
@@ -63,9 +84,17 @@ std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_v
         std::size_t positionedCount = 0;
         bool changed = false;
         {
+#if defined(MINIMAP_TEST_PERF_FILTERS)
+            ++::g_testMapMarkerCacheLockCount;
+#endif
             std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            if (marker.positionRetryEpoch != g_markerPositionRetryEpoch)
+                marker.positionRetryPending = false;
             PruneVisibleMapMarkersLocked(now);
 
+#if defined(MINIMAP_TEST_PERF_FILTERS)
+            ++::g_testMapMarkerIdentitySearchCount;
+#endif
             auto existing = std::find_if(g_visibleMapMarkers.begin(), g_visibleMapMarkers.end(), [&marker](const CapturedMapMarkerVisibility& current)
             {
                 return SameVisibleMapMarkerIdentity(current, marker);
@@ -74,6 +103,9 @@ std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_v
             if (existing != g_visibleMapMarkers.end())
             {
                 const bool hadPosition = existing->hasWorldPosition;
+                // A late failed scan must not throttle a changed concurrent capture.
+                if (hadPosition || !SameMarkerResolverSnapshot(*existing, marker))
+                    marker.positionRetryPending = false;
                 if (!marker.hasWorldPosition && hadPosition)
                 {
                     marker.x = existing->x;
@@ -95,6 +127,9 @@ std::mutex g_visibleMapMarkerMutex; std::vector<CapturedMapMarkerVisibility> g_v
                 changed = true;
             }
 
+// MM_BG_BEGIN
+            MM_BG_COUNT(CachePopulation, g_visibleMapMarkers.size());
+// MM_BG_END
             // Counts are used only by the throttled debug summary. Keep cache
             // updates/pruning above; avoid a second full scan for ordinary captures.
             if (!changed || now - g_lastVisibleMapMarkerSummaryTick < 5000 ||

@@ -1,6 +1,681 @@
 // Production readers and drawing commands, without hooking or modifying a game.
+unsigned long long g_testMinimapConfigFileReadCount = 0;
+unsigned long long g_testMinimapConfigBlockLookupCount = 0;
+unsigned long long g_testMapMarkerCacheLockCount = 0;
+unsigned long long g_testMapMarkerIdentitySearchCount = 0;
+unsigned long long g_testMapMarkerResolverCallCount = 0;
+void (*g_testBeforeMapMarkerResolver)() = nullptr;
+#define MINIMAP_TEST_PERF_FILTERS 1
 #include "../src/dllmain.cpp"
+#include <atomic>
+#include <cstdlib>
 #include <iostream>
+#include <new>
+#include <stdexcept>
+#include <thread>
+
+namespace
+{
+    int g_perfFilterTestFailures = 0;
+
+    void CheckPerfFilter(bool condition, const char* message)
+    {
+        std::cout << (condition ? "PASS: " : "FAIL: ") << message << '\n';
+        if (!condition)
+            ++g_perfFilterTestFailures;
+    }
+
+    void ResetConfigSnapshotTestCounters()
+    {
+        ::g_testMinimapConfigFileReadCount = 0;
+        ::g_testMinimapConfigBlockLookupCount = 0;
+    }
+
+    bool WriteConfigSnapshotFixture(const std::string& path, const std::string& contents)
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        if (!output)
+            return false;
+        output << contents;
+        return output.good();
+    }
+
+    bool ReplaceConfigSnapshotFixture(const std::string& path, const std::string& contents)
+    {
+        const std::string replacementPath = path + ".replacement";
+        if (!WriteConfigSnapshotFixture(replacementPath, contents))
+            return false;
+        return MoveFileExA(replacementPath.c_str(), path.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    }
+
+    int CheckMinimapConfigRefreshSnapshot(const char* configPathArgument)
+    {
+        const std::string configPath = configPathArgument != nullptr ? configPathArgument : "";
+        if (configPath.empty())
+        {
+            std::cerr << "FAIL: config fixture path was not supplied\n";
+            return 1;
+        }
+
+        const std::string savedGlobalConfigPath = g_shroudtopiaConfigPath;
+        const auto savedModContext = g_modContext;
+        g_shroudtopiaConfigPath.clear();
+        ModContext config{};
+        g_modContext = &config;
+        config.shroudtopia.config_file = configPath;
+        std::vector<std::string> apiKeys;
+        std::vector<std::string> logLines;
+        config.config.GetString = [&apiKeys](const char*, const char* key, std::string fallback)
+        {
+            apiKeys.emplace_back(key != nullptr ? key : "");
+            if (key == nullptr)
+                return fallback;
+            if (std::strcmp(key, "position") == 0)
+                return std::string("top-left");
+            if (std::strcmp(key, "toggle_key") == 0)
+                return std::string("F10");
+            if (std::strcmp(key, "render_camera_fallback") == 0)
+                return std::string("false");
+            if (std::strcmp(key, "map_sample_step") == 0)
+                return std::string("1");
+            if (std::strcmp(key, "max_icons") == 0)
+                return std::string("40");
+            if (std::strcmp(key, "show_world_markers") == 0)
+                return std::string("false");
+            return fallback;
+        };
+        config.Log = [&logLines](const char* message)
+        {
+            if (message != nullptr)
+                logLines.emplace_back(message);
+        };
+
+        g_perfFilterTestFailures = 0;
+        const bool initialFixtureWritten = WriteConfigSnapshotFixture(configPath,
+            "{\"minimap_mod\":{\"position\":\"bottom-left\",\"toggle_key\":\"F9\","
+            "\"map_sample_step\":\"3\",\"max_icons\":\"41\",\"debug_logging\":\"false\"}}");
+        CheckPerfFilter(initialFixtureWritten, "write the config snapshot fixture");
+        if (initialFixtureWritten)
+        {
+            ResetConfigSnapshotTestCounters();
+            apiKeys.clear();
+            logLines.clear();
+            RefreshMinimapConfig(&config, true);
+            std::cout << "CONFIG_REFRESH_READS=" << ::g_testMinimapConfigFileReadCount
+                << " CONFIG_BLOCK_LOOKUPS=" << ::g_testMinimapConfigBlockLookupCount << '\n';
+            CheckPerfFilter(::g_testMinimapConfigFileReadCount == 1,
+                "one refresh reads the config file once");
+            CheckPerfFilter(::g_testMinimapConfigBlockLookupCount == 1,
+                "one refresh locates the minimap_mod object once");
+            CheckPerfFilter(MinimapPlacementName(static_cast<MinimapPlacement>(g_minimapPlacement.load())) == std::string("bottom-left") &&
+                g_minimapToggleKey.load() == VK_F9 && g_minimapMapSampleStep.load() == 3 &&
+                g_minimapMaxDrawnPoints.load() == 41,
+                "file values win over conflicting API values");
+            CheckPerfFilter(!g_renderCameraFallbackEnabled.load() && !g_showWorldMarkers.load() &&
+                std::count(apiKeys.begin(), apiKeys.end(), "position") == 0 &&
+                std::count(apiKeys.begin(), apiKeys.end(), "render_camera_fallback") == 1,
+                "an absent file key falls back independently to the API");
+            const std::string expectedPositionSource = " | position_source=" + configPath;
+            const std::string expectedToggleSource = " | toggle_source=" + configPath;
+            CheckPerfFilter(!logLines.empty() && logLines.back().find(expectedPositionSource) != std::string::npos &&
+                logLines.back().find(expectedToggleSource) != std::string::npos &&
+                logLines.back().find(" | render_camera_fallback_source=shroudtopia_config_api") != std::string::npos,
+                "file and API source labels remain unchanged");
+
+            CheckPerfFilter(ReplaceConfigSnapshotFixture(configPath,
+                "{\"minimap_mod\":{\"position\":\"top-left\"}}"),
+                "replace config fixture before the next poll");
+            ResetConfigSnapshotTestCounters();
+            config.config.GetString = nullptr;
+            RefreshMinimapConfig(&config, true);
+            CheckPerfFilter(MinimapPlacementName(static_cast<MinimapPlacement>(g_minimapPlacement.load())) == std::string("top-left") &&
+                ::g_testMinimapConfigFileReadCount == 1 && ::g_testMinimapConfigBlockLookupCount == 1,
+                "the next refresh reads a replacement file without a cross-refresh cache");
+
+            CheckPerfFilter(ReplaceConfigSnapshotFixture(configPath,
+                "{\"minimap_mod\":{}}"), "write an empty minimap_mod block");
+            ResetConfigSnapshotTestCounters();
+            RefreshMinimapConfig(&config, true);
+            CheckPerfFilter(g_minimapPlacement.load() == static_cast<int>(MinimapPlacement::TopRight) &&
+                g_minimapMapSampleStep.load() == MINIMAP_DEFAULT_MAP_SAMPLE_STEP &&
+                g_minimapMaxDrawnPoints.load() == MINIMAP_DEFAULT_MAX_DRAWN_POINTS &&
+                ::g_testMinimapConfigFileReadCount == 1 && ::g_testMinimapConfigBlockLookupCount == 1,
+                "a present block with absent keys retains defaults");
+
+            CheckPerfFilter(ReplaceConfigSnapshotFixture(configPath,
+                "{\"other_mod\":{\"position\":\"bottom-left\"}}"),
+                "write a config without a minimap_mod block");
+            config.config.GetString = [](const char*, const char* key, std::string fallback)
+            {
+                return key != nullptr && std::strcmp(key, "position") == 0 ? std::string("bottom-right") : fallback;
+            };
+            ResetConfigSnapshotTestCounters();
+            RefreshMinimapConfig(&config, true);
+            CheckPerfFilter(MinimapPlacementName(static_cast<MinimapPlacement>(g_minimapPlacement.load())) == std::string("bottom-right") &&
+                ::g_testMinimapConfigFileReadCount == 1 && ::g_testMinimapConfigBlockLookupCount == 1,
+                "an absent minimap_mod block uses the API fallback");
+
+            config.shroudtopia.config_file = configPath + ".missing";
+            config.config.GetString = [](const char*, const char* key, std::string fallback)
+            {
+                return key != nullptr && std::strcmp(key, "position") == 0 ? std::string("top-right") : fallback;
+            };
+            ResetConfigSnapshotTestCounters();
+            RefreshMinimapConfig(&config, true);
+            CheckPerfFilter(g_minimapPlacement.load() == static_cast<int>(MinimapPlacement::TopRight) &&
+                ::g_testMinimapConfigFileReadCount == 1 && ::g_testMinimapConfigBlockLookupCount == 0,
+                "an unreadable config file falls back without scanning an object");
+        }
+
+        DeleteFileA(configPath.c_str());
+        DeleteFileA((configPath + ".replacement").c_str());
+        g_shroudtopiaConfigPath = savedGlobalConfigPath;
+        g_modContext = savedModContext;
+        return g_perfFilterTestFailures == 0 ? 0 : 1;
+    }
+
+    void ResetMapMarkerFastPathTestCounters()
+    {
+        ::g_testMapMarkerCacheLockCount = 0;
+        ::g_testMapMarkerIdentitySearchCount = 0;
+        ::g_testMapMarkerResolverCallCount = 0;
+        ::g_testBeforeMapMarkerResolver = nullptr;
+    }
+
+    void ClearMapMarkerFastPathTestCache(DWORD pruneTick, DWORD summaryTick)
+    {
+        std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+        g_visibleMapMarkers.clear();
+        g_lastVisibleMapMarkerPruneTick = pruneTick;
+        g_lastVisibleMapMarkerSummaryTick = summaryTick;
+    }
+
+    CapturedMapMarkerVisibility MakeMapMarkerFastPathTestMarker(
+        uintptr_t markerAddress, uintptr_t stateAddress, std::uint32_t kind,
+        bool positioned, std::int64_t x, std::int64_t y, std::int64_t z, DWORD tick)
+    {
+        CapturedMapMarkerVisibility marker{};
+        marker.markerAddress = markerAddress;
+        marker.stateAddress = stateAddress;
+        marker.kind = kind;
+        marker.visibility = 1;
+        marker.hasWorldPosition = positioned;
+        marker.x = x;
+        marker.y = y;
+        marker.z = z;
+        marker.lastUpdateTick = tick;
+        return marker;
+    }
+
+    CapturedMapMarkerVisibility g_concurrentMapMarkerPublication{};
+    bool g_concurrentMapMarkerLockAvailable = false;
+    bool g_concurrentMapMarkerPublicationCompleted = false;
+
+    void PublishConcurrentMapMarkerDuringResolution()
+    {
+        std::thread concurrentPublisher([]
+        {
+            std::unique_lock<std::mutex> probe(g_visibleMapMarkerMutex, std::try_to_lock);
+            g_concurrentMapMarkerLockAvailable = probe.owns_lock();
+            if (!probe.owns_lock())
+                return;
+            probe.unlock();
+
+            PublishVisibleMapMarker(CapturedMapMarkerVisibility(g_concurrentMapMarkerPublication));
+            g_concurrentMapMarkerPublicationCompleted = true;
+        });
+        concurrentPublisher.join();
+    }
+
+    int CheckUnresolvedMarkerRetries()
+    {
+        g_perfFilterTestFailures = 0;
+        const bool savedDebug = g_debugLoggingEnabled.load();
+        const bool savedVisible = g_minimapVisible.load();
+        g_debugLoggingEnabled = false;
+        std::array<std::uint64_t, 32> raw{};
+        std::array<std::uint8_t, 0x60> state{};
+        std::array<std::uint8_t, 0x180> entity{};
+        std::array<std::uint8_t, 0x100> unknown{};
+        std::array<std::uint8_t, 0x100> otherUnknown{};
+        MapMarkerVisibilityIterationRecord record{};
+        record.marker = reinterpret_cast<std::uint8_t*>(raw.data());
+        record.visibilityState = state.data();
+        record.entity = entity.data();
+        record.unknown0 = unknown.data();
+        state[0] = 1;
+        ClearMapMarkerFastPathTestCache(GetTickCount(), GetTickCount());
+        ResetMapMarkerFastPathTestCounters();
+        CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record) &&
+            g_visibleMapMarkers.size() == 1 && !g_visibleMapMarkers[0].hasWorldPosition &&
+            ::g_testMapMarkerResolverCallCount == 1, "first unresolved visible marker attempts resolution");
+        for (bool visible : { true, false })
+        {
+            g_minimapVisible = visible;
+            for (int i = 0; i < 8; ++i) TryPublishMapMarkerVisibilityRecord(record);
+        }
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 1,
+            "identical failures are deferred independently of map display toggle");
+        CheckPerfFilter(g_visibleMapMarkers[0].visibility == 1 &&
+            GetTickCount() - g_visibleMapMarkers[0].lastUpdateTick < 200,
+            "deferred callbacks retain fresh native visibility and cache age");
+        Sleep(220);
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 2,
+            "failed resolution retries after bounded interval without starvation");
+        raw[0] = 1234;
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 3,
+            "raw identity change invalidates failed retry state immediately");
+        record.unknown0 = otherUnknown.data();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 4,
+            "resolver root change invalidates failed retry state immediately");
+        state[0] = 0;
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(g_visibleMapMarkers[0].visibility == 0 &&
+            ::g_testMapMarkerResolverCallCount == 4, "hidden transition is captured without resolution");
+        state[0] = 1;
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 5,
+            "hidden to visible retries immediately");
+        // Coordinates can appear outside the raw identity words without any identity change.
+        const std::int64_t xyz[3] = { WorldToFixed(4000), WorldToFixed(200), WorldToFixed(5000) };
+        std::memcpy(entity.data() + 0x80, xyz, sizeof(xyz));
+        Sleep(220);
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 6 && g_visibleMapMarkers[0].hasWorldPosition,
+            "eventual retry discovers newly available coordinates for unchanged identity");
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 6 && g_visibleMapMarkers[0].hasWorldPosition,
+            "successful coordinate capture returns to existing positioned fast path");
+        ResetWorldSessionFromLog();
+        CheckPerfFilter(g_visibleMapMarkers.empty(), "session reset clears retry-bearing entries");
+        entity.fill(0);
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 7,
+            "same addresses retry immediately in a new session");
+        CapturedMapMarkerVisibility failed = g_visibleMapMarkers[0];
+        failed.positionRetryPending = true;
+        failed.positionFailureTick = 0xFFFFFFF0u;
+        CheckPerfFilter(ShouldDeferMarkerPosition(failed, failed, 0xB7u) &&
+            !ShouldDeferMarkerPosition(failed, failed, 0xB8u),
+            "retry boundary is 200 ms and remains correct across DWORD wrap");
+        const auto rejectsChanged = [&failed](CapturedMapMarkerVisibility changed) {
+            return !ShouldDeferMarkerPosition(failed, changed, failed.positionFailureTick);
+        };
+        auto changed = failed; ++changed.markerAddress;
+        CheckPerfFilter(rejectsChanged(changed), "marker address change rejects retry suppression");
+        changed = failed; ++changed.stateAddress;
+        CheckPerfFilter(rejectsChanged(changed), "state address change rejects retry suppression");
+        changed = failed; ++changed.entityAddress;
+        CheckPerfFilter(rejectsChanged(changed), "entity address change rejects retry suppression");
+        changed = failed; ++changed.markerType;
+        CheckPerfFilter(rejectsChanged(changed), "fresh type change rejects retry suppression");
+        changed = failed; ++changed.kind;
+        CheckPerfFilter(rejectsChanged(changed), "fresh icon kind change rejects retry suppression");
+        const DWORD deadline = g_visibleMapMarkers[0].positionFailureTick;
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(g_visibleMapMarkers[0].positionFailureTick == deadline,
+            "deferred captures do not extend failure deadline");
+        // Exercise the publication side of a resolver racing a newer positioned capture.
+        auto lateFailure = g_visibleMapMarkers[0];
+        auto positioned = lateFailure;
+        positioned.hasWorldPosition = true;
+        positioned.positionRetryPending = false;
+        positioned.x = WorldToFixed(4444);
+        PublishVisibleMapMarker(std::move(positioned));
+        PublishVisibleMapMarker(std::move(lateFailure));
+        CheckPerfFilter(g_visibleMapMarkers[0].hasWorldPosition &&
+            g_visibleMapMarkers[0].x == WorldToFixed(4444) && !g_visibleMapMarkers[0].positionRetryPending,
+            "concurrent successful position survives late failure without retry state");
+        ClearMapMarkerFastPathTestCache(GetTickCount(), GetTickCount());
+        auto newer = failed; ++newer.entityAddress; newer.positionRetryPending = false;
+        PublishVisibleMapMarker(std::move(newer));
+        PublishVisibleMapMarker(std::move(failed));
+        CheckPerfFilter(!g_visibleMapMarkers[0].positionRetryPending,
+            "late failed snapshot cannot add suppression over a changed concurrent capture");
+        ClearMapMarkerFastPathTestCache(GetTickCount(), GetTickCount());
+        ::g_testBeforeMapMarkerResolver = []() { ResetWorldSessionFromLog(); };
+        TryPublishMapMarkerVisibilityRecord(record);
+        ::g_testBeforeMapMarkerResolver = nullptr;
+        CheckPerfFilter(g_visibleMapMarkers.size() == 1 && !g_visibleMapMarkers[0].positionRetryPending,
+            "in-flight failure finishing after world reset cannot carry retry state into new session");
+        const auto attemptsAfterReset = ::g_testMapMarkerResolverCallCount;
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == attemptsAfterReset + 1,
+            "same-address new-session capture resolves immediately after old scan completes");
+        ClearMapMarkerFastPathTestCache(GetTickCount(), GetTickCount());
+        g_debugLoggingEnabled = savedDebug;
+        g_minimapVisible = savedVisible;
+        return g_perfFilterTestFailures == 0 ? 0 : 1;
+    }
+
+    int CheckHiddenMarkerMissFastPath()
+    {
+        g_perfFilterTestFailures = 0;
+        const bool savedDebug = g_debugLoggingEnabled.load();
+        std::array<std::uint64_t, 32> raw{};
+        raw[0] = 0x1234;
+        std::array<std::uint8_t, 0x60> state{};
+        std::array<std::uint8_t, 0x180> entity{};
+        std::array<std::uint8_t, 0x100> unknown{};
+        MapMarkerVisibilityIterationRecord record{};
+        record.marker = reinterpret_cast<std::uint8_t*>(raw.data());
+        record.visibilityState = state.data();
+        record.entity = entity.data();
+        record.unknown0 = unknown.data();
+
+        for (bool debug : {false, true})
+        {
+            g_debugLoggingEnabled = debug;
+            const DWORD now = GetTickCount();
+            ClearMapMarkerFastPathTestCache(now, now);
+            auto unrelated = MakeMapMarkerFastPathTestMarker(0x500000, 0x600000,
+                0x2222, true, 444, 555, 666, now);
+            g_visibleMapMarkers.push_back(unrelated);
+            ResetMapMarkerFastPathTestCounters();
+            g_visibleMapMarkerFaults.store(3);
+            for (int i = 0; i < 8; ++i)
+                CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record), "hidden miss accepted");
+            CheckPerfFilter(::g_testMapMarkerCacheLockCount == 8 &&
+                ::g_testMapMarkerIdentitySearchCount == 8 && ::g_testMapMarkerResolverCallCount == 0,
+                "repeated hidden misses use one lock/search and no position resolver, including debug mode");
+            CheckPerfFilter(g_visibleMapMarkers.size() == 1 &&
+                g_visibleMapMarkers[0].stateAddress == unrelated.stateAddress &&
+                g_visibleMapMarkers[0].visibility == 1 && g_visibleMapMarkers[0].x == 444 &&
+                g_visibleMapMarkers[0].lastUpdateTick == now && g_visibleMapMarkerFaults.load() == 0,
+                "hidden misses do not insert or change unrelated entries and clear capture faults");
+        }
+
+        g_debugLoggingEnabled = false;
+        DWORD now = GetTickCount();
+        ClearMapMarkerFastPathTestCache(now - VISIBLE_MAP_MARKER_PRUNE_MS - 1, now);
+        auto stale = MakeMapMarkerFastPathTestMarker(0x500000, 0x600000,
+            0x2222, true, 444, 555, 666, now - VISIBLE_MAP_MARKER_STALE_MS - 100);
+        auto fresh = MakeMapMarkerFastPathTestMarker(0x700000, 0x800000,
+            0x3333, true, 777, 888, 999, now);
+        g_visibleMapMarkers.push_back(stale);
+        g_visibleMapMarkers.push_back(fresh);
+        ResetMapMarkerFastPathTestCounters();
+        CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record), "hidden miss permits due pruning");
+        CheckPerfFilter(g_visibleMapMarkers.size() == 1 &&
+            g_visibleMapMarkers[0].stateAddress == fresh.stateAddress &&
+            GetTickCount() - g_lastVisibleMapMarkerPruneTick < VISIBLE_MAP_MARKER_PRUNE_MS,
+            "hidden miss removes stale unrelated entries and advances pruning deadline");
+        CheckPerfFilter(::g_testMapMarkerCacheLockCount == 1 && ::g_testMapMarkerIdentitySearchCount == 1,
+            "due pruning does not require a second hidden-miss lookup");
+
+        ClearMapMarkerFastPathTestCache(GetTickCount(), GetTickCount());
+        CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record) && g_visibleMapMarkers.empty(),
+            "hidden marker is absent before its visibility changes");
+        state[0] = 1;
+        ResetMapMarkerFastPathTestCounters();
+        CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record) && g_visibleMapMarkers.size() == 1 &&
+            g_visibleMapMarkers[0].visibility == 1 && ::g_testMapMarkerResolverCallCount == 1 &&
+            ::g_testMapMarkerCacheLockCount == 2 && ::g_testMapMarkerIdentitySearchCount == 2,
+            "previous hidden miss is not negatively cached and immediately enters normal visible publication");
+        g_visibleMapMarkers[0].hasWorldPosition = true;
+        g_visibleMapMarkers[0].x = 111;
+        state[0] = 0;
+        CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record) && g_visibleMapMarkers.size() == 1 &&
+            g_visibleMapMarkers[0].visibility == 0 && g_visibleMapMarkers[0].x == 111,
+            "cached marker still becomes hidden and retains position");
+        ResetMapMarkerFastPathTestCounters();
+        MapMarkerVisibilityIterationRecord invalid{};
+        CheckPerfFilter(!TryPublishMapMarkerVisibilityRecord(invalid) &&
+            ::g_testMapMarkerCacheLockCount == 0, "invalid record still rejected before cache access");
+        ClearMapMarkerFastPathTestCache(GetTickCount(), GetTickCount());
+        g_debugLoggingEnabled = savedDebug;
+        return g_perfFilterTestFailures == 0 ? 0 : 1;
+    }
+
+    int CheckVisibleMapMarkerFastPath()
+    {
+        g_perfFilterTestFailures = 0;
+        const DWORD now = GetTickCount();
+        const bool savedDebugLogging = g_debugLoggingEnabled.load();
+        ModContext markerLogContext{};
+        const auto savedModContext = g_modContext;
+        std::vector<std::string> logLines;
+        markerLogContext.Log = [&logLines](const char* message)
+        {
+            if (message != nullptr)
+                logLines.emplace_back(message);
+        };
+        g_modContext = &markerLogContext;
+        std::array<std::uint64_t, 32> markerRaw{};
+        markerRaw[0] = 0x1234;
+        std::array<std::uint8_t, 0x60> markerState{};
+        std::array<std::uint8_t, 0x180> markerEntity{};
+        std::array<std::uint8_t, 0x100> markerUnknown{};
+        markerState[0] = 0;
+        MapMarkerVisibilityIterationRecord record{};
+        record.marker = reinterpret_cast<std::uint8_t*>(markerRaw.data());
+        record.visibilityState = markerState.data();
+        record.entity = markerEntity.data();
+        record.unknown0 = markerUnknown.data();
+
+        ClearMapMarkerFastPathTestCache(now, now);
+        g_debugLoggingEnabled = false;
+        const auto positioned = MakeMapMarkerFastPathTestMarker(
+            reinterpret_cast<uintptr_t>(record.marker), reinterpret_cast<uintptr_t>(record.visibilityState),
+            0x1111, true, 111, 222, 333, now - 100);
+        auto unrelated = MakeMapMarkerFastPathTestMarker(0x500000, 0x600000,
+            0x2222, true, 444, 555, 666, now - 50);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            g_visibleMapMarkers.push_back(positioned);
+            g_visibleMapMarkers.push_back(unrelated);
+        }
+        ResetMapMarkerFastPathTestCounters();
+        const auto expectedKind = ResolveIconKeyFromRawWordsIfAtlasLoaded(
+            markerRaw.data(), 5, 0x1234);
+        const bool positionedHitPublished = TryPublishMapMarkerVisibilityRecord(record);
+        std::cout << "POSITIONED_HIT_LOCKS=" << ::g_testMapMarkerCacheLockCount
+            << " IDENTITY_SEARCHES=" << ::g_testMapMarkerIdentitySearchCount
+            << " RESOLVER_CALLS=" << ::g_testMapMarkerResolverCallCount << '\n';
+        CheckPerfFilter(positionedHitPublished, "positioned cached hit accepts the visibility record");
+        CheckPerfFilter(::g_testMapMarkerCacheLockCount == 1 &&
+            ::g_testMapMarkerIdentitySearchCount == 1 && ::g_testMapMarkerResolverCallCount == 0,
+            "positioned cache hit completes under one identity search and mutex acquisition");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers.size() == 2 &&
+                g_visibleMapMarkers[0].stateAddress == reinterpret_cast<uintptr_t>(record.visibilityState) &&
+                g_visibleMapMarkers[1].stateAddress == unrelated.stateAddress,
+                "positioned cache hit preserves vector order and unrelated entries");
+            CheckPerfFilter(g_visibleMapMarkers[0].visibility == 0 && g_visibleMapMarkers[0].kind == expectedKind &&
+                g_visibleMapMarkers[0].hasWorldPosition && g_visibleMapMarkers[0].x == 111 &&
+                g_visibleMapMarkers[0].y == 222 && g_visibleMapMarkers[0].z == 333 &&
+                static_cast<DWORD>(g_visibleMapMarkers[0].lastUpdateTick - (now - 100)) < 1000,
+                "positioned cache hit updates visibility and timestamp while retaining position");
+            CheckPerfFilter(g_visibleMapMarkers[1].kind == unrelated.kind &&
+                g_visibleMapMarkers[1].x == unrelated.x && g_visibleMapMarkers[1].y == unrelated.y &&
+                g_visibleMapMarkers[1].z == unrelated.z,
+                "positioned cache hit leaves unrelated marker fields unchanged");
+        }
+
+        markerState[0] = 1;
+        record.marker = reinterpret_cast<std::uint8_t*>(markerRaw.data());
+        record.visibilityState = markerState.data();
+        ClearMapMarkerFastPathTestCache(now, now - 5000);
+        g_debugLoggingEnabled = true;
+        auto debugMarker = MakeMapMarkerFastPathTestMarker(
+            reinterpret_cast<uintptr_t>(record.marker), reinterpret_cast<uintptr_t>(record.visibilityState),
+            0x3333, true, 777, 888, 999, now - 100);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            g_visibleMapMarkers.push_back(debugMarker);
+        }
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerCacheLockCount == 2 &&
+            ::g_testMapMarkerIdentitySearchCount == 2 && ::g_testMapMarkerResolverCallCount == 0,
+            "debug-enabled captures retain the established two-phase path");
+        CheckPerfFilter(!logLines.empty() &&
+            logLines.back().find("real map marker visibility feed | visible=1 | positioned=1") != std::string::npos,
+            "debug-enabled capture keeps the throttled marker summary");
+
+        markerState[0] = 0;
+        record.visibilityState = markerState.data();
+        auto staleMarker = MakeMapMarkerFastPathTestMarker(
+            reinterpret_cast<uintptr_t>(record.marker), reinterpret_cast<uintptr_t>(record.visibilityState),
+            0x4444, true, 12345, 23456, 34567, now - 181000);
+        ClearMapMarkerFastPathTestCache(now - VISIBLE_MAP_MARKER_PRUNE_MS, now);
+        g_debugLoggingEnabled = false;
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            g_visibleMapMarkers.push_back(staleMarker);
+        }
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerCacheLockCount == 2 &&
+            ::g_testMapMarkerIdentitySearchCount == 2 && ::g_testMapMarkerResolverCallCount == 0,
+            "due-prune captures keep the baseline two-phase path");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers.size() == 0,
+                "due pruning preserves the baseline visibility-zero removal");
+        }
+
+        markerState[0] = 1;
+        staleMarker.visibility = 1;
+        const DWORD reinsertNow = GetTickCount();
+        ClearMapMarkerFastPathTestCache(reinsertNow - VISIBLE_MAP_MARKER_PRUNE_MS, reinsertNow);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            g_visibleMapMarkers.push_back(staleMarker);
+        }
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerCacheLockCount == 2 &&
+            ::g_testMapMarkerIdentitySearchCount == 2 && ::g_testMapMarkerResolverCallCount == 0,
+            "due-prune same-identity hits do not take the fast path");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers.size() == 1 && g_visibleMapMarkers[0].visibility == 1 &&
+                g_visibleMapMarkers[0].hasWorldPosition && g_visibleMapMarkers[0].x == 12345 &&
+                g_visibleMapMarkers[0].y == 23456 && g_visibleMapMarkers[0].z == 34567,
+                "due pruning retains the accepted expired-position reuse and reinsert behavior");
+        }
+
+        const DWORD pruneNow = GetTickCount();
+        auto exactBoundary = MakeMapMarkerFastPathTestMarker(0x700000, 0x700100,
+            1, true, 1, 2, 3, pruneNow - VISIBLE_MAP_MARKER_STALE_MS);
+        auto beyondBoundary = MakeMapMarkerFastPathTestMarker(0x700200, 0x700300,
+            1, true, 4, 5, 6, pruneNow - VISIBLE_MAP_MARKER_STALE_MS - 1);
+        ClearMapMarkerFastPathTestCache(pruneNow - VISIBLE_MAP_MARKER_PRUNE_MS, pruneNow);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            g_visibleMapMarkers.push_back(exactBoundary);
+            g_visibleMapMarkers.push_back(beyondBoundary);
+            PruneVisibleMapMarkersLocked(pruneNow);
+            CheckPerfFilter(g_visibleMapMarkers.size() == 1 &&
+                g_visibleMapMarkers[0].stateAddress == exactBoundary.stateAddress,
+                "pruning keeps an entry exactly at the stale threshold and removes one past it");
+        }
+
+        markerState[0] = 1;
+        record.visibilityState = markerState.data();
+        const DWORD concurrencyNow = GetTickCount();
+        ClearMapMarkerFastPathTestCache(concurrencyNow, concurrencyNow);
+        const auto unresolvedMarker = MakeMapMarkerFastPathTestMarker(
+            reinterpret_cast<uintptr_t>(record.marker), reinterpret_cast<uintptr_t>(record.visibilityState),
+            0x5555, false, 0, 0, 0, concurrencyNow - 20);
+        g_concurrentMapMarkerPublication = MakeMapMarkerFastPathTestMarker(
+            reinterpret_cast<uintptr_t>(record.marker), reinterpret_cast<uintptr_t>(record.visibilityState),
+            0x6666, true, 444, 555, 666, concurrencyNow - 10);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            g_visibleMapMarkers.push_back(unresolvedMarker);
+        }
+        g_concurrentMapMarkerLockAvailable = false;
+        g_concurrentMapMarkerPublicationCompleted = false;
+        ::g_testBeforeMapMarkerResolver = PublishConcurrentMapMarkerDuringResolution;
+        ResetMapMarkerFastPathTestCounters();
+        ::g_testBeforeMapMarkerResolver = PublishConcurrentMapMarkerDuringResolution;
+        TryPublishMapMarkerVisibilityRecord(record);
+        ::g_testBeforeMapMarkerResolver = nullptr;
+        CheckPerfFilter(::g_testMapMarkerResolverCallCount == 1 &&
+            g_concurrentMapMarkerLockAvailable && g_concurrentMapMarkerPublicationCompleted,
+            "native resolver runs outside the cache mutex and permits concurrent publication");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers.size() == 1 && g_visibleMapMarkers[0].hasWorldPosition &&
+                g_visibleMapMarkers[0].x == 444 && g_visibleMapMarkers[0].y == 555 && g_visibleMapMarkers[0].z == 666,
+                "relock reconciliation retains a concurrent positioned update");
+        }
+
+        const DWORD capNow = GetTickCount();
+        ClearMapMarkerFastPathTestCache(capNow, capNow);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            for (uintptr_t index = 1; index <= VISIBLE_MAP_MARKER_MAX_ENTRIES; ++index)
+                g_visibleMapMarkers.push_back(MakeMapMarkerFastPathTestMarker(
+                    0x800000 + index, 0x900000 + index, 1, false, 0, 0, 0, capNow));
+        }
+        markerState[0] = 1;
+        record.visibilityState = markerState.data();
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerCacheLockCount == 2 &&
+            ::g_testMapMarkerIdentitySearchCount == 2 && ::g_testMapMarkerResolverCallCount == 1,
+            "unresolved full-cap capture retains the resolver and reconciliation path");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers.size() == VISIBLE_MAP_MARKER_MAX_ENTRIES,
+                "marker capacity remains capped at 2048 entries");
+        }
+
+        ClearMapMarkerFastPathTestCache(GetTickCount(), GetTickCount());
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            g_visibleMapMarkers.push_back(positioned);
+        }
+        ResetWorldSessionFromLog();
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers.empty(), "session reset clears visible map markers");
+        }
+
+        g_debugLoggingEnabled = savedDebugLogging;
+        g_modContext = savedModContext;
+        return g_perfFilterTestFailures == 0 ? 0 : 1;
+    }
+
+    std::atomic<bool> g_testAllocationTracking{ false };
+    std::atomic<std::size_t> g_testAllocationFailureTriggered{ 0 };
+    std::atomic<std::size_t> g_testAllocationFailureAt{ 0 };
+    std::atomic<std::size_t> g_testAllocationCount{ 0 };
+}
+
+void* operator new(std::size_t size)
+{
+    if (g_testAllocationTracking.load(std::memory_order_relaxed))
+    {
+        const auto allocation = g_testAllocationCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (allocation == g_testAllocationFailureAt.load(std::memory_order_relaxed))
+        {
+            g_testAllocationFailureTriggered.store(1, std::memory_order_relaxed);
+            throw std::bad_alloc();
+        }
+    }
+    if (void* memory = std::malloc(size == 0 ? 1 : size))
+        return memory;
+    throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size)
+{
+    return ::operator new(size);
+}
+
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
 namespace
 {
@@ -51,6 +726,436 @@ namespace
         Put(data, offset + 0x10, Fixed(x)); Put(data, offset + 0x18, Fixed(200));
         Put(data, offset + 0x20, Fixed(z)); Put(data, offset + 0x30, key);
     }
+    void CurrentEntry(void* data, int x, int z, std::uint32_t key)
+    {
+        Put(data, 0x10, Fixed(x)); Put(data, 0x18, Fixed(200));
+        Put(data, 0x20, Fixed(z)); Put(data, 0x30, key);
+    }
+    void PutCurrentList(std::vector<std::uint8_t>& state, std::size_t offset,
+        void* entries, std::uint64_t count)
+    {
+        Put(state.data(), offset, reinterpret_cast<uintptr_t>(entries));
+        Put(state.data(), offset + 8, count);
+    }
+    void CheckLatestProfileMarkerRouting()
+    {
+        const bool savedClient10 = g_client10;
+        const auto savedProfile = g_clientProfile;
+        const bool savedDeathLayout = g_deathMarkerLayoutSupported.load();
+        const bool savedDeathVisibility = g_showDeathMarkers.load();
+        std::vector<CapturedWorldMapMarker> savedWorld, savedDeaths;
+        bool savedValid = false;
+        DWORD savedTick = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_worldMapMutex);
+            savedWorld = g_worldMapMarkers;
+            savedDeaths = g_deathMarkers;
+            savedValid = g_worldMapValid;
+            savedTick = g_worldMapTick;
+        }
+
+        constexpr std::size_t latestStateSize = 0x3E6A78 + 16;
+        std::vector<std::uint8_t> state(latestStateSize);
+        std::array<std::uint8_t, 0xA0> base{}, custom{}, secondary{}, tombstone{};
+        constexpr std::uint32_t sharedRasterKey = 0xCAFEBABE;
+        CurrentEntry(base.data(), 900, 1000, sharedRasterKey);
+        CurrentEntry(custom.data(), 1000, 1000, sharedRasterKey);
+        CurrentEntry(secondary.data(), 1100, 1000, sharedRasterKey);
+        CurrentEntry(tombstone.data(), 1200, 1000, sharedRasterKey);
+        PutCurrentList(state, 0x36EA00, base.data(), 1);
+        PutCurrentList(state, 0x396A28, custom.data(), 1);
+        PutCurrentList(state, 0x3BEA50, secondary.data(), 1);
+        PutCurrentList(state, 0x3E6A78, tombstone.data(), 1);
+
+        g_client10 = true;
+        g_clientProfile = MinimapClient10::Profile::Build26082781;
+        g_deathMarkerLayoutSupported = true;
+        g_showDeathMarkers = true;
+        constexpr DWORD now = 1000;
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
+        auto worldMarkers = CopyWorldMapMarkers(now);
+        auto deathMarkers = CopyDeathMarkers(now);
+        Check(worldMarkers.size() == 3,
+            "latest profile routes base, custom and secondary marker lists into ordinary POIs");
+        Check(std::count_if(worldMarkers.begin(), worldMarkers.end(), [](const auto& marker) { return marker.custom; }) == 1,
+            "latest profile preserves custom ownership while routing the secondary list");
+        Check(std::count_if(worldMarkers.begin(), worldMarkers.end(), [&](const auto& marker) {
+            return marker.key == sharedRasterKey;
+        }) == 3, "identical raster keys do not change source-list classification");
+        Check(deathMarkers.size() == 1 && deathMarkers[0].x == Fixed(1200) &&
+            deathMarkers[0].key == sharedRasterKey,
+            "latest profile reads tombstones only from the dedicated tombstone list");
+
+        PutCurrentList(state, 0x3BEA50, reinterpret_cast<void*>(uintptr_t{1}), 1);
+        PutCurrentList(state, 0x3E6A78, tombstone.data(), 1);
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
+        worldMarkers = CopyWorldMapMarkers(now);
+        deathMarkers = CopyDeathMarkers(now);
+        Check(worldMarkers.size() == 2 && deathMarkers.size() == 1,
+            "unreadable secondary POIs do not erase valid base and custom markers");
+
+        PutCurrentList(state, 0x3BEA50, secondary.data(), DEATH_MAP_MAX_ENTRIES + 1);
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
+        Check(CopyWorldMapMarkers(now).size() == 2,
+            "secondary POI input keeps the existing bounded marker cap");
+
+        PutCurrentList(state, 0x3BEA50, secondary.data(), 1);
+        PutCurrentList(state, 0x3E6A78, reinterpret_cast<void*>(uintptr_t{1}), 1);
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
+        worldMarkers = CopyWorldMapMarkers(now);
+        deathMarkers = CopyDeathMarkers(now);
+        Check(worldMarkers.size() == 3 && deathMarkers.empty(),
+            "bad tombstone input clears only deaths and preserves ordinary POIs");
+
+        PutCurrentList(state, 0x3E6A78, tombstone.data(), DEATH_MAP_MAX_ENTRIES + 1);
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
+        Check(CopyDeathMarkers(now).empty() && CopyWorldMapMarkers(now).size() == 3,
+            "oversized tombstones clear only deaths and preserve ordinary POIs");
+
+        g_deathMarkerLayoutSupported = false;
+        PutCurrentList(state, 0x3BEA50, secondary.data(), 1);
+        PutCurrentList(state, 0x3E6A78, tombstone.data(), 1);
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
+        Check(CopyWorldMapMarkers(now).size() == 2 && CopyDeathMarkers(now).empty(),
+            "missing layout guard excludes both new collections while base POIs remain available");
+
+        g_deathMarkerLayoutSupported = true;
+        g_clientProfile = MinimapClient10::Profile::Build25988036;
+        PutCurrentList(state, 0x3BEA50, secondary.data(), 1);
+        PutCurrentList(state, 0x3E6A78, tombstone.data(), 1);
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(state.data()), now);
+        worldMarkers = CopyWorldMapMarkers(now);
+        deathMarkers = CopyDeathMarkers(now);
+        Check(worldMarkers.size() == 2 && deathMarkers.size() == 1 &&
+            deathMarkers[0].x == Fixed(1100),
+            "previous 1.0 profile retains its original secondary-list death route");
+
+        std::vector<std::uint8_t> legacyState(DEATH_MAP_ARRAY_OFFSET + 16);
+        std::array<std::uint8_t, WORLD_MAP_MARKER_STRIDE> legacyBase{}, legacyCustom{}, legacyDeath{};
+        Entry(legacyBase.data(), 0, 900, 1000, sharedRasterKey);
+        Entry(legacyCustom.data(), 0, 1000, 1000, sharedRasterKey);
+        Entry(legacyDeath.data(), 0, 1200, 1000, sharedRasterKey);
+        PutCurrentList(legacyState, WORLD_MAP_ARRAY_OFFSET, legacyBase.data(), 1);
+        PutCurrentList(legacyState, CUSTOM_MAP_ARRAY_OFFSET, legacyCustom.data(), 1);
+        PutCurrentList(legacyState, DEATH_MAP_ARRAY_OFFSET, legacyDeath.data(), 1);
+        g_client10 = false;
+        g_clientProfile = MinimapClient10::Profile::Build25988036;
+        CaptureWorldMapMarkers(reinterpret_cast<uintptr_t>(legacyState.data()), now);
+        worldMarkers = CopyWorldMapMarkers(now);
+        deathMarkers = CopyDeathMarkers(now);
+        Check(worldMarkers.size() == 2 && deathMarkers.size() == 1 &&
+            deathMarkers[0].x == Fixed(1200),
+            "legacy profile retains its 0x7C178 death-list behavior");
+
+        {
+            std::lock_guard<std::mutex> lock(g_worldMapMutex);
+            g_worldMapMarkers = std::move(savedWorld);
+            g_deathMarkers = std::move(savedDeaths);
+            g_worldMapValid = savedValid;
+            g_worldMapTick = savedTick;
+        }
+        g_client10 = savedClient10;
+        g_clientProfile = savedProfile;
+        g_deathMarkerLayoutSupported = savedDeathLayout;
+        g_showDeathMarkers = savedDeathVisibility;
+    }
+
+    std::vector<std::string> haloOutcomeLogs;
+    int haloObservationDraws = 0;
+    int haloObservationLegacyDraws = 0;
+
+    std::vector<std::string> HaloOutcomeLines()
+    {
+        std::vector<std::string> result;
+        for (const auto& line : haloOutcomeLogs)
+            if (line.find("[Minimap] local-player halo ") != std::string::npos)
+                result.push_back(line);
+        return result;
+    }
+
+    int haloThrowingLoggerCalls = 0;
+    bool haloThrowNextLoggerCall = false;
+
+    void ThrowingHaloStatusLogger(const char* message)
+    {
+        ++haloThrowingLoggerCalls;
+        if (haloThrowNextLoggerCall)
+        {
+            haloThrowNextLoggerCall = false;
+            throw std::runtime_error("forced halo logger callback failure");
+        }
+        haloOutcomeLogs.emplace_back(message);
+    }
+
+    void PrepareDirectHaloRenderer(bool enabled, bool unavailable, bool pending)
+    {
+        g_renderer = VulkanMinimapRenderer{};
+        g_renderer.width = 512;
+        g_renderer.height = 320;
+        g_renderer.widgetScale = 1.0f;
+        g_renderer.widgetCenterX = 256;
+        g_renderer.widgetCenterY = 160;
+        g_renderer.arrowGlowFrameEligible = true;
+        g_renderer.arrowGlowUnavailable = unavailable;
+        auto& resources = g_renderer.arrowGlowResources;
+        resources.frameTextureReady = true;
+        resources.frameTextureUploadPending = pending;
+        resources.framePipeline = 0x301;
+        resources.framePipelineLayout = 0x302;
+        resources.frameDescriptorSet = 0x303;
+        auto& fns = g_renderer.fns;
+        fns.cmdClearAttachments = [](void*, std::uint32_t, const VkClearAttachment*, std::uint32_t, const VkClearRect*) {
+            ++haloObservationLegacyDraws;
+        };
+        fns.cmdBindPipeline = [](void*, std::uint32_t, void*) {};
+        fns.cmdBindDescriptorSets = [](void*, std::uint32_t, void*, std::uint32_t, std::uint32_t,
+            void* const*, std::uint32_t, const std::uint32_t*) {};
+        fns.cmdPushConstants = [](void*, void*, std::uint32_t, std::uint32_t, std::uint32_t, const void*) {};
+        fns.cmdDraw = [](void*, std::uint32_t vertexCount, std::uint32_t instanceCount, std::uint32_t, std::uint32_t) {
+            if (vertexCount == 6 && instanceCount == 1)
+                ++haloObservationDraws;
+        };
+        g_playerArrow = {};
+        g_playerArrow.attempted = true;
+        g_playerArrow.loaded = true;
+        g_playerArrow.width = 4;
+        g_playerArrow.height = 4;
+        g_playerArrow.rgba.assign(4 * 4 * 4, 255);
+        g_playerArrowGlowEnabled = enabled;
+        g_playerArrowGlowStyle = static_cast<int>(MinimapArrowGlow::Style::SameColour);
+    }
+
+    bool DrawDirectLocalArrow()
+    {
+        return TryDrawPremiumPlayerArrow(g_renderer, reinterpret_cast<void*>(uintptr_t{0x100}),
+            256, 160, 80, 0.25f);
+    }
+
+    std::size_t MeasureHaloObserverAllocations()
+    {
+        ModContext context{};
+        context.Log = [](const char*) {};
+        const auto savedContext = g_modContext;
+        g_modContext = &context;
+        std::size_t allocationCount = 0;
+        for (int warmup = 0; warmup < 2; ++warmup)
+        {
+            PrepareDirectHaloRenderer(true, false, false);
+            g_testAllocationFailureAt = 0;
+            g_testAllocationCount = 0;
+            g_testAllocationTracking = true;
+            const bool drawn = DrawDirectLocalArrow();
+            g_testAllocationTracking = false;
+            if (!drawn)
+                return 0;
+            allocationCount = g_testAllocationCount.load(std::memory_order_relaxed);
+            DestroyVulkanMinimapRendererLocked();
+        }
+        g_modContext = savedContext;
+        return allocationCount;
+    }
+
+    void CheckPlayerArrowHaloAllocationFailurePassivity()
+    {
+        const auto savedContext = g_modContext;
+        auto savedRenderer = std::move(g_renderer);
+        auto savedArrow = g_playerArrow;
+        const bool savedEnabled = g_playerArrowGlowEnabled.load();
+        const int savedStyle = g_playerArrowGlowStyle.load();
+        ModContext context{};
+        context.Log = [](const char*) {};
+        g_modContext = &context;
+
+        const auto allocations = MeasureHaloObserverAllocations();
+        Check(allocations > 0, "halo status formatting performs an injectable allocation");
+        PrepareDirectHaloRenderer(true, false, false);
+        haloOutcomeLogs.clear();
+        haloObservationDraws = haloObservationLegacyDraws = 0;
+        const int bodyBeforeFailure = haloObservationLegacyDraws;
+        g_testAllocationCount = 0;
+        g_testAllocationFailureAt = allocations;
+        g_testAllocationFailureTriggered = 0;
+        g_testAllocationTracking = true;
+        bool drawReturned = false;
+        bool exceptionEscaped = false;
+        try
+        {
+            drawReturned = DrawDirectLocalArrow();
+        }
+        catch (...)
+        {
+            exceptionEscaped = true;
+        }
+        g_testAllocationTracking = false;
+        g_testAllocationFailureAt = 0;
+        Check(g_testAllocationFailureTriggered.load(std::memory_order_relaxed) == 1,
+            "the test injects bad_alloc during optional halo status formatting");
+        Check(!exceptionEscaped && drawReturned && haloObservationDraws == 1 &&
+            haloObservationLegacyDraws > bodyBeforeFailure,
+            "halo status allocation failure does not interrupt command recording or the legacy arrow body");
+
+        g_testAllocationCount = 0;
+        g_testAllocationTracking = true;
+        const bool secondDrawReturned = DrawDirectLocalArrow();
+        g_testAllocationTracking = false;
+        const auto secondFrameAllocations = g_testAllocationCount.load(std::memory_order_relaxed);
+        Check(secondDrawReturned && haloObservationDraws == 2 && secondFrameAllocations == 0,
+            "a failed initial status attempt is not reformatted or retried on later frames");
+
+        g_renderer = std::move(savedRenderer);
+        g_playerArrow = std::move(savedArrow);
+        g_playerArrowGlowEnabled = savedEnabled;
+        g_playerArrowGlowStyle = savedStyle;
+        g_modContext = savedContext;
+    }
+
+    void CheckPlayerArrowHaloLoggerFailurePassivity()
+    {
+        const auto savedContext = g_modContext;
+        auto savedRenderer = std::move(g_renderer);
+        auto savedArrow = g_playerArrow;
+        const bool savedEnabled = g_playerArrowGlowEnabled.load();
+        const int savedStyle = g_playerArrowGlowStyle.load();
+        ModContext context{};
+        context.Log = ThrowingHaloStatusLogger;
+        g_modContext = &context;
+        haloOutcomeLogs.clear();
+        haloObservationDraws = haloObservationLegacyDraws = 0;
+        haloThrowingLoggerCalls = 0;
+        haloThrowNextLoggerCall = true;
+
+        PrepareDirectHaloRenderer(true, false, true);
+        const int bodyBeforeFailure = haloObservationLegacyDraws;
+        bool drawReturned = false;
+        bool exceptionEscaped = false;
+        try
+        {
+            drawReturned = DrawDirectLocalArrow();
+        }
+        catch (...)
+        {
+            exceptionEscaped = true;
+        }
+        Check(!exceptionEscaped && drawReturned && haloObservationDraws == 0 &&
+            haloObservationLegacyDraws > bodyBeforeFailure && haloThrowingLoggerCalls == 1,
+            "logger callback exception does not interrupt a pending-halo fallback draw");
+
+        const int bodyBeforeSuccess = haloObservationLegacyDraws;
+        g_renderer.arrowGlowResources.frameTextureUploadPending = false;
+        Check(DrawDirectLocalArrow() && haloObservationDraws == 1 &&
+            haloObservationLegacyDraws > bodyBeforeSuccess && haloThrowingLoggerCalls == 2 &&
+            HaloOutcomeLines().size() == 1 && HaloOutcomeLines()[0].find("first-success") != std::string::npos,
+            "one first-success status follows a failed initial log without retrying the initial attempt");
+        Check(DrawDirectLocalArrow() && haloObservationDraws == 2 && haloThrowingLoggerCalls == 2 &&
+            HaloOutcomeLines().size() == 1,
+            "a failed initial callback and one later success stay within the two-line bound");
+
+        DestroyVulkanMinimapRendererLocked();
+        haloOutcomeLogs.clear();
+        PrepareDirectHaloRenderer(true, false, false);
+        const int bodyBeforeReset = haloObservationLegacyDraws;
+        Check(DrawDirectLocalArrow() && haloObservationDraws == 3 &&
+            haloObservationLegacyDraws > bodyBeforeReset && haloThrowingLoggerCalls == 3 &&
+            HaloOutcomeLines().size() == 1 && HaloOutcomeLines()[0].find("initial") != std::string::npos,
+            "renderer reset permits one fresh initial status attempt after a logger exception");
+        Check(DrawDirectLocalArrow() && haloObservationDraws == 4 && haloThrowingLoggerCalls == 3 &&
+            HaloOutcomeLines().size() == 1,
+            "successful frames after reset do not retry completed status reporting");
+
+        g_renderer = std::move(savedRenderer);
+        g_playerArrow = std::move(savedArrow);
+        g_playerArrowGlowEnabled = savedEnabled;
+        g_playerArrowGlowStyle = savedStyle;
+        g_modContext = savedContext;
+    }
+
+    void CheckPlayerArrowHaloObservation()
+    {
+        const auto savedContext = g_modContext;
+        auto savedRenderer = std::move(g_renderer);
+        auto savedArrow = g_playerArrow;
+        const bool savedEnabled = g_playerArrowGlowEnabled.load();
+        const int savedStyle = g_playerArrowGlowStyle.load();
+        ModContext context{};
+        context.Log = [](const char* message) { haloOutcomeLogs.emplace_back(message); };
+        g_modContext = &context;
+        haloOutcomeLogs.clear();
+        haloObservationDraws = haloObservationLegacyDraws = 0;
+
+        PrepareDirectHaloRenderer(true, false, true);
+        Check(DrawDirectLocalArrow() && haloObservationLegacyDraws > 0 && haloObservationDraws == 0,
+            "pending halo attempt preserves the legacy local arrow draw");
+        auto lines = HaloOutcomeLines();
+        Check(lines.size() == 1 && lines[0].find("initial") != std::string::npos &&
+            lines[0].find("enabled=1") != std::string::npos && lines[0].find("eligible=1") != std::string::npos &&
+            lines[0].find("unavailable=0") != std::string::npos && lines[0].find("ready=1") != std::string::npos &&
+            lines[0].find("pending=1") != std::string::npos && lines[0].find("handles_geometry=1") != std::string::npos &&
+            lines[0].find("recorded=0") != std::string::npos &&
+            lines[0].size() < 240 && lines[0].find("0x") == std::string::npos,
+            "initial halo outcome reports bounded effective state and pending result without identifiers");
+
+        const int bodyBeforeSuccess = haloObservationLegacyDraws;
+        g_renderer.arrowGlowResources.frameTextureUploadPending = false;
+        Check(DrawDirectLocalArrow() && haloObservationLegacyDraws > bodyBeforeSuccess && haloObservationDraws == 1,
+            "first successful halo attempt keeps the legacy arrow and records its GPU command");
+        lines = HaloOutcomeLines();
+        Check(lines.size() == 2 && lines[1].find("first-success") != std::string::npos &&
+            lines[1].find("handles_geometry=1") != std::string::npos && lines[1].find("recorded=1") != std::string::npos,
+            "one first-success line reports complete handles and geometry readiness");
+        Check(DrawDirectLocalArrow() && haloObservationDraws == 2 && HaloOutcomeLines().size() == 2,
+            "later successful frames draw normally without repeating halo status logging");
+
+        DestroyVulkanMinimapRendererLocked();
+        haloOutcomeLogs.clear();
+        PrepareDirectHaloRenderer(false, false, false);
+        Check(DrawDirectLocalArrow() && haloObservationLegacyDraws > 0 && haloObservationDraws == 2,
+            "explicitly disabled halo leaves the legacy arrow active");
+        lines = HaloOutcomeLines();
+        Check(lines.size() == 1 && lines[0].find("initial") != std::string::npos &&
+            lines[0].find("enabled=0") != std::string::npos && lines[0].find("recorded=0") != std::string::npos,
+            "disabled initial attempt is reported once without recording a halo");
+
+        DestroyVulkanMinimapRendererLocked();
+        haloOutcomeLogs.clear();
+        PrepareDirectHaloRenderer(true, true, false);
+        const int bodyBeforeUnavailable = haloObservationLegacyDraws;
+        Check(DrawDirectLocalArrow() && haloObservationLegacyDraws > bodyBeforeUnavailable && haloObservationDraws == 2,
+            "unavailable halo keeps the legacy local arrow active");
+        lines = HaloOutcomeLines();
+        Check(lines.size() == 1 && lines[0].find("unavailable=1") != std::string::npos &&
+            lines[0].find("recorded=0") != std::string::npos,
+            "unavailable initial attempt is reported once without changing fallback");
+
+        DestroyVulkanMinimapRendererLocked();
+        haloOutcomeLogs.clear();
+        PrepareDirectHaloRenderer(true, false, false);
+        g_renderer.width = 0;
+        Check(DrawDirectLocalArrow() && haloObservationDraws == 3,
+            "incomplete halo viewport geometry preserves the existing command recording and local arrow result");
+        lines = HaloOutcomeLines();
+        Check(lines.size() == 1 && lines[0].find("handles_geometry=0") != std::string::npos &&
+            lines[0].find("recorded=1") != std::string::npos,
+            "combined readiness status stays distinct from the actual halo command result");
+
+        DestroyVulkanMinimapRendererLocked();
+        haloOutcomeLogs.clear();
+        PrepareDirectHaloRenderer(true, false, false);
+        const int bodyBeforeReset = haloObservationLegacyDraws;
+        Check(DrawDirectLocalArrow() && haloObservationLegacyDraws > bodyBeforeReset && haloObservationDraws == 4,
+            "renderer reset restores a fresh initial observation while drawing continues");
+        Check(HaloOutcomeLines().size() == 1 && HaloOutcomeLines()[0].find("initial") != std::string::npos &&
+            HaloOutcomeLines()[0].find("recorded=1") != std::string::npos,
+            "initial successful attempt does not emit a separate first-success line");
+        Check(DrawDirectLocalArrow() && haloObservationDraws == 5 && HaloOutcomeLines().size() == 1,
+            "successful post-reset frames retain drawing with one bounded status line");
+
+        g_renderer = std::move(savedRenderer);
+        g_playerArrow = std::move(savedArrow);
+        g_playerArrowGlowEnabled = savedEnabled;
+        g_playerArrowGlowStyle = savedStyle;
+        g_modContext = savedContext;
+    }
+
     void __fastcall InitMap(void* ctx, void* record, std::uint32_t size)
     {
         if (size != 16) std::exit(2);
@@ -331,12 +1436,12 @@ namespace
         CaptureWorldMapMarkers(ui, GetTickCount());
         g_showWorldMarkers = false; g_minimapMaxDrawnPoints = 8;
         std::memset(pixels, 0, sizeof(pixels)); clears = 0;
-        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
+        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130, 116);
         Check(clears == 4 && pixels[155][210].r > 0.8f && pixels[155][210].g < 0.3f && pixels[155][210].b < 0.3f,
             "death layer renders red skulls independently of POI visibility, limits and deduplication");
         Check(pixels[159][207].r < 0.1f, "skull fallback keeps dark eye sockets");
         g_showDeathMarkers = false; clears = 0;
-        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130);
+        DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, 1, 0, 160, 160, 130, 116);
         Check(clears == 0, "disabled death layer issues no draw commands");
         g_showDeathMarkers = true; g_showWorldMarkers = true;
         g_minimapMaxDrawnPoints = MINIMAP_DEFAULT_MAX_DRAWN_POINTS;
@@ -348,7 +1453,7 @@ namespace
             for (float zoom : {0.5f, 12.0f})
             {
                 std::memset(pixels, 0, sizeof(pixels)); clears = 0;
-                DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, zoom, heading, 160, 160, 130);
+                DrawLiveMarkers(renderer, nullptr, {}, 1000, 1000, zoom, heading, 160, 160, 130, 116);
                 bool outside = false;
                 for (int y=0; y<320; ++y) for (int x=0; x<512; ++x)
                     if ((x-160)*(x-160)+(y-160)*(y-160)>130*130 && pixels[y][x].r != 0) outside=true;
@@ -832,7 +1937,7 @@ namespace
         g_deathMarkers={{Fixed(220),0,Fixed(260),0x1AD8F96Eu,false}};
         CapturedWaypoint waypoint{}; waypoint.x=Fixed(260); waypoint.z=Fixed(260);
         std::memset(pixels,0,sizeof(pixels)); clears=0;
-        DrawLiveMarkers(renderer,nullptr,{waypoint},240,240,1,0,256,160,100);
+        DrawLiveMarkers(renderer,nullptr,{waypoint},240,240,1,0,256,160,100,86);
         auto anyInk=[](int cx,int cy) {
             for(int y=cy-15;y<=cy+15;++y) for(int x=cx-15;x<=cx+15;++x)
                 if(pixels[y][x].r>0.5f || pixels[y][x].g>0.5f || pixels[y][x].b>0.5f) return true;
@@ -1067,6 +2172,50 @@ namespace
 
 int main(int argc, char** argv)
 {
+    if (argc == 2 && std::strcmp(argv[1], "--marker-retry-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        return CheckUnresolvedMarkerRetries();
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--marker-hidden-miss-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        return CheckHiddenMarkerMissFastPath();
+    }
+    if (argc == 3 && std::strcmp(argv[1], "--config-refresh-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        return CheckMinimapConfigRefreshSnapshot(argv[2]);
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--marker-fast-path-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        return CheckVisibleMapMarkerFastPath();
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--halo-passivity-allocation-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        CheckPlayerArrowHaloAllocationFailurePassivity();
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--halo-passivity-logger-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        CheckPlayerArrowHaloLoggerFailurePassivity();
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--halo-observation-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        CheckPlayerArrowHaloObservation();
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--marker-routing-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        CheckLatestProfileMarkerRouting();
+        return 0;
+    }
     if (argc == 2 && std::strcmp(argv[1], "--r2-backport-positions") == 0)
     {
         CheckMinimapPlacements();
@@ -1117,6 +2266,10 @@ int main(int argc, char** argv)
         return 0;
     }
     std::cout << std::unitbuf;
+    CheckPlayerArrowHaloAllocationFailurePassivity();
+    CheckPlayerArrowHaloLoggerFailurePassivity();
+    CheckPlayerArrowHaloObservation();
+    CheckLatestProfileMarkerRouting();
     CheckToggleNotices();
     CheckMapAppearance();
     CheckMinimapSizing();

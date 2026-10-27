@@ -1,4 +1,7 @@
 #include "aggregate_timing.h"
+// MM_BG_BEGIN
+#include "background_diagnostic.h"
+// MM_BG_END
 
 #include <exception>
 #include <limits>
@@ -416,6 +419,9 @@ namespace MinimapAggregateTiming
     void Collector::Begin(Metric metric, ScopeToken& token, bool readClock,
         std::uint64_t suppliedTicks, bool suppliedValid) noexcept
     {
+// MM_BG_BEGIN
+        MM_BG_COLLECTOR_SCOPE(metric == Metric::MarkerCapture ? MinimapBackgroundDiagnostic::Metric::CollectorBeginMarker : MinimapBackgroundDiagnostic::Metric::CollectorBeginOther);
+// MM_BG_END
         token = ScopeToken{};
         if (!initialized_.load(std::memory_order_acquire)) return;
         if (!IsValid(metric)) { Lost(CollectorLossKind::InvalidUsage, LossCounter::InvalidMetric); return; }
@@ -472,6 +478,9 @@ namespace MinimapAggregateTiming
     void Collector::Complete(Metric metric, ScopeToken& token, bool incomplete,
         std::uint64_t endTicks, bool endClockValid, std::uint64_t units) noexcept
     {
+// MM_BG_BEGIN
+        MM_BG_COLLECTOR_SCOPE(metric == Metric::MarkerCapture ? MinimapBackgroundDiagnostic::Metric::CollectorEndMarker : MinimapBackgroundDiagnostic::Metric::CollectorEndOther);
+// MM_BG_END
         if (token.depth == 0 || !IsValid(metric)) return;
         WriterScope write(*this);
         auto& state = metrics_[static_cast<std::size_t>(metric)];

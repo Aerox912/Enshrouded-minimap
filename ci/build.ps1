@@ -13,7 +13,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
     $inventory = & "$PSScriptRoot/verify-source.ps1"
-    if ($inventory.version -cne '0.5.15') { throw 'Pipeline is pinned to Minimap 0.5.15.' }
+    if ($inventory.version -cnotin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-startup-fix-test.1', '0.5.16-marker-route-fix-test.1', '0.5.16-perf-glow-test.1')) { throw 'Expected an approved Minimap pipeline version.' }
     $metadata = Get-Content -LiteralPath "$root/assets/mod.json" -Raw | ConvertFrom-Json
     if ($metadata.version -cne $inventory.version) { throw 'Manifest and source inventory versions differ.' }
 
@@ -55,13 +55,13 @@ try {
         throw 'Generated marker-summary test extraction differs from the reviewed source input.'
     }
 
-    $common = @('/t:Rebuild', '/p:Configuration=Release', '/p:Platform=x64', '/p:PlatformToolset=v143', '/m', '/nologo')
+    $common = @('/p:EnableMinimapBackgroundDiagnostics=false', '/p:EnableMinimapPresentDecisionDiagnostics=false', '/t:Rebuild', '/p:Configuration=Release', '/p:Platform=x64', '/p:PlatformToolset=v143', '/m', '/nologo')
     & $MSBuildPath ./minimap_mod.vcxproj @common
     if ($LASTEXITCODE) { throw 'Minimap production build failed.' }
 
     $projects = @(
         'tracking_test', 'renderer_test', 'markers_test', 'map_features_test',
-        'client_1_0_test', 'frame_failure_test', 'hdr_test', 'patch_profile_test',
+        'client_1_0_test', 'frame_failure_test', 'hdr_test', 'patch_profile_test', 'swapchain_startup_test',
         'menu_visibility_test', 'compat_copy_test', 'marker_summary_test',
         'public_creative_compat_test'
     )
@@ -87,6 +87,8 @@ try {
         $testPath = $test.FullName
         if ($name -eq 'frame_failure_test') {
             & $testPath $frameFailureFixtureRoot
+        } elseif ($name -eq 'swapchain_startup_test') {
+            & $testPath --startup-focused
         } elseif ($name -in $fixtureTests) {
             & $testPath $fixture.FullName
         } else {
@@ -113,6 +115,7 @@ try {
         nativeSourceTreeSha256 = $inventory.acceptedNativeSourceTreeSha256
         runtimeDllSha256 = $dllHash
         runtimeDllBytes = (Get-Item -LiteralPath $dll).Length
+        compilerProperties = [ordered]@{ EnableMinimapBackgroundDiagnostics = $false; EnableMinimapPresentDecisionDiagnostics = $false }
         fixtureTestsComplete = [bool]$fixture
         tests = $results
         publication = 'NOT PERFORMED; Actions artifact only'

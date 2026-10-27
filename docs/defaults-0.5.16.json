@@ -1,0 +1,43 @@
+{
+  "mods": {
+    "minimap_mod": {
+      "active": true,
+      "position": "top-right",
+      "offset": 0,
+      "map_shape": "round",
+      "map_orientation": "north-up",
+      "toggle_key": "F10",
+      "render_camera_fallback": true,
+      "debug_logging": false,
+      "show_other_players": true,
+      "show_pings": true,
+      "show_waypoints": true,
+      "show_world_markers": true,
+      "show_death_markers": true,
+      "map_light": 55,
+      "map_style": "default",
+      "icon_style": "original",
+      "heading_smoothing_ms": 55,
+      "player_arrow_glow": true,
+      "player_arrow_glow_style": "same-colour",
+      "ping_glow": true,
+      "ping_glow_style": "same-colour",
+      "waypoint_glow": true,
+      "waypoint_glow_style": "same-colour",
+      "death_marker_glow": true,
+      "map_sample_step": 2,
+      "max_icons": 64,
+      "show_clock": true,
+      "show_weather": true,
+      "show_fog_of_war": true,
+      "toggle_key_secondary": "0x6A",
+      "zoom_in_key": "0xBB",
+      "zoom_in_key_secondary": "0x6B",
+      "zoom_out_key": "0xBD",
+      "zoom_out_key_secondary": "0x6D",
+      "scale_percent": 100,
+      "size_decrease_key": "F9",
+      "size_increase_key": "F11"
+    }
+  }
+}
