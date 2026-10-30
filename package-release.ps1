@@ -9,7 +9,7 @@ $manifest = Get-Content -LiteralPath (Join-Path $root 'assets\mod.json') -Raw | 
 $version = $manifest.version
 $semVerPattern = '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
 if ($version -notmatch $semVerPattern) { throw 'Expected a valid SemVer version.' }
-if ($version -cnotin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-startup-fix-test.1', '0.5.16-marker-route-fix-test.1', '0.5.16-perf-glow-test.1')) { throw 'Expected an approved Minimap pipeline version.' }
+if ($version -cnotin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-startup-fix-test.1', '0.5.16-marker-route-fix-test.1', '0.5.16-perf-glow-test.1', '0.5.17')) { throw 'Expected an approved Minimap pipeline version.' }
 $dll = Get-Item -LiteralPath $DllPath -ErrorAction Stop
 if ($dll.PSIsContainer -or $dll.Name -ne 'minimap_mod.dll') { throw 'Expected the built minimap_mod.dll.' }
 $commit = (& git -C $root rev-parse HEAD).Trim()
@@ -29,14 +29,14 @@ if ($receipt.runtimeDllSha256 -cne $dllHash -or
     $receipt.nativeSourceTreeSha256 -cne $inventory.acceptedNativeSourceTreeSha256) {
   throw 'Build receipt does not account for this package.'
 }
-if ($version -cin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-startup-fix-test.1', '0.5.16-marker-route-fix-test.1', '0.5.16-perf-glow-test.1')) {
+if ($version -cin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-startup-fix-test.1', '0.5.16-marker-route-fix-test.1', '0.5.16-perf-glow-test.1', '0.5.17')) {
   $expectedTests = @(
     'tracking_test', 'renderer_test', 'markers_test', 'map_features_test',
     'client_1_0_test', 'frame_failure_test', 'hdr_test', 'patch_profile_test',
     'menu_visibility_test', 'compat_copy_test', 'marker_summary_test',
     'public_creative_compat_test'
   )
-  if ($version -cin @('0.5.16', '0.5.16-startup-fix-test.1', '0.5.16-marker-route-fix-test.1', '0.5.16-perf-glow-test.1')) {
+  if ($version -cin @('0.5.16', '0.5.16-startup-fix-test.1', '0.5.16-marker-route-fix-test.1', '0.5.16-perf-glow-test.1', '0.5.17')) {
     $expectedTests += 'swapchain_startup_test'
   }
   $actualTests = @($receipt.tests | ForEach-Object { $_.name })

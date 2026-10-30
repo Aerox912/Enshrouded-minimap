@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "version": "0.5.16",
-  "sourceInputPurpose": "Complete Minimap 0.5.16 release source and packaging inputs; production diagnostics disabled. Includes tested minimap behavior and full required runtime assets.",
-  "acceptedNativeSourceTreeSha256": "f8621fc97fadadd89c0c7a229da7fdf9296642e636a0251d442cba83e0de4eea",
+  "version": "0.5.17",
+  "sourceInputPurpose": "Complete Minimap 0.5.17 release source and packaging inputs; production diagnostics disabled. Includes tested minimap behavior and full required runtime assets.",
+  "acceptedNativeSourceTreeSha256": "0058b82bc62b56d7fc73952ac154fba914caab8652fedf8cdea15d190e02ff4d",
   "nativePaths": [
     ".gitattributes",
     ".github/workflows/release.yml",
@@ -66,6 +66,7 @@
     "docs/releases/v0.5.3.md",
     "docs/releases/v0.5.4.md",
     "docs/SQUARE-FRAME-PROVENANCE.md",
+    "docs/teleport-adapter-source-setup.json",
     "docs/world-clock.md",
     "include/memory_utils.h",
     "include/shroudtopia.h",
@@ -182,10 +183,13 @@
     "src/map_appearance.h",
     "src/marker_glow_policy.h",
     "src/menu_visibility_1_0.h",
+    "src/native_filter_probe.h",
     "src/pch.cpp",
     "src/pch.h",
     "src/present_decision_trace.h",
     "src/public_creative_compat.h",
+    "src/public_greeneye_compat.h",
+    "src/public_owner_identity.h",
     "src/renderer_ownership_adapter.h",
     "src/renderer_ownership_api.h",
     "src/terrain_gpu.h",
@@ -201,6 +205,8 @@
     "tests/aggregate_timing_expanded_red_test.cpp",
     "tests/aggregate_timing_loss_classification_test.cpp",
     "tests/aggregate_timing_loss_classification_test.vcxproj",
+    "tests/aggregate_timing_policy_test.cpp",
+    "tests/aggregate_timing_policy_test.vcxproj",
     "tests/aggregate_timing_red.vcxproj",
     "tests/aggregate_timing_red_stub.cpp",
     "tests/aggregate_timing_red_test.cpp",
@@ -233,11 +239,13 @@
     "tests/marker_summary_test.vcxproj",
     "tests/menu_visibility_test.cpp",
     "tests/menu_visibility_test.vcxproj",
+    "tests/native_filter_probe_test.cpp",
     "tests/patch_profile_test.cpp",
     "tests/patch_profile_test.vcxproj",
     "tests/perf_verify/perf_verify_gpu_test.cpp",
     "tests/perf_verify/perf_verify_gpu_test.vcxproj",
     "tests/prepare_marker_summary_test.py",
+    "tests/prepare_public_creative301_fixture.py",
     "tests/prepare_public_creative_fixture.py",
     "tests/present_decision_trace_compileout_test.cpp",
     "tests/present_decision_trace_test.cpp",
@@ -262,6 +270,8 @@
     "tests/square_map_test.vcxproj",
     "tests/swapchain_startup_test.cpp",
     "tests/swapchain_startup_test.vcxproj",
+    "tests/teleport_ownership_test.cpp",
+    "tests/teleport_ownership_test.vcxproj",
     "tests/terrain_dispatch_test.cpp",
     "tests/terrain_dispatch_test.vcxproj",
     "tests/terrain_test.cpp",
@@ -282,8 +292,8 @@
     },
     {
       "path": ".github/workflows/release.yml",
-      "lengthBytes": 2180,
-      "sha256": "9819ff8f6ff2b753689968e65f47b4e2dba0d5bb95781051905d086330a51d4d"
+      "lengthBytes": 2190,
+      "sha256": "4633208a541f02fd39f3456470fca0175aeab8e06600e66dce7b46473e821e05"
     },
     {
       "path": ".gitignore",
@@ -341,6 +351,11 @@
       "sha256": "33780a301f503cf115eceee3a6c9714758caea82eab2ba260adc2660f7fc1f1f"
     },
     {
+      "path": "assets/embervale_minimap_icons.bin",
+      "lengthBytes": 180612,
+      "sha256": "6b9eca6a8974d1baeb3d02377d4167cba5fb0ea50448c6ba6acf74539fbb4692"
+    },
+    {
       "path": "assets/embervale_minimap_icon_atlas.frag",
       "lengthBytes": 4607,
       "sha256": "6d5032b4703a175fdad6bce034c3df022457b8ac122c65002aee99a533ff55bc"
@@ -359,11 +374,6 @@
       "path": "assets/embervale_minimap_icon_atlas.vert.spv",
       "lengthBytes": 2228,
       "sha256": "8bc1ee269be287faaee628215e872404e679172868b3aa554a549e6733da3c86"
-    },
-    {
-      "path": "assets/embervale_minimap_icons.bin",
-      "lengthBytes": 180612,
-      "sha256": "6b9eca6a8974d1baeb3d02377d4167cba5fb0ea50448c6ba6acf74539fbb4692"
     },
     {
       "path": "assets/embervale_minimap_marker_glow.frag",
@@ -452,8 +462,8 @@
     },
     {
       "path": "assets/mod.json",
-      "lengthBytes": 1544,
-      "sha256": "bcf230010f18a10b9b5d747f12f6990d0472c77a05a3f789efc64ff38370a312"
+      "lengthBytes": 1541,
+      "sha256": "9707283d4808eb34eb618a975744e52f459bbb4618e3dc337d9c71b6d639bffd"
     },
     {
       "path": "assets/realmap-provenance.json",
@@ -482,13 +492,13 @@
     },
     {
       "path": "ci/build.ps1",
-      "lengthBytes": 7593,
-      "sha256": "9ec07dcd1cb621ca1bf888d440e44ddc161784fd0260c6ee57732461617d493a"
+      "lengthBytes": 7771,
+      "sha256": "43dd45005a70008fbe188a6e643d7e539f440478cdd28cad60e39cfa13ee6ac6"
     },
     {
       "path": "ci/pipeline-tests.ps1",
-      "lengthBytes": 10687,
-      "sha256": "dedd4d3382b3a75c5a2081e9593943cf2c04a13c544a0fa79e9ecc9e0ce018aa"
+      "lengthBytes": 10707,
+      "sha256": "86dbfe48d7952181c9f7fae368de7ecd30e16986a4c9771f74aa866d1d6aceb1"
     },
     {
       "path": "ci/verify-source.ps1",
@@ -586,6 +596,11 @@
       "sha256": "4020d409bbab239881a4e3cc1802e3ee4cabaeb7cd8464884ce692db8048b172"
     },
     {
+      "path": "docs/teleport-adapter-source-setup.json",
+      "lengthBytes": 3509,
+      "sha256": "ee1c46899960ee72b47d98c0a088bf1f432aa3d5c3176bd9f8d83ae17875c2a8"
+    },
+    {
       "path": "docs/world-clock.md",
       "lengthBytes": 3083,
       "sha256": "f763161248687fd1676da3042baf0bddf37e652457b417280d0da97b9e77a70c"
@@ -612,8 +627,8 @@
     },
     {
       "path": "minimap_mod.vcxproj",
-      "lengthBytes": 6652,
-      "sha256": "1d266b1c9fa0e6bf6e62cf27e0f946aeb712ca27a6b0821bdc2e224447fbd8f0"
+      "lengthBytes": 8899,
+      "sha256": "09497ecd161ccd634df27336f03b27610618fb21143fd87bfc74a95efdc6c933"
     },
     {
       "path": "minimap_mod.vcxproj.filters",
@@ -622,8 +637,8 @@
     },
     {
       "path": "package-release.ps1",
-      "lengthBytes": 6879,
-      "sha256": "c3593d81b75d6f8ab43bd66c0a141eb872ed0aba2cd543bfd5210f6662498ce6"
+      "lengthBytes": 6909,
+      "sha256": "f95f2a0827872a3370d38faa5025a492ffd9b707ba3bd7bf13e970541e2c0fb7"
     },
     {
       "path": "README-INSTALL.txt",
@@ -1107,8 +1122,8 @@
     },
     {
       "path": "src/aggregate_timing.h",
-      "lengthBytes": 17445,
-      "sha256": "c2ce67f2cdd344d44fe635a6f828cc4eba04366bca6da595753d56b3a4714f7b"
+      "lengthBytes": 17537,
+      "sha256": "2839dcd22d894a86809d5d31ff7b5423fac984bcfbc0e2cefae53a15802f8174"
     },
     {
       "path": "src/arrow_glow_policy.h",
@@ -1142,8 +1157,8 @@
     },
     {
       "path": "src/dllmain.cpp",
-      "lengthBytes": 632390,
-      "sha256": "9bbb63ae26380f8b7a0abbb5b72f3956c92123cc4c368daeceb2d1039e2ba96b"
+      "lengthBytes": 665369,
+      "sha256": "abcbe6971d5b04b5e20c4b0ee8ed7d851f3a616edb2d3fb18ec72414aa0ddc81"
     },
     {
       "path": "src/live_markers.h",
@@ -1166,6 +1181,11 @@
       "sha256": "150ab87ac4a0e6424570878a7022978837a5e4209cb0b6823462fe2589125dd3"
     },
     {
+      "path": "src/native_filter_probe.h",
+      "lengthBytes": 11278,
+      "sha256": "cb571c6d873da627c5af3de2688bd064cab0622f2f62a1e7b6e2cd1d0c3cdde9"
+    },
+    {
       "path": "src/pch.cpp",
       "lengthBytes": 18,
       "sha256": "f1a03d6510be0ca46b84609263a9ca9167fbe905a7c07e40bcc0b07658e1eaff"
@@ -1182,8 +1202,18 @@
     },
     {
       "path": "src/public_creative_compat.h",
-      "lengthBytes": 32831,
-      "sha256": "178e64e51123ad6502c462427069e15567e5199b0aab8d8e5ca342afbcc911e2"
+      "lengthBytes": 27377,
+      "sha256": "a193b2ffe02dc66691cd637e0d696effb56b1a32b5cc8607b3b4ffec555757bc"
+    },
+    {
+      "path": "src/public_greeneye_compat.h",
+      "lengthBytes": 7064,
+      "sha256": "ace3170a219e14fe9890d695a417da976db5755242c39a848738e5f315817782"
+    },
+    {
+      "path": "src/public_owner_identity.h",
+      "lengthBytes": 10981,
+      "sha256": "5e184aab3780e8a8a98ab9684d22be75522eebd40260e020376274ccd342f3de"
     },
     {
       "path": "src/renderer_ownership_adapter.h",
@@ -1236,6 +1266,11 @@
       "sha256": "f73283c8189fa9c12767d5bc67f280b0ead98c5b210ad7539a80738ed35c8ae4"
     },
     {
+      "path": "tests/aggregate_timing_expanded_red.vcxproj",
+      "lengthBytes": 2116,
+      "sha256": "95d0466021ad758dffe893dc0c9348c8be78ac47387692d0f2e3b473c4324da5"
+    },
+    {
       "path": "tests/aggregate_timing_expanded_red_stub.cpp",
       "lengthBytes": 3729,
       "sha256": "644d1ba5456871305e066340b0be6051d3a28b48380436299ffe4f6db1c47a6a"
@@ -1244,11 +1279,6 @@
       "path": "tests/aggregate_timing_expanded_red_test.cpp",
       "lengthBytes": 27921,
       "sha256": "fb9dbf10b5cc453629d101ddd3d92857aee26a06533c25afabc7d77235d4e738"
-    },
-    {
-      "path": "tests/aggregate_timing_expanded_red.vcxproj",
-      "lengthBytes": 2116,
-      "sha256": "95d0466021ad758dffe893dc0c9348c8be78ac47387692d0f2e3b473c4324da5"
     },
     {
       "path": "tests/aggregate_timing_loss_classification_test.cpp",
@@ -1261,6 +1291,21 @@
       "sha256": "0db75b3a2b2b737bd233d40563c726c814228ef30035aa41850a7bc65e419bbc"
     },
     {
+      "path": "tests/aggregate_timing_policy_test.cpp",
+      "lengthBytes": 6001,
+      "sha256": "c85ddd983c850e5d8aac365fe978f2edb248f8571b98cfeacb2eb4dd8b6df703"
+    },
+    {
+      "path": "tests/aggregate_timing_policy_test.vcxproj",
+      "lengthBytes": 2661,
+      "sha256": "7f6d3c74971363b42c7d1f5d4590895a93a4c6b3c6ccacca0eb3f7cadbfb0d68"
+    },
+    {
+      "path": "tests/aggregate_timing_red.vcxproj",
+      "lengthBytes": 2071,
+      "sha256": "06311ee80f0241072ac073d7ec75f7de59d859c40df7906484cdecb9159737d3"
+    },
+    {
       "path": "tests/aggregate_timing_red_stub.cpp",
       "lengthBytes": 3523,
       "sha256": "47bd81d530bf0bf3c478fe6bd056e9717de83a2749675bcf2fa30c703c56c146"
@@ -1269,11 +1314,6 @@
       "path": "tests/aggregate_timing_red_test.cpp",
       "lengthBytes": 1673,
       "sha256": "e86eccc14faf0fd872a7deec2a9157294e4669bfc7d1e896712d92ef36b4c676"
-    },
-    {
-      "path": "tests/aggregate_timing_red.vcxproj",
-      "lengthBytes": 2071,
-      "sha256": "06311ee80f0241072ac073d7ec75f7de59d859c40df7906484cdecb9159737d3"
     },
     {
       "path": "tests/aggregate_timing_report_chunk_test.cpp",
@@ -1367,18 +1407,28 @@
     },
     {
       "path": "tests/map_features_test.cpp",
-      "lengthBytes": 146262,
-      "sha256": "db19a6139962d13c1c058054b972bcb1e21dcd52e961c3457353e1e3e17e9543"
+      "lengthBytes": 178537,
+      "sha256": "090752d465b69e907cf845f7b2e1873d8e8f83c7cf60cf19830c8b3c9833ccb2"
     },
     {
       "path": "tests/map_features_test.vcxproj",
-      "lengthBytes": 2068,
-      "sha256": "4362ea2a41a43e9a5a0fffaf4f5fd9db701fa9b3bcf2dd58e5c305bc79cd18c9"
+      "lengthBytes": 2509,
+      "sha256": "1b74fdff70c262c3ade73b8571195f80ac73136ad9f58542c7baea6f9b331c6a"
+    },
+    {
+      "path": "tests/markers_test.cpp",
+      "lengthBytes": 14921,
+      "sha256": "72372b79d7e5ec84f21821c1ea60be79a2897ecb987260073f79865bfd8897e6"
+    },
+    {
+      "path": "tests/markers_test.vcxproj",
+      "lengthBytes": 2058,
+      "sha256": "bf42ba987b8a298bc0d87256ae85799acfbdf74eb3f39bf89b558295d128e53c"
     },
     {
       "path": "tests/marker_glow_test.cpp",
-      "lengthBytes": 20236,
-      "sha256": "9eb175239325569c26bad1300239001e64aa039d922b4e92c60691afe2480b7c"
+      "lengthBytes": 20427,
+      "sha256": "5ea3d3b940ce77676a9a2c990cb989161a101a3e688bbc23d27adf0c35035448"
     },
     {
       "path": "tests/marker_glow_test.vcxproj",
@@ -1401,16 +1451,6 @@
       "sha256": "1905cbe60f2aa55783d95d3f5ab0efe7386adf60bc1cdd221e8db80df96d9405"
     },
     {
-      "path": "tests/markers_test.cpp",
-      "lengthBytes": 14921,
-      "sha256": "72372b79d7e5ec84f21821c1ea60be79a2897ecb987260073f79865bfd8897e6"
-    },
-    {
-      "path": "tests/markers_test.vcxproj",
-      "lengthBytes": 2058,
-      "sha256": "bf42ba987b8a298bc0d87256ae85799acfbdf74eb3f39bf89b558295d128e53c"
-    },
-    {
       "path": "tests/menu_visibility_test.cpp",
       "lengthBytes": 9153,
       "sha256": "cea3354a4fa5eea7681ff994be67ae393ae1a1f98845533f8fbdb15d3b6c944a"
@@ -1419,6 +1459,11 @@
       "path": "tests/menu_visibility_test.vcxproj",
       "lengthBytes": 1791,
       "sha256": "bae14d9e7ae6cd6192e66569c80fc023a59b88b1f88e04abd0b5b803df532343"
+    },
+    {
+      "path": "tests/native_filter_probe_test.cpp",
+      "lengthBytes": 18601,
+      "sha256": "0cbbd7a643a0b8d989e5920d11ac08fecb8d1e085be9fc5d9134c5540185a1e6"
     },
     {
       "path": "tests/patch_profile_test.cpp",
@@ -1444,6 +1489,11 @@
       "path": "tests/prepare_marker_summary_test.py",
       "lengthBytes": 1803,
       "sha256": "689d2b7611b2f99cac672ce6bbe22f22956d37635f9a19cdad96e134a6e9cb2c"
+    },
+    {
+      "path": "tests/prepare_public_creative301_fixture.py",
+      "lengthBytes": 3002,
+      "sha256": "b7e838bbd1851ed3479e08b9be0d7053c8db17dbbaad201aaa2800f9f3844e12"
     },
     {
       "path": "tests/prepare_public_creative_fixture.py",
@@ -1482,13 +1532,13 @@
     },
     {
       "path": "tests/public_creative_compat_test.cpp",
-      "lengthBytes": 67802,
-      "sha256": "b7dcb1fe3fb7cbee7ff12d22dcf3df54d99342681884d06529654c224a7f1059"
+      "lengthBytes": 77490,
+      "sha256": "8fe378a26f379278824e7223ee41d0f563c03d02c98fac12b27fa352934cf4b2"
     },
     {
       "path": "tests/public_creative_compat_test.vcxproj",
-      "lengthBytes": 2264,
-      "sha256": "9cb82fa78e33c2351175e34d1fec55e4e495574ee2681a0f609ca0793b930f49"
+      "lengthBytes": 2299,
+      "sha256": "111d0f695729f631c6945ea9d7ffb996ba3240f42026291a1523325750298414"
     },
     {
       "path": "tests/public_creative_timing_red.vcxproj",
@@ -1522,8 +1572,8 @@
     },
     {
       "path": "tests/reporter_renderer_optimization_test.cpp",
-      "lengthBytes": 56503,
-      "sha256": "53f219c02b0f9facd73cac739d053b96191cf15995c03f455d11b92d310f2753"
+      "lengthBytes": 56467,
+      "sha256": "8402263f8d4947720b1265d49346ac516d6f2b7aec86a7725972ab07c59f3e3e"
     },
     {
       "path": "tests/reporter_renderer_optimization_test.vcxproj",
@@ -1566,9 +1616,19 @@
       "sha256": "318ddac48580a660141d5a80806dbfcf7ddf008d215b31855edb86f6167f01f9"
     },
     {
+      "path": "tests/teleport_ownership_test.cpp",
+      "lengthBytes": 32244,
+      "sha256": "7eeb100206bfa0e5bb113e76c7261014408cae4c3eb1f841ef8aeac01f169a6f"
+    },
+    {
+      "path": "tests/teleport_ownership_test.vcxproj",
+      "lengthBytes": 2054,
+      "sha256": "089a13e53d4f624ef8b93dae43ba4d30250d0040fae88dfca471a16c0f13acaa"
+    },
+    {
       "path": "tests/terrain_dispatch_test.cpp",
-      "lengthBytes": 18197,
-      "sha256": "995587b5444118dcd12e38029c8ea7b68fd2a349d441d32b19a1152a9f1be3ac"
+      "lengthBytes": 18250,
+      "sha256": "4c41c6262a77534dc81e6b3100e3e259daef63c740cc096fb9b19bf4e86cf0e8"
     },
     {
       "path": "tests/terrain_dispatch_test.vcxproj",
