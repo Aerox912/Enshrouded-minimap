@@ -1,10 +1,12 @@
 // Focused behavior checks for the independent procedural marker-glow pipeline.
+#define MINIMAP_TEST_ICON_ATLAS_MUTATION 1
 #pragma warning(push)
 #pragma warning(disable: 4715)
 #define main MarkerGlowFrameResourceChecks
 #include "frame_failure_test.cpp"
 #undef main
 #pragma warning(pop)
+#undef MINIMAP_TEST_ICON_ATLAS_MUTATION
 #include <fstream>
 #include <set>
 #include <string>
@@ -332,14 +334,16 @@ int main(int argc, char** argv)
     CheckMarker(markerGpuDraws == drawsBeforeWaypointAfterPingOff + 1,
         "waypoint glow remains independently active while ping glow is off");
 
-    g_minimapIcons = {};
-    g_minimapIcons.attempted = true;
-    g_minimapIcons.loaded = true;
     MinimapIcon rasterDeath{};
     rasterDeath.key = 77;
     rasterDeath.width = rasterDeath.height = 1;
     rasterDeath.rgba = { 255, 32, 32, 255 };
-    g_minimapIcons.icons.push_back(rasterDeath);
+    MutateMinimapIconAtlasForTest([&](MinimapIconAtlas& atlas) {
+        atlas = {};
+        atlas.attempted = true;
+        atlas.loaded = true;
+        atlas.icons.push_back(rasterDeath);
+    });
     markerPushBytes.clear();
     markerPushSizes.clear();
     markerCommands.clear();
@@ -361,7 +365,7 @@ int main(int argc, char** argv)
     else
         CheckMarker(false, "death push constants are captured");
 
-    g_minimapIcons.icons.clear();
+    MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) { atlas.icons.clear(); });
     markerCommands.clear();
     markerPushBytes.clear();
     markerPushSizes.clear();

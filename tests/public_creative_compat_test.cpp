@@ -8,6 +8,7 @@
 #include <bcrypt.h>
 #include "../src/aggregate_timing.h"
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -42,6 +43,9 @@ namespace PublicCreativeTest
     SIZE_T WINAPI Query(LPCVOID, PMEMORY_BASIC_INFORMATION, SIZE_T);
     BOOL WINAPI Working(HANDLE, PVOID, DWORD);
     HANDLE WINAPI BackingFile(LPCWSTR,DWORD,DWORD,LPSECURITY_ATTRIBUTES,DWORD,DWORD,HANDLE);
+    BOOL WINAPI BackingRead(HANDLE,LPVOID,DWORD,LPDWORD,LPOVERLAPPED);
+    BOOL WINAPI BackingInfo(HANDLE,LPBY_HANDLE_FILE_INFORMATION);
+    void OwnerPhase(bool);
     void Dispatch(void (*)());
 }
 #define BCryptOpenAlgorithmProvider PublicCreativeTest::OpenAlgorithmProvider
@@ -49,6 +53,8 @@ namespace PublicCreativeTest
 #define BCryptCreateHash PublicCreativeTest::CreateHash
 #define GetModuleHandleExW PublicCreativeTest::Module
 #define CreateFileW PublicCreativeTest::BackingFile
+#define ReadFile PublicCreativeTest::BackingRead
+#define GetFileInformationByHandle PublicCreativeTest::BackingInfo
 #define GetModuleFileNameW PublicCreativeTest::ModulePath
 #define GetProcAddress PublicCreativeTest::Procedure
 #define FreeLibrary PublicCreativeTest::Release
@@ -56,6 +62,7 @@ namespace PublicCreativeTest
 #define K32QueryWorkingSetEx PublicCreativeTest::Working
 #define VirtualAlloc PublicCreativeTest::Allocate
 #define GetTickCount64 PublicCreativeTest::TickCount64
+#define MM_PUBLIC_OWNER_SAMPLE_PHASE(enter) PublicCreativeTest::OwnerPhase(enter)
 // The baseline TU has exactly one original() call, in the real HUD wrapper.
 // The argument retains gameBase+RendererRva; Dispatch never calls that address.
 // Intercept only the zero-argument HUD forwarding boundary. The reporter also
@@ -65,6 +72,7 @@ namespace PublicCreativeTest
 #define MM_TEST_ORIGINAL_HUD(...) PublicCreativeTest::Dispatch(original)
 #define original(...) MM_TEST_ORIGINAL_SELECT(_ __VA_OPT__(,) __VA_ARGS__,MM_TEST_ORIGINAL_KEEP,MM_TEST_ORIGINAL_KEEP,MM_TEST_ORIGINAL_KEEP,MM_TEST_ORIGINAL_KEEP,MM_TEST_ORIGINAL_HUD)(__VA_ARGS__)
 #include "../src/dllmain.cpp"
+#undef MM_PUBLIC_OWNER_SAMPLE_PHASE
 #undef original
 #undef MM_TEST_ORIGINAL_SELECT
 #undef MM_TEST_ORIGINAL_KEEP
@@ -81,6 +89,8 @@ namespace PublicCreativeTest
 #undef GetModuleFileNameW
 #undef GetModuleHandleExW
 #undef CreateFileW
+#undef ReadFile
+#undef GetFileInformationByHandle
 
 namespace PublicCreativeTest
 {
@@ -90,6 +100,20 @@ namespace PublicCreativeTest
     size_t TemplateRva = 0x3eb7e0;
     constexpr size_t TemplateSize = 0x187;
     size_t SlotRva = 0x514ba8;
+    // Independent 3.0.1 fixture literals from the accepted static contract.
+    // Keep these separate from the production profile descriptor.
+    constexpr size_t Creative301ImageSize = 0x5ea000;
+    constexpr size_t Creative301FileSize = 6122496;
+    constexpr size_t Creative301Callback = 0x503d;
+    constexpr size_t Creative301Body = 0x1d8a90;
+    constexpr size_t Creative301Pattern = 0x454890;
+    constexpr size_t Creative301Slot = 0x597490;
+    constexpr size_t Creative301BodySize = 0x103;
+    constexpr size_t Creative301ObjectSize = 0x160;
+    constexpr char Creative301FileHash[] = "d769e38379d5224ef6d4dffa478b99af4ff3fe5a14733cd12849a08c7435eefe";
+    constexpr char Creative301BodyHash[] = "67d6b9f7150e911f2a17b02ae45a585bc43b3e48eaea255d86b6d4b32b4d369e";
+    constexpr char Creative301TemplateHash[] = "194e3705b88d175140ae903807da6a5955b43c0ced7388172ab7d6e0be06c69c";
+    constexpr std::uint8_t Creative301Thunk[5] = {0xe9,0x4e,0x3a,0x1d,0x00};
     constexpr std::uint8_t Prefix[18] = {
         0x4c,0x8b,0xdc,0x55,0x49,0x8d,0xab,0xe8,0xfd,0xff,0xff,0x48,0x81,0xec,0x10,0x03,0,0};
     std::uint8_t* module = nullptr;
@@ -100,11 +124,27 @@ namespace PublicCreativeTest
     bool findModuleAvailable = true;
     std::wstring findModulePath;
     constexpr size_t FindImageSize = 0x106000;
-    unsigned backingFileOpenCalls = 0;
+    std::uint8_t* teleportModule = nullptr;
+    bool teleportModuleAvailable = true;
+    std::wstring teleportModulePath;
+    constexpr size_t TeleportImageSize = 0x73000;
+    std::atomic<unsigned> backingFileOpenCalls{0};
+    std::atomic<unsigned> backingReadCalls{0}, modulePathCalls{0}, workingSetCalls{0}, queryApiCalls{0};
+    std::atomic<unsigned> ownerWorkingSetCalls{0},ownerQueryCalls{0};
+    thread_local unsigned ownerDepth=0;
+    bool countOwnerPhases=false;
+    void OwnerPhase(bool enter){if(enter)++ownerDepth;else --ownerDepth;}
+    std::atomic<unsigned long long> backingReadBytes{0};
+    std::function<void(uintptr_t)> onWorkingPage;
+    std::function<void()> onBackingRead;
+    bool denyModulePath=false,wrongBackingSize=false,denyBackingReads=false,corruptBackingRead=false,unstableBackingMetadata=false;
+    unsigned backingInfoCalls=0;
+    bool forceWorkingSetFallback=false;
     bool denyBackingFileOpens = false;
     bool moduleAvailable = true;
     bool denyBlock = false;
-    size_t moduleAcquires = 0, moduleReleases = 0, nativeCalls = 0;
+    std::atomic<size_t> moduleAcquires{0}, moduleReleases{0};
+    size_t nativeCalls = 0;
     std::uint64_t mockTickCount = 0;
     bool useMockTickCount = false;
     bool nativeAddressCorrect = false, visibleInsideOriginal = false;
@@ -117,6 +157,37 @@ namespace PublicCreativeTest
     bool measureQuery = false;
     unsigned long long queryTicks = 0, queryCount = 0, queryMaxTicks = 0;
     unsigned long long Clock() { LARGE_INTEGER q{}; QueryPerformanceCounter(&q); return q.QuadPart; }
+
+    void Require(bool ok, const char* name);
+
+    void SelectCreative300Fixture()
+    {
+        CreativeImageSize = 0x5e3000; CallbackThunk = 0x4ff2; CallbackBody = 0x1d7470;
+        TemplateRva = 0x44f690; SlotRva = 0x591450;
+    }
+    void SelectCreative301Fixture()
+    {
+        CreativeImageSize = Creative301ImageSize; CallbackThunk = Creative301Callback;
+        CallbackBody = Creative301Body; TemplateRva = Creative301Pattern; SlotRva = Creative301Slot;
+    }
+    void ValidateCreative301Fixture(const std::vector<std::uint8_t>& file)
+    {
+        Require(file.size() == Creative301FileSize &&
+            PublicCreativeCompat::HasHash(file.data(), file.size(), Creative301FileHash),
+            "pinned Creative 3.0.1 full-file fixture hash");
+        Require(Creative301ObjectSize == 0x160 &&
+            CallbackThunk + sizeof(Creative301Thunk) <= CreativeImageSize &&
+            CallbackBody + Creative301BodySize <= CreativeImageSize &&
+            TemplateRva + TemplateSize <= CreativeImageSize &&
+            SlotRva + sizeof(std::uintptr_t) <= CreativeImageSize,
+            "Creative 3.0.1 bounded profile fixture ranges");
+        Require(std::memcmp(module + CallbackThunk, Creative301Thunk, sizeof(Creative301Thunk)) == 0,
+            "Creative 3.0.1 callback thunk fixture bytes");
+        Require(PublicCreativeCompat::HasHash(module + CallbackBody, Creative301BodySize,
+            Creative301BodyHash), "Creative 3.0.1 raw callback body fixture hash");
+        Require(PublicCreativeCompat::HasHash(module + TemplateRva, TemplateSize,
+            Creative301TemplateHash), "Creative 3.0.1 callback template fixture hash");
+    }
 
     uintptr_t A() { return reinterpret_cast<uintptr_t>(game) + ClientRva(MinimapMenu10::RendererRva); }
     uintptr_t Arena() { return reinterpret_cast<uintptr_t>(game) + gameSize; }
@@ -167,6 +238,10 @@ namespace PublicCreativeTest
         if (!result) return FALSE;
         *result = nullptr;
         if (flags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) {
+            if (moduleAvailable && teleportModuleAvailable && teleportModule && Inside(reinterpret_cast<uintptr_t>(name),
+                reinterpret_cast<uintptr_t>(teleportModule), TeleportImageSize)) {
+                *result = reinterpret_cast<HMODULE>(teleportModule); ++moduleAcquires; return TRUE;
+            }
             if (moduleAvailable && findModuleAvailable && findModule && Inside(reinterpret_cast<uintptr_t>(name),
                 reinterpret_cast<uintptr_t>(findModule), FindImageSize)) {
                 *result = reinterpret_cast<HMODULE>(findModule); ++moduleAcquires; return TRUE;
@@ -188,6 +263,14 @@ namespace PublicCreativeTest
     }
     DWORD WINAPI ModulePath(HMODULE value, LPWSTR output, DWORD cap)
     {
+        ++modulePathCalls;
+        if(denyModulePath)return 0;
+        if (teleportModule && value == reinterpret_cast<HMODULE>(teleportModule)) {
+            if (!output || cap <= teleportModulePath.size()) return 0;
+            std::copy(teleportModulePath.begin(), teleportModulePath.end(), output);
+            output[teleportModulePath.size()] = 0;
+            return static_cast<DWORD>(teleportModulePath.size());
+        }
         if (findModule && value == reinterpret_cast<HMODULE>(findModule)) {
             if (!output || cap <= findModulePath.size()) return 0;
             std::copy(findModulePath.begin(), findModulePath.end(), output);
@@ -201,6 +284,9 @@ namespace PublicCreativeTest
     }
     BOOL WINAPI Release(HMODULE value)
     {
+        if (teleportModule && value == reinterpret_cast<HMODULE>(teleportModule)) {
+            ++moduleReleases; return TRUE;
+        }
         if (findModule && value == reinterpret_cast<HMODULE>(findModule)) {
             ++moduleReleases; return TRUE;
         }
@@ -215,12 +301,18 @@ namespace PublicCreativeTest
     }
     SIZE_T WINAPI Query(LPCVOID address, PMEMORY_BASIC_INFORMATION info, SIZE_T cap)
     {
+        ++queryApiCalls;
+        if(countOwnerPhases && ownerDepth)++ownerQueryCalls;
         const auto start = measureQuery ? Clock() : 0;
         const SIZE_T read = ::VirtualQuery(address, info, cap);
         if (measureQuery) { const auto elapsed = Clock() - start; queryTicks += elapsed; ++queryCount; queryMaxTicks = (std::max)(queryMaxTicks,elapsed); }
         if (!read || !info) return read;
         const uintptr_t p = reinterpret_cast<uintptr_t>(address);
-        if (findModule && Inside(p, reinterpret_cast<uintptr_t>(findModule), FindImageSize)) {
+        if (teleportModule && Inside(p, reinterpret_cast<uintptr_t>(teleportModule), TeleportImageSize)) {
+            info->BaseAddress = teleportModule; info->AllocationBase = teleportModule;
+            info->RegionSize = TeleportImageSize; info->Type = MEM_IMAGE;
+            info->Protect = PAGE_EXECUTE_READ;
+        } else if (findModule && Inside(p, reinterpret_cast<uintptr_t>(findModule), FindImageSize)) {
             info->BaseAddress = findModule; info->AllocationBase = findModule;
             info->RegionSize = FindImageSize; info->Type = MEM_IMAGE;
             info->Protect = PAGE_EXECUTE_READ;
@@ -242,14 +334,19 @@ namespace PublicCreativeTest
     }
     BOOL WINAPI Working(HANDLE handle, PVOID output, DWORD bytes)
     {
+        ++workingSetCalls;
+        if(countOwnerPhases && ownerDepth)++ownerWorkingSetCalls;
+        if(forceWorkingSetFallback)return FALSE;
         const BOOL ok=::K32QueryWorkingSetEx(handle,output,bytes);
         if(!ok || !output) return ok;
         auto* rows=static_cast<PSAPI_WORKING_SET_EX_INFORMATION*>(output);
         for(DWORD i=0;i<bytes/sizeof(*rows);++i) {
             auto& row=rows[i]; const auto p=reinterpret_cast<uintptr_t>(row.VirtualAddress);
+            if(onWorkingPage) onWorkingPage(p);
             // The same fixture metadata seam as Query; no real page is executable.
             if(row.VirtualAttributes.Valid &&
-                ((findModule && Inside(p,reinterpret_cast<uintptr_t>(findModule),FindImageSize)) ||
+                ((teleportModule && Inside(p,reinterpret_cast<uintptr_t>(teleportModule),TeleportImageSize)) ||
+                 (findModule && Inside(p,reinterpret_cast<uintptr_t>(findModule),FindImageSize)) ||
                  Inside(p,reinterpret_cast<uintptr_t>(module),CreativeImageSize) ||
                  Inside(p,reinterpret_cast<uintptr_t>(game),gameSize) || Inside(p,Arena(),0x10000))) {
                 if(denyBlock && Inside(p,B(),0x1000)) row.VirtualAttributes.Valid=0;
@@ -257,6 +354,27 @@ namespace PublicCreativeTest
             }
         }
         return ok;
+    }
+    BOOL WINAPI BackingRead(HANDLE file, LPVOID output, DWORD size, LPDWORD read, LPOVERLAPPED overlap)
+    {
+        ++backingReadCalls;
+        if(onBackingRead) onBackingRead();
+        if(denyBackingReads){if(read)*read=0;return FALSE;}
+        const BOOL result=::ReadFile(file,output,size,read,overlap);
+        if(result && read && *read && corruptBackingRead)static_cast<unsigned char*>(output)[0]^=1;
+        if(read) backingReadBytes+=*read;
+        return result;
+    }
+    BOOL WINAPI BackingInfo(HANDLE file,LPBY_HANDLE_FILE_INFORMATION info)
+    {
+        ++backingInfoCalls;
+        const BOOL result=::GetFileInformationByHandle(file,info);
+        if(result && info)
+        {
+            if(wrongBackingSize)++info->nFileSizeLow;
+            if(unstableBackingMetadata && backingInfoCalls%2==0)++info->ftLastWriteTime.dwLowDateTime;
+        }
+        return result;
     }
     void Dispatch(void (*native)())
     {
@@ -742,11 +860,7 @@ namespace PublicCreativeTest
         onHashCreate = {};
         moduleAvailable = true;
         denyBlock = false;
-        CreativeImageSize = PublicCreativeCompat::Creative214.imageSize;
-        CallbackThunk = PublicCreativeCompat::Creative214.callback;
-        CallbackBody = PublicCreativeCompat::Creative214.body;
-        TemplateRva = PublicCreativeCompat::Creative214.pattern;
-        SlotRva = PublicCreativeCompat::Creative214.slot;
+        SelectCreative301Fixture();
 
         const auto publicFile = ReadFile(publicModuleDataPath);
         Require(ImageSize(publicFile) == CreativeImageSize, "pinned inert Creative image size");
@@ -771,6 +885,7 @@ namespace PublicCreativeTest
             moduleRegion.State == MEM_COMMIT && (moduleRegion.Protect & 0xff) == PAGE_READWRITE,
             "Creative data fixture is RW/NX");
         MapData(publicFile, module, CreativeImageSize);
+        ValidateCreative301Fixture(publicFile);
 
         g_exeBase = reinterpret_cast<std::uintptr_t>(game);
         g_exeImageSize = gameSize;
@@ -779,11 +894,12 @@ namespace PublicCreativeTest
 
         const auto warmIdentity = [&](unsigned kind) {
             Known(kind);
-            PublicCreativeCompat::ForgetIdentity();
+            PublicCreativeCompat::AdmissionEpochScope admission;
             Proof proof{};
-            Require(PublicCreativeCompat::Inspect(A(), proof), "warm pinned ownership proof");
+            Require(PublicCreativeCompat::Inspect(A(), proof,PublicCreativeCompat::ProofOrigin::AdmissionUpdate), "explicit Load admission primes pinned ownership proof");
             Require(proof.kind == kind, "warm proof detour kind");
             hashCreateCalls = 0;
+            backingFileOpenCalls=backingReadCalls=modulePathCalls=algorithmOpenCalls=0;
             return proof;
         };
 
@@ -801,20 +917,54 @@ namespace PublicCreativeTest
             Check(measured.digest == previous.digest, kind == 1 ?
                 "near proof digest is unchanged across warm sampling" :
                 "absolute proof digest is unchanged across warm sampling");
-            const std::string budgetName = std::string(detour) + " detour uses five warmed CNG hash contexts";
-            CheckHashCount(hashCreateCalls.load(), 5, budgetName.c_str());
+            const std::string budgetName = std::string(detour) + " detour uses only one aggregate warmed hash context";
+            CheckHashCount(hashCreateCalls.load(), 1, budgetName.c_str());
+            Check(backingFileOpenCalls==0 && backingReadCalls==0 && modulePathCalls==0 && algorithmOpenCalls==0,
+                "warm Creative uses owned approved bytes with no file, path or provider initialization work");
             expectedDigests[kind - 1] = measured.digest;
             PrintProofDigest(kind, measured.digest);
         }
 
+        // Refuse retired callback/profile shapes using only the current 3.0.1
+        // fixture's private mapped copy. No retired binary is an input.
+        for(std::uintptr_t retiredCallback : {std::uintptr_t{0x4877},std::uintptr_t{0x4ff2}})
+        {
+            warmIdentity(1);
+            Put(B()+0x177,reinterpret_cast<std::uintptr_t>(module)+retiredCallback);
+            Proof unsupported{};
+            bool scannedRetiredImage=false;
+            onWorkingPage=[&](std::uintptr_t page){if(page>=reinterpret_cast<std::uintptr_t>(module) &&
+                page<reinterpret_cast<std::uintptr_t>(module)+Creative301ImageSize)scannedRetiredImage=true;};
+            bool accepted=false;
+            {PublicCreativeCompat::AdmissionEpochScope admission;
+                accepted=PublicCreativeCompat::Inspect(A(),unsupported,PublicCreativeCompat::ProofOrigin::AdmissionUpdate);}
+            onWorkingPage={};
+            Check(!accepted && !scannedRetiredImage && unsupported.digest==Digest{} &&
+                backingFileOpenCalls==0 && backingReadCalls==0 && modulePathCalls==0,
+                "retired callback RVA rejects at active 3.0.1 allowlist before image scans or cold work");
+        }
+        const auto* mappedDos=reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+        const auto imageSizeField=reinterpret_cast<std::uintptr_t>(module)+mappedDos->e_lfanew+
+            offsetof(IMAGE_NT_HEADERS64,OptionalHeader)+offsetof(IMAGE_OPTIONAL_HEADER64,SizeOfImage);
+        for(DWORD unsupportedSize : {DWORD{0x555000},DWORD{0x5e3000}})
+        {
+            warmIdentity(1);Put(imageSizeField,unsupportedSize);
+            Proof unsupported{};
+            const bool accepted=PublicCreativeCompat::Inspect(A(),unsupported,PublicCreativeCompat::ProofOrigin::CallbackPost);
+            Put(imageSizeField,static_cast<DWORD>(Creative301ImageSize));
+            Check(!accepted && unsupported.digest==Digest{} && backingFileOpenCalls==0 && backingReadCalls==0 && modulePathCalls==0,
+                "retired Creative image header shape rejects the current mapped fixture without cold work");
+        }
+
         warmIdentity(1);
         const auto changedBlockByte = *reinterpret_cast<std::uint8_t*>(B() + 0x40);
-        onHashCreate = [changedBlockByte](unsigned call) {
-            if (call == 4) *reinterpret_cast<std::uint8_t*>(B() + 0x40) = changedBlockByte ^ 1;
+        unsigned blockVisits=0;
+        onWorkingPage = [&](uintptr_t page) {
+            if (page==B() && ++blockVisits==2) *reinterpret_cast<std::uint8_t*>(B() + 0x40) = changedBlockByte ^ 1;
         };
         Proof changedChain{};
         const bool changedChainAccepted = PublicCreativeCompat::Inspect(A(), changedChain);
-        onHashCreate = {};
+        onWorkingPage = {};
         *reinterpret_cast<std::uint8_t*>(B() + 0x40) = changedBlockByte;
         Check(!changedChainAccepted, "second chain snapshot mutation rejects proof");
         Check(changedChain.digest == Digest{}, "second chain mutation clears proof digest");
@@ -822,22 +972,25 @@ namespace PublicCreativeTest
 
         warmIdentity(1);
         const auto changedBodyByte = module[CallbackBody + 0x20];
-        onHashCreate = [changedBodyByte](unsigned call) {
-            if (call == 4) module[CallbackBody + 0x20] = changedBodyByte ^ 1;
+        unsigned bodyVisits=0;
+        const auto bodyPage=(reinterpret_cast<uintptr_t>(module)+CallbackBody)&~uintptr_t(4095);
+        onWorkingPage = [&](uintptr_t page) {
+            if (page==bodyPage && ++bodyVisits==2) module[CallbackBody + 0x20] = changedBodyByte ^ 1;
         };
         Proof changedImage{};
         const bool changedImageAccepted = PublicCreativeCompat::Inspect(A(), changedImage);
-        onHashCreate = {};
+        onWorkingPage = {};
         module[CallbackBody + 0x20] = changedBodyByte;
         Check(!changedImageAccepted, "second image snapshot mutation rejects proof");
         Check(changedImage.digest == Digest{}, "second image mutation clears proof digest");
         std::cout << "second_image_mutation_contexts=" << hashCreateCalls.load() << '\n';
 
         warmIdentity(1);
-        onHashCreate = [](unsigned call) { if (call == 4) denyBlock = true; };
+        blockVisits=0;
+        onWorkingPage = [&](uintptr_t page) { if (page==B() && ++blockVisits==2) denyBlock = true; };
         Proof unreadableSecondSnapshot{};
         const bool unreadableAccepted = PublicCreativeCompat::Inspect(A(), unreadableSecondSnapshot);
-        onHashCreate = {};
+        onWorkingPage = {};
         denyBlock = false;
         Check(!unreadableAccepted, "second snapshot read failure rejects proof");
         Check(unreadableSecondSnapshot.digest == Digest{}, "second snapshot read failure clears proof digest");
@@ -845,11 +998,11 @@ namespace PublicCreativeTest
 
         warmIdentity(1);
         hashCreateCalls = 0;
-        failHashCreateAt = 4;
+        failHashCreateAt = 1;
         Proof failedRequiredHash{};
         const bool acceptedWithHashFailure = PublicCreativeCompat::Inspect(A(), failedRequiredHash);
         failHashCreateAt = 0;
-        Check(!acceptedWithHashFailure, "required image hash failure rejects proof");
+        Check(!acceptedWithHashFailure, "required aggregate hash failure rejects proof");
         Check(failedRequiredHash.digest == Digest{}, "required hash failure clears proof digest");
         Proof recovered{};
         const bool recoveredAfterHashFailure = PublicCreativeCompat::Inspect(A(), recovered);
@@ -868,13 +1021,13 @@ namespace PublicCreativeTest
         module[TemplateRva + 0x10] = patternByte ^ 1;
         Check(!PublicCreativeCompat::ReadImage(reinterpret_cast<std::uintptr_t>(module),
             reinterpret_cast<std::uintptr_t>(module) + CallbackThunk, image,
-            PublicCreativeCompat::Creative214), "full ReadImage wrapper rejects changed pinned template");
+            PublicCreativeCompat::Creative301), "full ReadImage wrapper rejects changed pinned template");
         module[TemplateRva + 0x10] = patternByte;
         const auto bodyByte = module[CallbackBody + 0x20];
         module[CallbackBody + 0x20] = bodyByte ^ 1;
         Check(!PublicCreativeCompat::ReadImage(reinterpret_cast<std::uintptr_t>(module),
             reinterpret_cast<std::uintptr_t>(module) + CallbackThunk, image,
-            PublicCreativeCompat::Creative214), "full ReadImage wrapper rejects changed pinned body");
+            PublicCreativeCompat::Creative301), "full ReadImage wrapper rejects changed pinned body");
         module[CallbackBody + 0x20] = bodyByte;
 
         const Proof beforeCallback = warmIdentity(1);
@@ -896,10 +1049,13 @@ namespace PublicCreativeTest
             "fresh callback post-sample rejects intervening mutation");
         module[CallbackBody + 0x20] = callbackBodyByte;
         Proof callbackRecovery{};
+        Check(!PublicCreativeCompat::Inspect(A(), callbackRecovery,PublicCreativeCompat::ProofOrigin::CallbackPost),
+            "observed mapped-body loss cannot be repaired by a callback retry");
+        warmIdentity(1);
         Check(PublicCreativeCompat::Inspect(A(), callbackRecovery,
             PublicCreativeCompat::ProofOrigin::CallbackPost) &&
             callbackRecovery.digest == beforeCallback.digest,
-            "callback proof recovers on a later stable sample");
+            "callback proof recovers after explicit new Load admission");
 
         PublicCreativeCompat::ForgetIdentity();
         ::VirtualFree(game, 0, MEM_RELEASE);
@@ -908,10 +1064,11 @@ namespace PublicCreativeTest
         g_exeBase = 0; g_exeImageSize = 0; g_client10 = false;
         std::cout << "cases=" << cases << " failed=" << failed << '\n';
     }
-    void FindChainChecks(const wchar_t* gamePath, const wchar_t* creativePath, const wchar_t* findPath, bool reporterSmoke=false)
+    void FindChainChecks(const wchar_t* gamePath, const wchar_t* creativePath,
+        const wchar_t* findPath, bool reporterSmoke=false, bool creative301=false)
     {
-        CreativeImageSize = 0x5e3000; CallbackThunk = 0x4ff2; CallbackBody = 0x1d7470;
-        TemplateRva = 0x44f690; SlotRva = 0x591450;
+        if (creative301) SelectCreative301Fixture();
+        else SelectCreative300Fixture();
         g_clientProfile = MinimapClient10::IdentifyFile(gamePath);
         Require(g_clientProfile == MinimapClient10::Profile::Build26082781, "current game fixture for Find chain");
         const auto gameFile = ReadFile(gamePath), creativeFile = ReadFile(creativePath), findFile = ReadFile(findPath);
@@ -923,6 +1080,7 @@ namespace PublicCreativeTest
         findModule = static_cast<std::uint8_t*>(::VirtualAlloc(nullptr, FindImageSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE));
         Require(game && module && findModule, "three private NX images for Find chain");
         MapData(gameFile, game, gameSize); MapData(creativeFile, module, CreativeImageSize);
+        if (creative301) ValidateCreative301Fixture(creativeFile);
         MapData(findFile, findModule, FindImageSize);
         g_exeBase = reinterpret_cast<uintptr_t>(game); g_exeImageSize = gameSize; g_client10 = true;
         modulePath = creativePath; findModulePath = findPath;
@@ -954,7 +1112,7 @@ namespace PublicCreativeTest
         known(); PublicCreativeCompat::Proof proof{};
         if (reporterSmoke) {
             Check(IsAdmitted(EvaluateCurrentMenuAdmission()), "reporter caller admits the pinned Creative-over-Find chain with current native guards");
-            const auto warmOpens=backingFileOpenCalls;
+            const auto warmOpens=backingFileOpenCalls.load();
             denyBackingFileOpens=true;
             Check(IsAdmitted(EvaluateCurrentMenuAdmission()) && backingFileOpenCalls==warmOpens,
                 "reporter warm ownership sample keeps fresh proof without reopening backing files");
@@ -970,8 +1128,10 @@ namespace PublicCreativeTest
             std::cout<<"cases="<<cases<<" failed="<<failed<<'\n'; return;
         }
 
-        Check(PublicCreativeCompat::Inspect(A(),proof), "Creative-over-Find exact observed ten-byte hook admits verified chain");
-        const auto coldOpens=backingFileOpenCalls;
+        Check(PublicCreativeCompat::Inspect(A(),proof), creative301 ?
+            "Creative 3.0.1-over-Find exact observed ten-byte hook admits verified chain" :
+            "Creative-over-Find exact observed ten-byte hook admits verified chain");
+        const auto coldOpens=backingFileOpenCalls.load();
         denyBackingFileOpens=true;
         Check(PublicCreativeCompat::Inspect(A(),proof) && backingFileOpenCalls==coldOpens,
             "warm combined chain verifies fresh mapped bytes without reopening either backing file");
@@ -1018,6 +1178,9 @@ int wmain(int argc, wchar_t** argv)
     if(argc==5 && std::wstring(argv[1])==L"--find-chain") {
         FindChainChecks(argv[2],argv[3],argv[4]); return failed ? 1 : 0;
     }
+    if(argc==5 && std::wstring(argv[1])==L"--find-chain-301") {
+        FindChainChecks(argv[2],argv[3],argv[4],false,true); return failed ? 1 : 0;
+    }
     if (argc == 2 && std::wstring(argv[1]) == L"--hash-provider") {
         HashProviderChecks();
         return failed ? 1 : 0;
@@ -1026,13 +1189,12 @@ int wmain(int argc, wchar_t** argv)
         ProofOptimizationChecks(argv[2]);
         return failed ? 1 : 0;
     }
-    if (argc < 4 || argc > 6) { std::cerr << "usage: test GAME_EXE GOOD_MODULE_DATA WRONG_MODULE_DATA [creative214|creative300 [OTHER_GOOD_MODULE_DATA]]\n"; return 2; }
-    if (argc >= 5) Require(std::wstring(argv[4]) == L"creative214" ||
-        std::wstring(argv[4]) == L"creative300", "explicit fixture profile");
-    if (argc >= 5 && std::wstring(argv[4]) == L"creative300") {
-        CreativeImageSize = 0x5e3000; CallbackThunk = 0x4ff2; CallbackBody = 0x1d7470;
-        TemplateRva = 0x44f690; SlotRva = 0x591450;
-    }
+    if (argc < 4 || argc > 6) { std::cerr << "usage: test GAME_EXE GOOD_MODULE_DATA WRONG_MODULE_DATA [creative214|creative300|creative301 [OTHER_GOOD_MODULE_DATA]]\n"; return 2; }
+    const std::wstring creativeProfile = argc >= 5 ? argv[4] : L"creative214";
+    if (argc >= 5) Require(creativeProfile == L"creative214" ||
+        creativeProfile == L"creative300" || creativeProfile == L"creative301", "explicit fixture profile");
+    if (creativeProfile == L"creative300") SelectCreative300Fixture();
+    else if (creativeProfile == L"creative301") SelectCreative301Fixture();
     g_clientProfile = MinimapClient10::IdentifyFile(argv[1]);
     Require(g_clientProfile != MinimapClient10::Profile::Unsupported, "pinned offline game fixture identity");
     const auto gameFile = ReadFile(argv[1]); const auto publicFile = ReadFile(argv[2]);
@@ -1041,6 +1203,7 @@ int wmain(int argc, wchar_t** argv)
     module = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, CreativeImageSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE));
     Require(game && module, "private NX image allocations");
     MapData(gameFile, game, gameSize); MapData(publicFile, module, CreativeImageSize);
+    if (creativeProfile == L"creative301") ValidateCreative301Fixture(publicFile);
     g_exeBase = reinterpret_cast<uintptr_t>(game); g_exeImageSize = gameSize; g_client10 = true;
     modulePath = argv[2];
     Raw(); Check(EvaluateCurrentMenuAdmission() == MenuAdmission::raw, "native standalone admission");

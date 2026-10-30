@@ -1,0 +1,100 @@
+{
+  "copiedFiles": [
+    {
+      "sha256": "9707283D4808EB34EB618A975744E52F459BBB4618E3DC337D9C71B6D639BFFD",
+      "path": "assets/mod.json",
+      "bytes": 1541
+    },
+    {
+      "sha256": "0BEC03556B8B7D88B6B8A9B03B495644603C5FCB0EDF4C273A14351861E914B7",
+      "path": "ci/build.ps1",
+      "bytes": 7761
+    },
+    {
+      "sha256": "B11BBE9165FA62D1835AFEFBD14DFBE6248A5207D7AA90EC08B46DD44CF04BB6",
+      "path": "minimap_mod.vcxproj",
+      "bytes": 8726
+    },
+    {
+      "sha256": "2839DCD22D894A86809D5D31FF7B5423FAC984BCFBC0E2CEFAE53A15802F8174",
+      "path": "src/aggregate_timing.h",
+      "bytes": 17537
+    },
+    {
+      "sha256": "6A3D59B33C6FC285C6663488A24F2D50B31C800B26DCFD0ECECFFAD9A5C3C4F6",
+      "path": "src/dllmain.cpp",
+      "bytes": 664599
+    },
+    {
+      "sha256": "E9306C43EB96F773DB502A96689F07249F04106E39D669993C6FAFE3666B4D92",
+      "path": "src/public_creative_compat.h",
+      "bytes": 34510
+    },
+    {
+      "sha256": "090752D465B69E907CF845F7B2E1873D8E8F83C7CF60CF19830C8B3C9833CCB2",
+      "path": "tests/map_features_test.cpp",
+      "bytes": 178537
+    },
+    {
+      "sha256": "1B74FDFF70C262C3ADE73B8571195F80AC73136AD9F58542C7BAEA6F9B331C6A",
+      "path": "tests/map_features_test.vcxproj",
+      "bytes": 2509
+    },
+    {
+      "sha256": "5EA3D3B940CE77676A9A2C990CB989161A101A3E688BBC23D27ADF0C35035448",
+      "path": "tests/marker_glow_test.cpp",
+      "bytes": 20427
+    },
+    {
+      "sha256": "B1801E941CECFB8CDB2875F1F14D4884AE8D289859E2FB26207360ADB91882F9",
+      "path": "tests/public_creative_compat_test.cpp",
+      "bytes": 70890
+    },
+    {
+      "sha256": "111D0F695729F631C6945EA9D7FFB996BA3240F42026291A1523325750298414",
+      "path": "tests/public_creative_compat_test.vcxproj",
+      "bytes": 2299
+    },
+    {
+      "sha256": "8402263F8D4947720B1265D49346AC516D6F2B7AEC86A7725972AB07C59F3E3E",
+      "path": "tests/reporter_renderer_optimization_test.cpp",
+      "bytes": 56467
+    },
+    {
+      "sha256": "4C41C6262A77534DC81E6B3100E3E259DAEF63C740CC096FB9B19BF4E86CF0E8",
+      "path": "tests/terrain_dispatch_test.cpp",
+      "bytes": 18250
+    },
+    {
+      "sha256": "CB571C6D873DA627C5AF3DE2688BD064CAB0622F2F62A1E7B6E2CD1D0C3CDDE9",
+      "path": "src/native_filter_probe.h",
+      "bytes": 11278
+    },
+    {
+      "sha256": "C85DDD983C850E5D8AAC365FE978F2EDB248F8571B98CFEACB2EB4DD8B6DF703",
+      "path": "tests/aggregate_timing_policy_test.cpp",
+      "bytes": 6001
+    },
+    {
+      "sha256": "7F6D3C74971363B42C7D1F5D4590895A93A4C6B3C6CCACCA0EB3F7CADBFB0D68",
+      "path": "tests/aggregate_timing_policy_test.vcxproj",
+      "bytes": 2661
+    },
+    {
+      "sha256": "0CBBD7A643A0B8D989E5920D11AC08FECB8D1E085BE9FC5D9134C5540185A1E6",
+      "path": "tests/native_filter_probe_test.cpp",
+      "bytes": 18601
+    },
+    {
+      "sha256": "B7E838BBD1851ED3479E08B9BE0D7053C8DB17DBBAAD201AAA2800F9F3844E12",
+      "path": "tests/prepare_public_creative301_fixture.py",
+      "bytes": 3002
+    }
+  ],
+  "target": "E:\\Worktrees\\minimap017-teleport-20261029",
+  "excluded": "Git state, .codebase-memory, ignored build junk, agent_docs",
+  "retention": "Parent owns this unique active source/test checkpoint through integration and verification",
+  "head": "ab19cd23fddcacfe4ecd3d33eb2c4975b75a1f26",
+  "source": "E:\\Worktrees\\minimap017-final-normal-20261029",
+  "taskId": "MM017-TELEPORT-ADAPTER-IMPLEMENT"
+}

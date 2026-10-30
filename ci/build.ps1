@@ -55,7 +55,7 @@ try {
         throw 'Generated marker-summary test extraction differs from the reviewed source input.'
     }
 
-    $common = @('/p:EnableMinimapBackgroundDiagnostics=false', '/p:EnableMinimapPresentDecisionDiagnostics=false', '/t:Rebuild', '/p:Configuration=Release', '/p:Platform=x64', '/p:PlatformToolset=v143', '/m', '/nologo')
+    $common = @('/p:EnableMinimapAggregateTimingDiagnostics=false', '/p:EnableMinimapBackgroundDiagnostics=false', '/p:EnableMinimapPresentDecisionDiagnostics=false', '/p:ESM_NATIVE_FILTER_PROBE=0', '/t:Rebuild', '/p:Configuration=Release', '/p:Platform=x64', '/p:PlatformToolset=v143', '/m', '/nologo')
     & $MSBuildPath ./minimap_mod.vcxproj @common
     if ($LASTEXITCODE) { throw 'Minimap production build failed.' }
 
@@ -115,7 +115,7 @@ try {
         nativeSourceTreeSha256 = $inventory.acceptedNativeSourceTreeSha256
         runtimeDllSha256 = $dllHash
         runtimeDllBytes = (Get-Item -LiteralPath $dll).Length
-        compilerProperties = [ordered]@{ EnableMinimapBackgroundDiagnostics = $false; EnableMinimapPresentDecisionDiagnostics = $false }
+        compilerProperties = [ordered]@{ EnableMinimapAggregateTimingDiagnostics = $false; EnableMinimapBackgroundDiagnostics = $false; EnableMinimapPresentDecisionDiagnostics = $false; ESM_NATIVE_FILTER_PROBE = $false }
         fixtureTestsComplete = [bool]$fixture
         tests = $results
         publication = 'NOT PERFORMED; Actions artifact only'

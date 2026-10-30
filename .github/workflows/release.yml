@@ -37,7 +37,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content -LiteralPath ./dist/BUILD-RECEIPT.json -Raw | ConvertFrom-Json).version
-          if ($version -cnotin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-perf-glow-test.1')) { throw 'Unexpected package version' }
+          if ($version -cnotin @('0.5.15', '0.5.16', '0.5.16-gpu-reporter-test.2', '0.5.16-perf-glow-test.1', '0.5.17')) { throw 'Unexpected package version' }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - uses: actions/upload-artifact@v4
         with:

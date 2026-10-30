@@ -1,6 +1,6 @@
 {
   "id": "minimap_mod",
-  "version": "0.5.16",
+  "version": "0.5.17",
   "name": "Shroudweave Minimap",
   "description": "In-game minimap and world clock for Enshrouded.",
   "author": "Aerox912; original minimap by elxokker",
@@ -46,8 +46,8 @@
       "zoom_out_key": "0xBD",
       "zoom_out_key_secondary": "0x6D",
       "scale_percent": 100,
-      "size_decrease_key": "F9",
-      "size_increase_key": "F11"
+      "size_decrease_key": "{",
+      "size_increase_key": "}"
     }
   }
 }

@@ -11,6 +11,12 @@
 #include "arrow_glow_policy.h"
 #include "marker_glow_policy.h"
 #include "present_decision_trace.h"
+#ifndef ESM_NATIVE_FILTER_PROBE
+#define ESM_NATIVE_FILTER_PROBE 0
+#endif
+#if ESM_NATIVE_FILTER_PROBE
+#include "native_filter_probe.h"
+#endif
 #pragma comment(lib, "gdi32.lib")
 
 #include <shroudtopia.h>
@@ -35,6 +41,7 @@
 
 namespace
 {
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
     using MinimapAggregateTiming::DiagnosticCollector;
     using MinimapAggregateTiming::FormatSnapshot;
     using MinimapAggregateTiming::Metric;
@@ -80,6 +87,24 @@ namespace
         return initialized;
     }
 
+#define MM_AGGREGATE_SCOPE(name, metric) ScopedTimer name(DiagnosticCollector(), Metric::metric)
+#define MM_AGGREGATE_SCOPE_STOP(name) name.Stop()
+#define MM_AGGREGATE_COUNT(metric) DiagnosticCollector().Count(Metric::metric)
+#define MM_AGGREGATE_MARK_PRESENT() DiagnosticCollector().MarkPresentCallbackMarker()
+#define MM_AGGREGATE_MENU_WRAPPER(name) MenuWrapperPartition name(DiagnosticCollector())
+#define MM_AGGREGATE_MENU_NULL_ORIGINAL(name) name.NullOriginalExit()
+#define MM_AGGREGATE_MENU_FORWARD_STARTED(name) name.ForwardStarted()
+#define MM_AGGREGATE_MENU_FORWARD_RETURNED(name) name.ForwardReturned()
+#else
+#define MM_AGGREGATE_SCOPE(name, metric) ((void)0)
+#define MM_AGGREGATE_SCOPE_STOP(name) ((void)0)
+#define MM_AGGREGATE_COUNT(metric) ((void)0)
+#define MM_AGGREGATE_MARK_PRESENT() ((void)0)
+#define MM_AGGREGATE_MENU_WRAPPER(name)
+#define MM_AGGREGATE_MENU_NULL_ORIGINAL(name) ((void)0)
+#define MM_AGGREGATE_MENU_FORWARD_STARTED(name) ((void)0)
+#define MM_AGGREGATE_MENU_FORWARD_RETURNED(name) ((void)0)
+#endif
     bool g_client10 = false;
     MinimapClient10::Profile g_clientProfile = MinimapClient10::Profile::Build25988036;
     uintptr_t ClientRva(uintptr_t oldRva) { return MinimapClient10::Rva(g_clientProfile, oldRva); }
@@ -339,6 +364,7 @@ namespace
         std::uint32_t markerId = 0;
         std::uint32_t markerType = 0;
         std::uint32_t kind = 0;
+        std::uint64_t iconAtlasGeneration = 0;
         std::uint8_t visibility = 0;
         DWORD lastUpdateTick = 0;
         bool hasWorldPosition = false;
@@ -1448,9 +1474,13 @@ namespace
         "minimap_mod",
         "Shroudweave Minimap: in-game map with a world clock, players, pings, waypoints and death markers.",
 #if defined(ESM_PRESENT_DECISION_TRACE)
-        "0.5.16-perf-glow-diag.1",
+        "0.5.17-proton-diag-test.1",
+#elif ESM_NATIVE_FILTER_PROBE
+        "0.5.17-filter-diag-test.1",
+#elif ESM_AGGREGATE_TIMING_DIAGNOSTICS || defined(ESM_BACKGROUND_DIAGNOSTICS)
+        "0.5.17-perf-test.3",
 #else
-        "0.5.16",
+        "0.5.17",
 #endif
         "elxokker; community maintenance by Aerox912",
         "0.0.3",
@@ -1561,6 +1591,29 @@ namespace
     bool g_worldMapValid = false;
     DWORD g_lastWorldMapCaptureTick = 0;
     std::atomic<std::uint64_t> g_worldSessionGeneration{ 0 };
+#if defined(MINIMAP_TEST_NATIVE_FILTER_PROBE)
+    std::uint64_t g_testNativeFilterProbeCaptureCount = 0;
+    std::uint64_t g_testNativeFilterProbeSnapshotReadCount = 0;
+#endif
+#if ESM_NATIVE_FILTER_PROBE
+    std::atomic<std::uint64_t> g_nativeFilterProbeSequence{ 0 };
+    std::atomic<std::uint64_t> g_nativeFilterProbeLastSampleTick{ 0 };
+    std::atomic<std::uint64_t> g_nativeFilterProbeLastLogTick{ 0 };
+    std::atomic<bool> g_nativeFilterProbeStartupLogged{ false };
+    std::atomic<bool> g_nativeFilterProbeGuardFailureLogged{ false };
+    NativeFilterProbe::SampleSummary g_nativeFilterProbeLastLoggedSummary{};
+    bool g_nativeFilterProbeHasLoggedSummary = false;
+#if defined(MINIMAP_TEST_NATIVE_FILTER_PROBE)
+    using NativeFilterProbeSnapshotReaderForTest = bool (*)(
+        std::uintptr_t queryState, bool after, NativeFilterProbe::ReadSnapshot& snapshot);
+    NativeFilterProbeSnapshotReaderForTest g_testNativeFilterProbeSnapshotReader = nullptr;
+    bool g_testNativeFilterProbeGuardOverrideSet = false;
+    bool g_testNativeFilterProbeGuardOverride = false;
+    NativeFilterProbe::ValidationStatus g_testNativeFilterProbeLastStatus =
+        NativeFilterProbe::ValidationStatus::InvalidRead;
+    NativeFilterProbe::SampleSummary g_testNativeFilterProbeLastSummary{};
+#endif
+#endif
     DWORD g_lastRemoteCaptureTick = 0;
     using GetEcsWorldFn = uintptr_t(__fastcall*)(uintptr_t descriptor);
     using LookupComponentFn = uintptr_t*(__fastcall*)(uintptr_t* result, uintptr_t world, uintptr_t lookup, std::uint32_t entity);
@@ -1620,6 +1673,23 @@ namespace
     FogOfWarMask g_fogOfWar;
     std::mutex g_minimapIconMutex;
     MinimapIconAtlas g_minimapIcons;
+    std::atomic<std::uint64_t> g_minimapIconAtlasGeneration{ 0 };
+
+    void AdvanceMinimapIconAtlasGenerationLocked()
+    {
+        g_minimapIconAtlasGeneration.fetch_add(1, std::memory_order_release);
+    }
+
+#if defined(MINIMAP_TEST_ICON_ATLAS_MUTATION)
+    template <typename Mutation>
+    void MutateMinimapIconAtlasForTest(Mutation mutation)
+    {
+        std::lock_guard<std::mutex> lock(g_minimapIconMutex);
+        mutation(g_minimapIcons);
+        AdvanceMinimapIconAtlasGenerationLocked();
+    }
+#endif
+
     std::mutex g_minimapFrameMutex;
     MinimapFrameAsset g_minimapFrame;
     std::mutex g_squareMinimapFrameMutex;
@@ -1632,7 +1702,7 @@ namespace
     std::atomic<int> g_minimapZoomStep{ 0 };
     std::atomic<int> g_minimapScalePercent{ 100 };
     int g_configuredScalePercent = -1;
-    std::atomic<int> g_minimapSizeDecreaseKey{ VK_F9 }, g_minimapSizeIncreaseKey{ VK_F11 };
+    std::atomic<int> g_minimapSizeDecreaseKey{ 0 }, g_minimapSizeIncreaseKey{ 0 };
     bool g_sizeDecreaseDown = false, g_sizeIncreaseDown = false;
     std::atomic<bool> g_minimapVisible{ true };
     std::atomic<bool> g_playerArrowGlowEnabled{ true };
@@ -1991,6 +2061,38 @@ namespace
         return fallback;
     }
 
+    // Only literal resize characters carry modifiers; legacy VK/F-key bindings
+    // retain their existing single-key behavior. Never pass encoded chords to Win32.
+    constexpr int kMinimapLiteralKey = 0x10000;
+
+    int EncodeMinimapLiteralKey(SHORT mapping)
+    {
+        const unsigned code = static_cast<unsigned short>(mapping);
+        const unsigned vk = code & 0xff, modifiers = code >> 8;
+        if (mapping == -1 || vk == 0 || vk > 254 || (modifiers & ~7u) != 0) return 0;
+        return kMinimapLiteralKey | static_cast<int>(code);
+    }
+
+    int ParseMinimapSizeKey(const std::string& value, int fallback, HKL layout)
+    {
+        const auto first = value.find_first_not_of(" \t\r\n");
+        const auto last = value.find_last_not_of(" \t\r\n");
+        if (first != std::string::npos && first == last && (value[first] == '{' || value[first] == '}'))
+            return EncodeMinimapLiteralKey(VkKeyScanExA(value[first], layout));
+        return ParseMinimapToggleKey(value, fallback);
+    }
+
+    bool IsMinimapSizeKeyDown(int binding, SHORT (WINAPI* poll)(int))
+    {
+        if (binding <= 0) return false;
+        const int vk = binding & 0xff;
+        if (vk == 0 || vk > 254 || (poll(vk) & 0x8000) == 0) return false;
+        if ((binding & kMinimapLiteralKey) == 0) return true;
+        const int modifiers = ((poll(VK_SHIFT) & 0x8000) ? 1 : 0) |
+            ((poll(VK_CONTROL) & 0x8000) ? 2 : 0) | ((poll(VK_MENU) & 0x8000) ? 4 : 0);
+        return modifiers == ((binding >> 8) & 7);
+    }
+
     bool ParseConfigBoolean(const std::string& value, bool fallback)
     {
         const std::string normalized = NormalizeConfigValue(value);
@@ -2141,7 +2243,7 @@ namespace
 
     void RefreshMinimapConfig(ModContext* modContext, bool forceLog = false)
     {
-        ScopedTimer capture(DiagnosticCollector(), Metric::ConfigPoll);
+        MM_AGGREGATE_SCOPE(capture, ConfigPoll);
         const MinimapConfigFileSnapshot configSnapshot = CaptureMinimapConfigFileSnapshot(modContext);
         std::string configuredPosition = "top-right";
         std::string positionSource = "default";
@@ -2233,8 +2335,17 @@ namespace
         hotkeysChanged |= readKey("zoom_in_key_secondary", "0x6B", VK_ADD, g_minimapZoomInSecondary);
         hotkeysChanged |= readKey("zoom_out_key", "0xBD", VK_OEM_MINUS, g_minimapZoomOutKey);
         hotkeysChanged |= readKey("zoom_out_key_secondary", "0x6D", VK_SUBTRACT, g_minimapZoomOutSecondary);
-        hotkeysChanged |= readKey("size_decrease_key", "F9", VK_F9, g_minimapSizeDecreaseKey);
-        hotkeysChanged |= readKey("size_increase_key", "F11", VK_F11, g_minimapSizeIncreaseKey);
+        // Resolve literal braces on config refresh, not on each rendering callback.
+        // Use the foreground input thread's layout, including AltGr layouts.
+        const HKL resizeLayout = GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), nullptr));
+        const auto readSizeKey = [&](const char* name, const char* initial, std::atomic<int>& target) {
+            std::string value = initial; readOption(name, value);
+            const int fallback = EncodeMinimapLiteralKey(VkKeyScanExA(initial[0], resizeLayout));
+            const int key = ParseMinimapSizeKey(value, fallback, resizeLayout);
+            return target.exchange(key) != key;
+        };
+        hotkeysChanged |= readSizeKey("size_decrease_key", "{", g_minimapSizeDecreaseKey);
+        hotkeysChanged |= readSizeKey("size_increase_key", "}", g_minimapSizeIncreaseKey);
         std::string configuredScale = "100";
         readOption("scale_percent", configuredScale);
         const int scalePercent = ((ParseConfigInteger(configuredScale, 100, 50, 200) + 12) / 25) * 25;
@@ -2877,7 +2988,8 @@ namespace
     {
         g_menuVisibilityCaptureEpoch.fetch_add(1, std::memory_order_acq_rel);
         g_menuVisibilitySnapshot.Clear();
-        PublicCreativeCompat::ForgetIdentity();
+        // HUD/session capture is independent from immutable provider identity.
+        // A reconnect must not consume another cold-admission attempt.
     }
 
     bool TryReadCurrentHudScreenType(std::uint8_t& screen, std::array<uintptr_t, 4>* chain = nullptr)
@@ -3405,7 +3517,7 @@ namespace
 
     void PollGameSessionLog()
     {
-        ScopedTimer capture(DiagnosticCollector(), Metric::LogPoll);
+        MM_AGGREGATE_SCOPE(capture, LogPoll);
         const DWORD now = GetTickCount();
         if (now - g_lastSessionLogPollTick < SESSION_LOG_POLL_MS)
             return;
@@ -3930,6 +4042,7 @@ namespace
         PublicCreativeCompat::Digest identity{};
     };
 
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
     struct MenuOwnershipOutcomeRecorder
     {
         MenuOwnershipSample& sample;
@@ -3951,6 +4064,7 @@ namespace
         }
     };
 
+#endif
     bool MakeDirectCallOpcode(uintptr_t callsite, uintptr_t target, std::uint8_t (&opcode)[5])
     {
         if (callsite > UINTPTR_MAX - 5)
@@ -4021,7 +4135,9 @@ namespace
         PublicCreativeCompat::ProofOrigin origin = PublicCreativeCompat::ProofOrigin::Other)
     {
         sample = {};
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
         const MenuOwnershipOutcomeRecorder outcome{sample, origin};
+#endif
         const auto* image = reinterpret_cast<const std::uint8_t*>(g_exeBase);
         if (!g_exeBase || g_exeImageSize <= ClientRva(RVA_MENU_RENDERER_CALL_1_0) + 10 ||
             g_exeImageSize <= ClientRva(MinimapMenu10::RendererRva) + 18 ||
@@ -4050,7 +4166,6 @@ namespace
             return false;
         if (guards(nullptr, 0))
         {
-            PublicCreativeCompat::ForgetIdentity();
             sample.admission = MenuAdmission::raw;
             sample.kind = 1;
             std::copy(entry.begin(), entry.end(), sample.identity.begin());
@@ -4067,6 +4182,13 @@ namespace
             return true;
         }
         return false;
+    }
+
+    bool BeginCurrentMenuOwnershipAdmission(MenuOwnershipSample& sample)
+    {
+        PublicCreativeCompat::AdmissionEpochScope admission;
+        return SampleCurrentMenuOwnership(sample, g_menuVisibilityCallsiteEverActivated.load(std::memory_order_acquire),
+            PublicCreativeCompat::ProofOrigin::AdmissionUpdate);
     }
 
     MenuAdmission EvaluateCurrentMenuAdmission()
@@ -4205,7 +4327,7 @@ namespace
 
     void CaptureMenuVisibilityCallsiteHook()
     {
-        MenuWrapperPartition wrapper(DiagnosticCollector());
+        MM_AGGREGATE_MENU_WRAPPER(wrapper);
         const auto epoch = g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire);
         MenuOwnershipSample before{};
         std::array<uintptr_t, 4> contextBefore{};
@@ -4224,12 +4346,12 @@ namespace
         if (original == nullptr)
         {
             g_menuVisibilitySnapshot.Clear();
-            wrapper.NullOriginalExit();
+            MM_AGGREGATE_MENU_NULL_ORIGINAL(wrapper);
             return;
         }
-        wrapper.ForwardStarted();
+        MM_AGGREGATE_MENU_FORWARD_STARTED(wrapper);
         original();
-        wrapper.ForwardReturned();
+        MM_AGGREGATE_MENU_FORWARD_RETURNED(wrapper);
 
         if (!staged || epoch != g_menuVisibilityCaptureEpoch.load(std::memory_order_acquire) ||
             !g_client10 || !g_runtimeCallbacksActive.load(std::memory_order_acquire) ||
@@ -4354,6 +4476,12 @@ namespace
         return ActivateMenuVisibilityAtBoundary(context, initialMenuPending);
     }
 
+    bool ContinueMenuOwnershipAdmissionAtActivation(ModContext* context, bool& initialMenuPending)
+    {
+        PublicCreativeCompat::ContinueAdmissionScope admission;
+        return ActivateMenuVisibilityAtBoundary(context, initialMenuPending);
+    }
+
 
     Mem::Detour* InstallWeatherSampleHook(uintptr_t callRva, uintptr_t targetRva)
     {
@@ -4403,7 +4531,7 @@ namespace
 
     void __fastcall CaptureFogUpdate(void* fog, const float* position, float radius)
     {
-        ScopedTimer capture(DiagnosticCollector(), Metric::FogCapture);
+        MM_AGGREGATE_SCOPE(capture, FogCapture);
         const auto session = g_worldSessionGeneration.load();
         g_updateFog(fog, position, radius); // Includes the native local-player ownership check at the call site.
         if (!g_liveFogLayoutSupported || !g_showFogOfWar) return;
@@ -4546,24 +4674,517 @@ namespace
             BytesMatchRva(0x29C3F3, stride, sizeof(stride));
     }
 
+#if ESM_NATIVE_FILTER_PROBE
+    constexpr std::size_t kNativeFilterProbeStatusCount =
+        static_cast<std::size_t>(NativeFilterProbe::ValidationStatus::MalformedRows) + 1;
+    constexpr std::uint64_t kNativeFilterProbeLogIntervalMs = 1000;
+    constexpr std::size_t kNativeFilterProbeLogCategoriesPerLine = 8;
+    std::array<std::atomic<std::uint32_t>, kNativeFilterProbeStatusCount>
+        g_nativeFilterProbeStatusCounts{};
+
+    struct NativeFilterProbeCapture
+    {
+        bool active = false;
+        NativeFilterProbe::OwnedReadSet sample{};
+        std::array<bool, 4> arrayHeadersObserved{};
+        std::array<NativeFilterProbe::ArrayHeader, 4> arrayHeadersUsed{};
+    };
+
+#if defined(MINIMAP_TEST_NATIVE_FILTER_PROBE)
+    void SetNativeFilterProbeTestGuard(bool supported)
+    {
+        g_testNativeFilterProbeGuardOverrideSet = true;
+        g_testNativeFilterProbeGuardOverride = supported;
+    }
+
+#endif
+
+    bool HasVerifiedNativeFilterProbeCodeSpans()
+    {
+        if (!IsCurrentClientBuild())
+            return false;
+
+        static constexpr std::uint8_t nativeRoot[] = {
+            0x48, 0x8B, 0x05, 0x0F, 0xF2, 0xA8, 0x01, 0x4C, 0x8B, 0xE9, 0x48, 0x8B, 0x90,
+            0xD0, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x02, 0x48, 0x85, 0xC0, 0x75, 0x05, 0x45,
+            0x33, 0xE4, 0xEB, 0x04, 0x4C, 0x8B, 0x60, 0x38, 0x4D, 0x8B, 0x94, 0x24, 0x08,
+            0xEA, 0x36, 0x00, 0x49, 0x8B, 0x94, 0x24, 0x80, 0x6A, 0x3E, 0x00, 0x4D, 0x8B,
+            0x84, 0x24, 0x58, 0xEA, 0x3B, 0x00, 0x4D, 0x8B, 0x8C, 0x24, 0x30, 0x6A, 0x39,
+            0x00
+        };
+        static constexpr std::uint8_t primaryRow[] = {
+            0x4D, 0x39, 0xB4, 0x24, 0x08, 0xEA, 0x36, 0x00, 0x0F, 0x86, 0xFD, 0x03, 0x00,
+            0x00, 0x66, 0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8B,
+            0x05, 0x51, 0xF0, 0xA8, 0x01, 0x4B, 0x8D, 0x3C, 0xB6, 0x48, 0xC1, 0xE7, 0x05,
+            0x49, 0x03, 0xBC, 0x24, 0x00, 0xEA, 0x36, 0x00
+        };
+        static constexpr std::uint8_t rawTypeSelector[] = {
+            0x80, 0x7F, 0x34, 0x01, 0x41, 0x0F, 0x28, 0xF0, 0x74, 0x0E, 0x81, 0x7F, 0x30,
+            0x5F, 0x0C, 0xCE, 0xAF, 0x74, 0x05, 0x8B, 0x4F, 0x30, 0xEB, 0x03, 0x8B, 0x4E,
+            0x10, 0xE8, 0x9D, 0x1A, 0xFC, 0xFF, 0x84, 0xC0, 0x75, 0x19
+        };
+        static constexpr std::uint8_t primaryContext[] = {
+            0x84, 0xDB, 0x0F, 0x84, 0xFC, 0x00, 0x00, 0x00, 0x41, 0x80, 0xBD, 0xF8, 0x00,
+            0x00, 0x00, 0x01, 0x0F, 0x85, 0xEE, 0x00, 0x00, 0x00, 0x0F, 0x28, 0xF7
+        };
+        static constexpr std::uint8_t primaryLoop[] = {
+            0x49, 0xFF, 0xC6, 0x4D, 0x3B, 0xB4, 0x24, 0x08, 0xEA, 0x36, 0x00, 0x0F, 0x82,
+            0x14, 0xFC, 0xFF, 0xFF
+        };
+        static constexpr std::uint8_t customRowSelector[] = {
+            0x48, 0x8B, 0xB0, 0x28, 0x6A, 0x39, 0x00, 0x49, 0x8B, 0xCD, 0x49, 0x03, 0xF4,
+            0x48, 0x8B, 0xD6, 0xE8, 0x5B, 0x04, 0xF9, 0xFF, 0x80, 0x7E, 0x34, 0x01, 0x48,
+            0x8B, 0xF8, 0x74, 0x0E, 0x81, 0x7E, 0x30, 0x5F, 0x0C, 0xCE, 0xAF, 0x74, 0x05,
+            0x8B, 0x4E, 0x30, 0xEB, 0x0C, 0x48, 0x85, 0xFF, 0x0F, 0x84, 0x21, 0x01, 0x00,
+            0x00, 0x8B, 0x48, 0x10, 0xE8, 0x23, 0x19, 0xFC, 0xFF, 0x84, 0xC0
+        };
+        static constexpr std::uint8_t customLoop[] = {
+            0x48, 0x8B, 0x45, 0x30, 0x49, 0xFF, 0xC7, 0x49, 0x81, 0xC4, 0xA0, 0x00, 0x00,
+            0x00, 0x4C, 0x3B, 0xB8, 0x30, 0x6A, 0x39, 0x00
+        };
+        static constexpr std::uint8_t secondaryRow[] = {
+            0x4B, 0x8D, 0x1C, 0xA4, 0x48, 0xC1, 0xE3, 0x05, 0x48, 0x03, 0x98, 0x50, 0xEA,
+            0x3B, 0x00
+        };
+        static constexpr std::uint8_t secondarySelector[] = {
+            0x80, 0x7B, 0x34, 0x01, 0x41, 0x0F, 0x28, 0xF0, 0x74, 0x21, 0x81, 0x7B, 0x30,
+            0x5F, 0x0C, 0xCE, 0xAF, 0x74, 0x18, 0x8B, 0x4B, 0x30, 0xEB, 0x17, 0x41, 0x80,
+            0xBD, 0x00, 0x01, 0x00, 0x00, 0x03, 0x41, 0xB7, 0x01, 0x75, 0xD8, 0x41, 0x0F,
+            0xB6, 0xFF, 0xEB, 0xD5, 0x41, 0x8B, 0x4E, 0x10, 0xE8, 0x82, 0x13, 0xFC, 0xFF,
+            0x84, 0xC0
+        };
+        static constexpr std::uint8_t consumerRootAndTable[] = {
+            0x48, 0x8B, 0x05, 0x9C, 0xD2, 0xAC, 0x01, 0x48, 0x8B, 0x88, 0xD0, 0x00, 0x00,
+            0x00, 0x48, 0x8B, 0x01, 0x48, 0x85, 0xC0, 0x74, 0x04, 0x48, 0x8B, 0x78, 0x38,
+            0x0F, 0xB6, 0x8F, 0xE0, 0xEB, 0x40, 0x00, 0x48, 0x8D, 0x87, 0xA0, 0xEA, 0x40,
+            0x00, 0x48, 0x8D, 0x14, 0xC8, 0x48, 0x3B, 0xC2, 0x74, 0x0D, 0x39, 0x18, 0x74,
+            0x16, 0x48, 0x83, 0xC0, 0x08, 0x48, 0x3B, 0xC2, 0x75, 0xF3, 0xB0, 0x01, 0x48,
+            0x8B, 0x5C, 0x24, 0x30, 0x48, 0x83, 0xC4, 0x20, 0x5F, 0xC3, 0x0F, 0xB6, 0x40,
+            0x05
+        };
+
+        return BytesMatchRva(0xD8F282, nativeRoot, sizeof(nativeRoot)) &&
+            BytesMatchRva(0xD8F428, primaryRow, sizeof(primaryRow)) &&
+            BytesMatchRva(0xD8F6F3, rawTypeSelector, sizeof(rawTypeSelector)) &&
+            BytesMatchRva(0xD8F717, primaryContext, sizeof(primaryContext)) &&
+            BytesMatchRva(0xD8F81B, primaryLoop, sizeof(primaryLoop)) &&
+            BytesMatchRva(0xD8F850, customRowSelector, sizeof(customRowSelector)) &&
+            BytesMatchRva(0xD8F9A6, customLoop, sizeof(customLoop)) &&
+            BytesMatchRva(0xD8FD70, secondaryRow, sizeof(secondaryRow)) &&
+            BytesMatchRva(0xD8FDFA, secondarySelector, sizeof(secondarySelector)) &&
+            BytesMatchRva(0xD511F5, consumerRootAndTable, sizeof(consumerRootAndTable));
+    }
+
+    bool NativeFilterProbeLayoutSupported()
+    {
+#if defined(MINIMAP_TEST_NATIVE_FILTER_PROBE)
+        if (g_testNativeFilterProbeGuardOverrideSet)
+            return g_testNativeFilterProbeGuardOverride;
+#endif
+        static const bool supported = []() {
+            return IsCurrentClientBuild() && g_worldMapLayoutSupported.load() &&
+                g_deathMarkerLayoutSupported.load() && HasVerifiedNativeFilterProbeCodeSpans();
+        }();
+        return supported;
+    }
+
+    bool ReadNativeFilterProbeSnapshot(std::uintptr_t queryState, bool after,
+        NativeFilterProbe::ReadSnapshot& snapshot)
+    {
+        snapshot = NativeFilterProbe::ReadSnapshot{};
+#if defined(MINIMAP_TEST_NATIVE_FILTER_PROBE)
+        ++g_testNativeFilterProbeSnapshotReadCount;
+        if (g_testNativeFilterProbeSnapshotReader != nullptr)
+            return g_testNativeFilterProbeSnapshotReader(queryState, after, snapshot);
+#endif
+        (void)queryState;
+        (void)after;
+
+        constexpr std::size_t nativeRootSlot = 0x281E498;
+        if (g_exeBase == 0 || g_exeImageSize < nativeRootSlot + sizeof(std::uintptr_t))
+            return false;
+
+        std::uintptr_t first = 0;
+        std::uintptr_t second = 0;
+        std::uintptr_t third = 0;
+        std::uintptr_t mapRoot = 0;
+        if (!SafeReadValue(g_exeBase + 0x281E498, first) || !IsLikelyRuntimePointer(first))
+            return false;
+        snapshot.root.links[0] = first;
+        if (!SafeReadValue(first + 0xD0, second) || !IsLikelyRuntimePointer(second))
+            return false;
+        snapshot.root.links[1] = second;
+        if (!SafeReadValue(second, third) || !IsLikelyRuntimePointer(third))
+            return false;
+        snapshot.root.links[2] = third;
+        if (!SafeReadValue(third + 0x38, mapRoot) || !IsLikelyRuntimePointer(mapRoot))
+            return false;
+        snapshot.root.links[3] = mapRoot;
+        snapshot.root.readable = true;
+
+        if (!SafeReadValue(mapRoot + 0x36E9F8, snapshot.revision36E9F8) ||
+            !SafeReadValue(mapRoot + 0x36E9FC, snapshot.revision36E9FC))
+            return false;
+        snapshot.revisionsReadable = true;
+
+        static constexpr std::array<std::size_t, 4> arrayOffsets = {
+            0x36EA00, 0x396A28, 0x3BEA50, 0x3E6A78
+        };
+        for (std::size_t index = 0; index < arrayOffsets.size(); ++index)
+        {
+            auto& header = snapshot.arrays[index];
+            if (!SafeReadValue(mapRoot + arrayOffsets[index], header.pointer) ||
+                !SafeReadValue(mapRoot + arrayOffsets[index] + sizeof(std::uintptr_t), header.count))
+                return false;
+        }
+        snapshot.arrayHeadersReadable = true;
+
+        if (!SafeReadValue(mapRoot + 0x40EBE0, snapshot.filterCount))
+            return false;
+        snapshot.filterCountReadable = true;
+
+        const std::size_t entriesToCopy = std::min<std::size_t>(
+            snapshot.filterCount, NativeFilterProbe::kMaxFilterEntries);
+        const std::size_t tableBytes = entriesToCopy * sizeof(NativeFilterProbe::FilterEntryBytes);
+        if (tableBytes != 0 &&
+            !SafeRead(mapRoot + 0x40EAA0, snapshot.filterTable.data(), tableBytes))
+        {
+            return false;
+        }
+        snapshot.filterEntriesReadable = true;
+        return true;
+    }
+
+    std::string NativeFilterProbeStatusName(NativeFilterProbe::ValidationStatus status)
+    {
+        using NativeFilterProbe::ValidationStatus;
+        switch (status)
+        {
+        case ValidationStatus::StableTable: return "stable_table";
+        case ValidationStatus::InvalidRead: return "invalid_read";
+        case ValidationStatus::NullRoot: return "null_root";
+        case ValidationStatus::RootMismatch: return "root_mismatch";
+        case ValidationStatus::SessionChanged: return "session_changed";
+        case ValidationStatus::Unstable: return "unstable";
+        case ValidationStatus::MalformedTable: return "malformed_table";
+        case ValidationStatus::MalformedHeader: return "malformed_header";
+        case ValidationStatus::TooManyRows: return "too_many_rows";
+        case ValidationStatus::RowMetadataMismatch: return "row_metadata_mismatch";
+        case ValidationStatus::MalformedRows: return "malformed_rows";
+        }
+        return "unknown_status";
+    }
+
+    struct NativeFilterProbeTableObservation
+    {
+        bool readable = false;
+        bool changedDuringSample = false;
+        bool withinLimit = false;
+    };
+
+    NativeFilterProbeTableObservation ObserveNativeFilterProbeTable(
+        const NativeFilterProbe::OwnedReadSet& sample)
+    {
+        NativeFilterProbeTableObservation observation{};
+        const auto& before = sample.snapshots[0];
+        const auto& after = sample.snapshots[1];
+        observation.readable = before.filterCountReadable && before.filterEntriesReadable &&
+            after.filterCountReadable && after.filterEntriesReadable;
+        if (!observation.readable)
+            return observation;
+
+        observation.changedDuringSample = before.filterCount != after.filterCount;
+        const std::size_t beforeBoundedCount = std::min<std::size_t>(
+            before.filterCount, NativeFilterProbe::kMaxFilterEntries);
+        const std::size_t afterBoundedCount = std::min<std::size_t>(
+            after.filterCount, NativeFilterProbe::kMaxFilterEntries);
+        const std::size_t compareCount = (std::min)(beforeBoundedCount, afterBoundedCount);
+        for (std::size_t index = 0; index < compareCount; ++index)
+        {
+            if (before.filterTable[index].bytes != after.filterTable[index].bytes)
+            {
+                observation.changedDuringSample = true;
+                break;
+            }
+        }
+        observation.withinLimit = !observation.changedDuringSample &&
+            before.filterCount <= NativeFilterProbe::kMaxFilterEntries &&
+            after.filterCount <= NativeFilterProbe::kMaxFilterEntries;
+        return observation;
+    }
+
+    bool NativeFilterProbeTableChangedFromLastLogged(const NativeFilterProbe::ReadSnapshot& snapshot)
+    {
+        if (snapshot.filterCount != g_nativeFilterProbeLastLoggedSummary.filterEntryCount)
+            return true;
+        for (std::size_t index = 0; index < snapshot.filterCount; ++index)
+        {
+            const auto& entry = snapshot.filterTable[index];
+            if (NativeFilterProbe::DecodeRawId(entry) !=
+                    g_nativeFilterProbeLastLoggedSummary.filters[index].id ||
+                (entry.bytes[5] == 1) != g_nativeFilterProbeLastLoggedSummary.filters[index].enabled)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void LogNativeFilterProbeSummary(NativeFilterProbe::ValidationStatus status,
+        const NativeFilterProbe::SampleSummary& summary,
+        const NativeFilterProbe::OwnedReadSet& sample)
+    {
+        const std::uint64_t logTick = GetTickCount64();
+        std::uint64_t previousLogTick = g_nativeFilterProbeLastLogTick.load(std::memory_order_relaxed);
+        if (logTick - previousLogTick < kNativeFilterProbeLogIntervalMs ||
+            !g_nativeFilterProbeLastLogTick.compare_exchange_strong(
+                previousLogTick, logTick, std::memory_order_relaxed))
+        {
+            return;
+        }
+
+        const bool stable = status == NativeFilterProbe::ValidationStatus::StableTable;
+        const auto tableObservation = ObserveNativeFilterProbeTable(sample);
+        const char* tableState = !tableObservation.readable ? "unreadable" :
+            tableObservation.changedDuringSample ? "changed_during_sample" :
+            tableObservation.withinLimit ? "stable" : "over_limit";
+        const char* mappingChanged = !tableObservation.withinLimit ? "unknown" :
+            !g_nativeFilterProbeHasLoggedSummary ? "baseline" :
+            NativeFilterProbeTableChangedFromLastLogged(sample.snapshots[0]) ? "yes" : "no";
+        std::ostringstream message;
+        message << "[Minimap] native-filter-probe | seq=" << summary.sequence
+            << " | session=" << summary.sessionGeneration
+            << " | session_after=" << sample.sessionGenerationAfter
+            << " | tick_ms=" << summary.tick
+            << " | gap_ms=" << summary.gapTicks
+            << " | status=" << NativeFilterProbeStatusName(status)
+            << " | table_state=" << tableState
+            << " | mapping_changed_since_log=" << mappingChanged
+            << " | entries=" << static_cast<unsigned>(summary.filterEntryCount)
+            << " | unmatched_primary=" << summary.unmatchedPrimaryOrdinary
+            << " | unmatched_secondary=" << summary.unmatchedSecondaryOrdinary
+            << " | special_primary_unresolved=" << summary.unresolvedSpecialPrimary
+            << " | special_secondary_unresolved=" << summary.unresolvedSpecialSecondary
+            << " | context=unknown | visibility=unproven"
+            << " | secondary_context_gap=D8FE30-D8FE4C"
+            << " | eligibility_gap=D511B0-D511EF";
+        for (std::size_t index = 0; index < g_nativeFilterProbeStatusCounts.size(); ++index)
+        {
+            const auto count = g_nativeFilterProbeStatusCounts[index].exchange(0, std::memory_order_relaxed);
+            if (count != 0)
+            {
+                message << " | " << NativeFilterProbeStatusName(
+                    static_cast<NativeFilterProbe::ValidationStatus>(index)) << "_samples=" << count;
+            }
+        }
+        Log(message.str());
+
+        if (!stable)
+            return;
+
+        g_nativeFilterProbeLastLoggedSummary = summary;
+        g_nativeFilterProbeHasLoggedSummary = true;
+        for (std::size_t start = 0; start < summary.filterEntryCount;
+            start += kNativeFilterProbeLogCategoriesPerLine)
+        {
+            std::ostringstream categories;
+            categories << "[Minimap] native-filter-probe-categories | seq=" << summary.sequence
+                << " | session=" << summary.sessionGeneration << " | chunk="
+                << (start / kNativeFilterProbeLogCategoriesPerLine + 1) << " | ids=";
+            const std::size_t end = std::min<std::size_t>(
+                start + kNativeFilterProbeLogCategoriesPerLine, summary.filterEntryCount);
+            for (std::size_t index = start; index < end; ++index)
+            {
+                const auto& entry = summary.filters[index];
+                categories << (index == start ? "" : ",") << "0x" << std::hex << entry.id
+                    << std::dec << ':' << (entry.enabled ? '1' : '0')
+                    << ':' << entry.primaryMatches << ':' << entry.secondaryMatches;
+            }
+            Log(categories.str());
+        }
+    }
+
+    void BeginNativeFilterProbeCapture(std::uintptr_t queryState, NativeFilterProbeCapture& capture)
+    {
+        capture.active = false;
+        if (!g_nativeFilterProbeStartupLogged.exchange(true, std::memory_order_relaxed))
+        {
+            Log("[Minimap] native-filter-probe build=0.5.17-filter-diag-test.1 | mode=diagnostic-only | default=off");
+        }
+        if (!NativeFilterProbeLayoutSupported())
+        {
+            if (!g_nativeFilterProbeGuardFailureLogged.exchange(true, std::memory_order_relaxed))
+                Log("[Minimap] native-filter-probe disabled | reason=code_guard_or_profile_mismatch");
+            return;
+        }
+
+        capture.active = true;
+#if defined(MINIMAP_TEST_NATIVE_FILTER_PROBE)
+        ++g_testNativeFilterProbeCaptureCount;
+#endif
+        auto& sample = capture.sample;
+        sample.sequence = g_nativeFilterProbeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+        sample.tick = GetTickCount64();
+        const std::uint64_t previousSampleTick =
+            g_nativeFilterProbeLastSampleTick.exchange(sample.tick, std::memory_order_relaxed);
+        sample.gapTicks = previousSampleTick == 0 ? 0 : sample.tick - previousSampleTick;
+        sample.sessionGenerationBefore = g_worldSessionGeneration.load(std::memory_order_acquire);
+        sample.queryStateReadable = IsLikelyRuntimePointer(queryState);
+        sample.queryState = queryState;
+        sample.rowMetadataReadable = true;
+        if (sample.queryStateReadable)
+            ReadNativeFilterProbeSnapshot(queryState, false, sample.snapshots[0]);
+    }
+
+    void ObserveNativeFilterProbeRow(NativeFilterProbe::OwnedReadSet& sample,
+        NativeFilterProbe::RowSource source, const std::uint8_t* entry)
+    {
+        if (sample.rowCount >= sample.rows.size())
+        {
+            sample.rowMetadataReadable = false;
+            return;
+        }
+        NativeFilterProbe::RowMetadata row{};
+        row.source = source;
+        std::memcpy(&row.rawId, entry + 0x30, sizeof(row.rawId));
+        row.selector = entry[0x34];
+        if (source == NativeFilterProbe::RowSource::Secondary)
+            std::memcpy(&row.secondaryKey, entry + 0x08, sizeof(row.secondaryKey));
+        sample.rows[sample.rowCount++] = row;
+    }
+
+    void ObserveNativeFilterProbeArrayHeader(NativeFilterProbeCapture& capture,
+        NativeFilterProbe::ArrayKind kind, std::uintptr_t pointer, std::uint64_t count)
+    {
+        const std::size_t index = static_cast<std::size_t>(kind);
+        if (index >= capture.arrayHeadersObserved.size() || capture.arrayHeadersObserved[index])
+        {
+            capture.sample.rowMetadataReadable = false;
+            return;
+        }
+        capture.arrayHeadersObserved[index] = true;
+        capture.arrayHeadersUsed[index] = NativeFilterProbe::ArrayHeader{ pointer, count };
+    }
+
+    void SetNativeFilterProbeSummaryIdentity(NativeFilterProbe::SampleSummary& summary,
+        const NativeFilterProbe::OwnedReadSet& sample)
+    {
+        summary = NativeFilterProbe::SampleSummary{};
+        summary.sequence = sample.sequence;
+        summary.tick = sample.tick;
+        summary.gapTicks = sample.gapTicks;
+        summary.sessionGeneration = sample.sessionGenerationBefore;
+        summary.context = NativeFilterProbe::ContextState::Unknown;
+    }
+
+    void FinishNativeFilterProbeCapture(std::uintptr_t queryState, NativeFilterProbeCapture& capture)
+    {
+        if (!capture.active)
+            return;
+
+        auto& sample = capture.sample;
+        if (sample.queryStateReadable)
+            ReadNativeFilterProbeSnapshot(queryState, true, sample.snapshots[1]);
+        sample.sessionGenerationAfter = g_worldSessionGeneration.load(std::memory_order_acquire);
+        NativeFilterProbe::SampleSummary summary{};
+        SetNativeFilterProbeSummaryIdentity(summary, sample);
+        const auto status = NativeFilterProbe::ValidateAndSummarize(sample, summary);
+        auto finalStatus = status;
+        if (status == NativeFilterProbe::ValidationStatus::StableTable)
+        {
+            bool usedHeadersReadable = true;
+            bool usedHeadersMatch = true;
+            for (std::size_t index = 0; index < capture.arrayHeadersObserved.size(); ++index)
+            {
+                if (!capture.arrayHeadersObserved[index])
+                {
+                    usedHeadersReadable = false;
+                    break;
+                }
+                if (capture.arrayHeadersUsed[index].pointer != sample.snapshots[0].arrays[index].pointer ||
+                    capture.arrayHeadersUsed[index].count != sample.snapshots[0].arrays[index].count ||
+                    capture.arrayHeadersUsed[index].pointer != sample.snapshots[1].arrays[index].pointer ||
+                    capture.arrayHeadersUsed[index].count != sample.snapshots[1].arrays[index].count)
+                {
+                    usedHeadersMatch = false;
+                }
+            }
+            if (!usedHeadersReadable || !usedHeadersMatch)
+            {
+                finalStatus = usedHeadersReadable ? NativeFilterProbe::ValidationStatus::Unstable :
+                    NativeFilterProbe::ValidationStatus::InvalidRead;
+                SetNativeFilterProbeSummaryIdentity(summary, sample);
+            }
+        }
+        const std::size_t statusIndex = static_cast<std::size_t>(finalStatus);
+        if (statusIndex < g_nativeFilterProbeStatusCounts.size())
+            g_nativeFilterProbeStatusCounts[statusIndex].fetch_add(1, std::memory_order_relaxed);
+#if defined(MINIMAP_TEST_NATIVE_FILTER_PROBE)
+        g_testNativeFilterProbeLastStatus = finalStatus;
+        g_testNativeFilterProbeLastSummary = summary;
+#endif
+        LogNativeFilterProbeSummary(finalStatus, summary, sample);
+    }
+#endif
+
     bool ReadWorldMapArray(uintptr_t state, std::size_t offset, bool custom,
-        std::vector<CapturedWorldMapMarker>& markers, std::size_t maxEntries = WORLD_MAP_MAX_ENTRIES)
+        std::vector<CapturedWorldMapMarker>& markers, std::size_t maxEntries = WORLD_MAP_MAX_ENTRIES
+#if ESM_NATIVE_FILTER_PROBE
+        , NativeFilterProbeCapture* filterProbe = nullptr,
+        NativeFilterProbe::ArrayKind filterArrayKind = NativeFilterProbe::ArrayKind::Primary
+#endif
+    )
     {
         uintptr_t entries = 0;
         std::uint64_t count = 0;
         if (!IsLikelyRuntimePointer(state) || !SafeReadValue(state + offset, entries) ||
             !SafeReadValue(state + offset + 8, count) || count > maxEntries)
+        {
+#if ESM_NATIVE_FILTER_PROBE
+            if (filterProbe != nullptr)
+                filterProbe->sample.rowMetadataReadable = false;
+#endif
             return false;
+        }
+#if ESM_NATIVE_FILTER_PROBE
+        if (filterProbe != nullptr)
+            ObserveNativeFilterProbeArrayHeader(*filterProbe, filterArrayKind, entries, count);
+#endif
         if (count == 0) return true; // A valid empty frame removes old markers.
-        if (!IsLikelyRuntimePointer(entries)) return false;
+        if (!IsLikelyRuntimePointer(entries))
+        {
+#if ESM_NATIVE_FILTER_PROBE
+            if (filterProbe != nullptr)
+                filterProbe->sample.rowMetadataReadable = false;
+#endif
+            return false;
+        }
         std::vector<std::uint8_t> bytes(static_cast<std::size_t>(count) * ClientOffset(WORLD_MAP_MARKER_STRIDE,0xA0));
 // MM_BG_BEGIN
         MM_BG_COUNT(WorldMapRows, count);
 // MM_BG_END
-        if (!SafeRead(entries, bytes.data(), bytes.size())) return false;
+        if (!SafeRead(entries, bytes.data(), bytes.size()))
+        {
+#if ESM_NATIVE_FILTER_PROBE
+            if (filterProbe != nullptr)
+                filterProbe->sample.rowMetadataReadable = false;
+#endif
+            return false;
+        }
         for (std::size_t i = 0; i < count; ++i)
         {
             const auto* entry = bytes.data() + i * ClientOffset(WORLD_MAP_MARKER_STRIDE,0xA0);
+#if ESM_NATIVE_FILTER_PROBE
+            if (filterProbe != nullptr)
+            {
+                if (filterArrayKind == NativeFilterProbe::ArrayKind::Primary)
+                    ObserveNativeFilterProbeRow(filterProbe->sample,
+                        NativeFilterProbe::RowSource::Primary, entry);
+                else if (filterArrayKind == NativeFilterProbe::ArrayKind::Secondary)
+                    ObserveNativeFilterProbeRow(filterProbe->sample,
+                        NativeFilterProbe::RowSource::Secondary, entry);
+            }
+#endif
             CapturedWorldMapMarker marker{};
             std::memcpy(&marker.x, entry + 0x10, sizeof(marker.x));
             std::memcpy(&marker.y, entry + 0x18, sizeof(marker.y));
@@ -4578,21 +5199,47 @@ namespace
 
     void CaptureWorldMapMarkers(uintptr_t state, DWORD now)
     {
+#if ESM_NATIVE_FILTER_PROBE
+        NativeFilterProbeCapture filterProbe{};
+        BeginNativeFilterProbeCapture(state, filterProbe);
+#endif
         std::vector<CapturedWorldMapMarker> markers;
-        const bool valid = ReadWorldMapArray(state, ClientOffset(CUSTOM_MAP_ARRAY_OFFSET,0x396A28), true, markers) &&
-            ReadWorldMapArray(state, ClientOffset(WORLD_MAP_ARRAY_OFFSET,0x36EA00), false, markers);
+        const bool valid = ReadWorldMapArray(state, ClientOffset(CUSTOM_MAP_ARRAY_OFFSET,0x396A28), true, markers
+#if ESM_NATIVE_FILTER_PROBE
+                , WORLD_MAP_MAX_ENTRIES,
+                filterProbe.active ? &filterProbe : nullptr,
+                NativeFilterProbe::ArrayKind::Custom
+#endif
+            ) &&
+            ReadWorldMapArray(state, ClientOffset(WORLD_MAP_ARRAY_OFFSET,0x36EA00), false, markers
+#if ESM_NATIVE_FILTER_PROBE
+                , WORLD_MAP_MAX_ENTRIES,
+                filterProbe.active ? &filterProbe : nullptr,
+                NativeFilterProbe::ArrayKind::Primary
+#endif
+            );
         if (!valid) markers.clear();
         if (valid && IsCurrentClientBuild() && g_deathMarkerLayoutSupported)
         {
             std::vector<CapturedWorldMapMarker> secondaryMarkers;
-            if (ReadWorldMapArray(state, 0x3BEA50, false, secondaryMarkers, DEATH_MAP_MAX_ENTRIES))
+            if (ReadWorldMapArray(state, 0x3BEA50, false, secondaryMarkers, DEATH_MAP_MAX_ENTRIES
+#if ESM_NATIVE_FILTER_PROBE
+                , filterProbe.active ? &filterProbe : nullptr,
+                NativeFilterProbe::ArrayKind::Secondary
+#endif
+            ))
                 markers.insert(markers.end(), secondaryMarkers.begin(), secondaryMarkers.end());
         }
         const auto count = markers.size();
         std::vector<CapturedWorldMapMarker> deaths;
         const auto deathArrayOffset = IsCurrentClientBuild() ? 0x3E6A78 : ClientOffset(DEATH_MAP_ARRAY_OFFSET,0x3BEA50);
         const bool deathsValid = g_deathMarkerLayoutSupported &&
-            ReadWorldMapArray(state, deathArrayOffset, false, deaths, DEATH_MAP_MAX_ENTRIES);
+            ReadWorldMapArray(state, deathArrayOffset, false, deaths, DEATH_MAP_MAX_ENTRIES
+#if ESM_NATIVE_FILTER_PROBE
+                , filterProbe.active ? &filterProbe : nullptr,
+                NativeFilterProbe::ArrayKind::Death
+#endif
+            );
         if (!deathsValid) deaths.clear();
         const auto deathCount = deaths.size();
         {
@@ -4611,6 +5258,9 @@ namespace
                 << " | deaths_valid=" << deathsValid << " | deaths=" << deathCount;
             Log(message.str());
         }
+#if ESM_NATIVE_FILTER_PROBE
+        FinishNativeFilterProbeCapture(state, filterProbe);
+#endif
     }
 
     std::vector<CapturedWorldMapMarker> CopyWorldMapMarkers(DWORD now)
@@ -4776,7 +5426,7 @@ namespace
 
     void __fastcall CapturePlayerCameraTransformHook(void* ctx, void*, void*, void*)
     {
-        ScopedTimer capture(DiagnosticCollector(), Metric::CameraCapture);
+        MM_AGGREGATE_SCOPE(capture, CameraCapture);
         uintptr_t record[10] = {};
         // player_camera_transform: +0x10 RenderTransform, +0x18 LocalPlayerData,
         // +0x30 LocalPlayerCameraTransform. Both transforms have fixed xyz + quaternion.
@@ -4934,7 +5584,7 @@ namespace
 
     bool TryRefreshPlayerPositionFromCachedCamera()
     {
-        ScopedTimer capture(DiagnosticCollector(), Metric::CachedCameraRefresh);
+        MM_AGGREGATE_SCOPE(capture, CachedCameraRefresh);
         const uintptr_t cachedCamera = g_playerCameraAddress.load();
         if (!IsLikelyRuntimePointer(cachedCamera))
             return false;
@@ -4987,7 +5637,7 @@ namespace
 
     bool TryCapturePlayerCameraFromRenderRoots()
     {
-        ScopedTimer capture(DiagnosticCollector(), Metric::CameraFallbackCapture);
+        MM_AGGREGATE_SCOPE(capture, CameraFallbackCapture);
         if (g_directCameraTrackingSupported)
             return false;
 
@@ -8285,6 +8935,7 @@ namespace
         {
             if (TryLoadMinimapIconsFromPath(path, g_minimapIcons))
             {
+                AdvanceMinimapIconAtlasGenerationLocked();
                 std::ostringstream oss;
                 oss << "[Minimap] loaded real map marker icon atlas"
                     << " | path=" << path
@@ -9079,38 +9730,57 @@ namespace
         return outKind != 0;
     }
 
-    std::uint32_t ResolveIconKeyFromRawWordsIfAtlasLoaded(const std::uint64_t* words, std::size_t wordCount, std::uint32_t fallback)
+    struct ResolvedMapMarkerIcon
     {
+        std::uint32_t kind = 0;
+        std::uint64_t atlasGeneration = 0;
+    };
+
+    ResolvedMapMarkerIcon ResolveIconKeyFromRawWordsIfAtlasLoadedWithGeneration(
+        const std::uint64_t* words, std::size_t wordCount, std::uint32_t fallback)
+    {
+#if defined(MINIMAP_TEST_PERF_FILTERS)
+        ++::g_testMapMarkerIconResolutionCount;
+#endif
         std::lock_guard<std::mutex> lock(g_minimapIconMutex);
+        const std::uint64_t atlasGeneration = g_minimapIconAtlasGeneration.load(std::memory_order_relaxed);
+        const auto resolved = [atlasGeneration](std::uint32_t kind) {
+            return ResolvedMapMarkerIcon{ kind, atlasGeneration };
+        };
         if (!g_minimapIcons.loaded)
         {
             std::uint32_t markerType = 0;
             if (TryReadMapMarkerTypeFromRawWords(words, wordCount, markerType) && IsSpecialMapMarkerKind(markerType))
-                return markerType;
-            return fallback;
+                return resolved(markerType);
+            return resolved(fallback);
         }
 
         std::uint32_t markerType = 0;
         if (TryReadMapMarkerTypeFromRawWords(words, wordCount, markerType) &&
             (IsSpecialMapMarkerKind(markerType) || IsKnownMarkerIconKeyLocked(markerType)))
         {
-            return markerType;
+            return resolved(markerType);
         }
 
         if (IsKnownMarkerIconKeyLocked(fallback))
-            return fallback;
+            return resolved(fallback);
 
         for (std::size_t index = 0; index < wordCount; ++index)
         {
             const std::uint32_t low = static_cast<std::uint32_t>(words[index] & 0xFFFFFFFFu);
             const std::uint32_t high = static_cast<std::uint32_t>((words[index] >> 32u) & 0xFFFFFFFFu);
             if (IsKnownMarkerIconKeyLocked(low))
-                return low;
+                return resolved(low);
             if (IsKnownMarkerIconKeyLocked(high))
-                return high;
+                return resolved(high);
         }
 
-        return fallback;
+        return resolved(fallback);
+    }
+
+    std::uint32_t ResolveIconKeyFromRawWordsIfAtlasLoaded(const std::uint64_t* words, std::size_t wordCount, std::uint32_t fallback)
+    {
+        return ResolveIconKeyFromRawWordsIfAtlasLoadedWithGeneration(words, wordCount, fallback).kind;
     }
 
     std::uint32_t ResolveIconKeyFromRawWords(const std::uint64_t* words, std::size_t wordCount, std::uint32_t fallback)
@@ -9430,7 +10100,7 @@ namespace
 
     bool TryPublishMapMarkerVisibilityRecord(const MapMarkerVisibilityIterationRecord& record)
     {
-        ScopedTimer capture(DiagnosticCollector(), Metric::MarkerCapture);
+        MM_AGGREGATE_SCOPE(capture, MarkerCapture);
         if (record.marker == nullptr || record.visibilityState == nullptr)
             return false;
 
@@ -9446,7 +10116,6 @@ namespace
         SafeReadValue(marker.stateAddress, marker.visibility);
         marker.markerId = static_cast<std::uint32_t>(marker.raw[0] & 0xFFFFFFFFu);
         TryReadMapMarkerTypeFromRawWords(marker.raw, sizeof(marker.raw) / sizeof(marker.raw[0]), marker.markerType);
-        marker.kind = ResolveIconKeyFromRawWordsIfAtlasLoaded(marker.raw, sizeof(marker.raw) / sizeof(marker.raw[0]), marker.markerType != 0 ? marker.markerType : marker.markerId);
 
         CapturedMapMarkerVisibility existing{};
         bool hasExistingPosition = false;
@@ -9480,6 +10149,28 @@ namespace
                 g_visibleMapMarkerFaults.store(0, std::memory_order_relaxed);
                 return true;
             }
+            const bool exactAddressMatch = existingIt != g_visibleMapMarkers.end() &&
+                ((marker.stateAddress != 0 && existingIt->stateAddress == marker.stateAddress) ||
+                    (marker.markerAddress != 0 && existingIt->markerAddress == marker.markerAddress));
+            const bool canReuseIcon = existingIt != g_visibleMapMarkers.end() && exactAddressMatch &&
+                existingIt->hasWorldPosition && existingIt->markerType == marker.markerType &&
+                std::memcmp(existingIt->raw, marker.raw, sizeof(marker.raw)) == 0 &&
+                existingIt->iconAtlasGeneration == g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+            if (canReuseIcon)
+            {
+                marker.kind = existingIt->kind;
+                marker.iconAtlasGeneration = existingIt->iconAtlasGeneration;
+            }
+            else
+            {
+                // Lock order: visible-marker cache -> icon atlas. The resolver
+                // captures kind and generation together and never loads assets.
+                const auto resolved = ResolveIconKeyFromRawWordsIfAtlasLoadedWithGeneration(
+                    marker.raw, sizeof(marker.raw) / sizeof(marker.raw[0]),
+                    marker.markerType != 0 ? marker.markerType : marker.markerId);
+                marker.kind = resolved.kind;
+                marker.iconAtlasGeneration = resolved.atlasGeneration;
+            }
             const DWORD retryNow = GetTickCount();
             if (existingIt != g_visibleMapMarkers.end() && ShouldDeferMarkerPosition(*existingIt, marker, retryNow))
             {
@@ -9498,9 +10189,6 @@ namespace
                 existing = *existingIt;
                 hasExistingPosition = true;
 
-                const bool exactAddressMatch =
-                    (marker.stateAddress != 0 && existingIt->stateAddress == marker.stateAddress) ||
-                    (marker.markerAddress != 0 && existingIt->markerAddress == marker.markerAddress);
                 if (exactAddressMatch && !g_debugLoggingEnabled.load())
                 {
                     const DWORD now = GetTickCount();
@@ -11816,7 +12504,7 @@ namespace
         g_renderer.fns.cmdBeginRenderPass(commandBuffer, &renderPassBegin, 0);
         if (minimapVisible)
         {
-            ScopedTimer widget(DiagnosticCollector(), Metric::OverlayWidget);
+            MM_AGGREGATE_SCOPE(widget, OverlayWidget);
             DrawMinimapWidget(g_renderer, commandBuffer, fog);
         }
         bool noticeOn = false;
@@ -11827,7 +12515,7 @@ namespace
             trace->noticeOn = MinimapPresentDecision::Observe(noticeOn));
         if (recordNoticeVisible)
         {
-            ScopedTimer notice(DiagnosticCollector(), Metric::OverlayNotice);
+            MM_AGGREGATE_SCOPE(notice, OverlayNotice);
             DrawMinimapNotice(g_renderer, commandBuffer, noticeOn, GetDpiForWindow(GetForegroundWindow()));
         }
         g_renderer.fns.cmdEndRenderPass(commandBuffer);
@@ -12002,7 +12690,7 @@ namespace
 
         bool recorded = false;
         {
-            ScopedTimer record(DiagnosticCollector(), Metric::OverlayRecord);
+            MM_AGGREGATE_SCOPE(record, OverlayRecord);
             recorded = RecordVulkanMinimapCommandGuarded(imageIndex, worldDrawEligible
                 MINIMAP_PD_TRACE_ARG(trace));
         }
@@ -12042,7 +12730,7 @@ namespace
 
         std::int32_t submitResult = VK_SUCCESS;
         {
-            ScopedTimer submit(DiagnosticCollector(), Metric::OverlaySubmit);
+            MM_AGGREGATE_SCOPE(submit, OverlaySubmit);
             submitResult = SubmitVulkanMinimapCommandGuarded(queue, &submitInfo, fence);
         }
         MINIMAP_PD_TRACE_IF(trace,
@@ -12050,12 +12738,12 @@ namespace
             trace->submitResult = submitResult);
         if (submitResult != VK_SUCCESS)
         {
-            DiagnosticCollector().Count(Metric::QueueSubmitFailure);
+            MM_AGGREGATE_COUNT(QueueSubmitFailure);
             MINIMAP_PD_TRACE_IF(trace,
                 trace->RejectFirst(MinimapPresentDecision::Rejection::QueueSubmitFailed));
             return StopVulkanMinimapSubmissionLocked("queue submit failed", submitResult, imageIndex);
         }
-        DiagnosticCollector().Count(Metric::QueueSubmitSuccess);
+        MM_AGGREGATE_COUNT(QueueSubmitSuccess);
 
         adjustedWaitSemaphore[0] = signalSemaphore;
         adjustedInfo = info;
@@ -12155,6 +12843,7 @@ namespace
         bool gameplayForDraw = false;
         const bool shouldDraw = ShouldDrawMinimapInWorld(&visibleObserved, &gameplayForDraw
             MINIMAP_PD_TRACE_ARG(trace != nullptr ? &trace->draw : nullptr));
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
         StateContext state{};
         state.visibility = visibleObserved ? Visibility::Visible : Visibility::Hidden;
         state.noticeActive = noticeVisible;
@@ -12164,6 +12853,7 @@ namespace
         std::uint64_t observationTicks = 0;
         if (ReadDiagnosticClock(nullptr, &observationTicks))
             DiagnosticCollector().Observe(state, observationTicks);
+#endif
         const bool contentEligible = shouldDraw || noticeVisible;
         MINIMAP_PD_TRACE_IF(trace,
             trace->contentEligible = MinimapPresentDecision::Observe(contentEligible));
@@ -12177,9 +12867,9 @@ namespace
             waitSemaphoresValid))
             return false;
 
-        ScopedTimer rendererLockWait(DiagnosticCollector(), Metric::RendererMutexAcquire);
+        MM_AGGREGATE_SCOPE(rendererLockWait, RendererMutexAcquire);
         std::lock_guard<std::mutex> lock(g_rendererMutex);
-        rendererLockWait.Stop();
+        MM_AGGREGATE_SCOPE_STOP(rendererLockWait);
         // Deactivation clears the flag before acquiring this same renderer lock.
         const bool activeAfterLock = g_runtimeCallbacksActive.load();
         MINIMAP_PD_TRACE_IF(trace,
@@ -12235,8 +12925,8 @@ namespace
     void UpdateMinimapSizeHotkeys(bool gameplay, SHORT (WINAPI* poll)(int) = GetAsyncKeyState)
     {
         const int decrease = g_minimapSizeDecreaseKey.load(), increase = g_minimapSizeIncreaseKey.load();
-        const bool down = decrease > 0 && (poll(decrease) & 0x8000) != 0;
-        const bool up = increase > 0 && (poll(increase) & 0x8000) != 0;
+        const bool down = IsMinimapSizeKeyDown(decrease, poll);
+        const bool up = IsMinimapSizeKeyDown(increase, poll);
         const bool smaller = down && !g_sizeDecreaseDown, larger = up && !g_sizeIncreaseDown;
         g_sizeDecreaseDown = down; g_sizeIncreaseDown = up;
         // Sample even outside gameplay so held/background keys are not replayed.
@@ -12455,20 +13145,20 @@ namespace
 
     std::int32_t __fastcall HookQueuePresent(void* queue, const void* presentInfo)
     {
-        ScopedTimer present(DiagnosticCollector(), Metric::PresentCallback);
-        ScopedTimer callbackWait(DiagnosticCollector(), Metric::PresentCallbackMutexAcquire);
+        MM_AGGREGATE_SCOPE(present, PresentCallback);
+        MM_AGGREGATE_SCOPE(callbackWait, PresentCallbackMutexAcquire);
         std::lock_guard<std::mutex> callback(g_presentCallbackMutex);
-        callbackWait.Stop();
-        DiagnosticCollector().MarkPresentCallbackMarker();
-        ScopedTimer localWork(DiagnosticCollector(), Metric::PresentLocalWork);
+        MM_AGGREGATE_SCOPE_STOP(callbackWait);
+        MM_AGGREGATE_MARK_PRESENT();
+        MM_AGGREGATE_SCOPE(localWork, PresentLocalWork);
         const uintptr_t original = g_originalQueuePresent.load();
         auto* originalFn = reinterpret_cast<QueuePresentFn>(original);
         if (originalFn == nullptr)
             return -1;
         if (!g_runtimeCallbacksActive.load())
         {
-            localWork.Stop();
-            ScopedTimer originalTimer(DiagnosticCollector(), Metric::OriginalPresent);
+            MM_AGGREGATE_SCOPE_STOP(localWork);
+            MM_AGGREGATE_SCOPE(originalTimer, OriginalPresent);
             return originalFn(queue,presentInfo);
         }
 
@@ -12543,16 +13233,16 @@ namespace
                 TrySubmitVulkanMinimap(queue, info, firstSwapchain, imageIndex, adjustedInfo,
                     adjustedWaitSemaphore, gameplayObserved);
         }
-        if (canDraw) DiagnosticCollector().Count(Metric::AdjustedPresent);
+        if (canDraw) MM_AGGREGATE_COUNT(AdjustedPresent);
 
-        localWork.Stop();
+        MM_AGGREGATE_SCOPE_STOP(localWork);
 #if defined(ESM_PRESENT_DECISION_TRACE)
         if (trace != nullptr)
         {
             return MinimapPresentDecision::CompleteAfterOriginalPresent(*trace,
                 [&](bool useAdjusted)
                 {
-                    ScopedTimer originalTimer(DiagnosticCollector(), Metric::OriginalPresent);
+                    MM_AGGREGATE_SCOPE(originalTimer, OriginalPresent);
                     return originalFn(queue, useAdjusted ? &adjustedInfo : presentInfo);
                 },
                 [](const MinimapPresentDecision::Trace& completed)
@@ -12561,7 +13251,7 @@ namespace
                 });
         }
 #endif
-        ScopedTimer originalTimer(DiagnosticCollector(), Metric::OriginalPresent);
+        MM_AGGREGATE_SCOPE(originalTimer, OriginalPresent);
         return originalFn(queue, canDraw ? &adjustedInfo : presentInfo);
     }
 
@@ -12945,17 +13635,19 @@ namespace
         const std::array<std::uint8_t,16> dispatch={0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8b,0xec};
         ClearMenuVisibilityObservation();
         g_menuVisibilityHookActive.store(false, std::memory_order_release);
+        MenuOwnershipSample menuSample{};
+        const bool sampledAtLoad=BeginCurrentMenuOwnershipAdmission(menuSample);
         bool menuGuardsMatched = false;
         if (g_menuVisibilityCallsiteEverActivated.load(std::memory_order_acquire))
         {
             menuGuardsMatched = g_menuVisibilityCallsitePublicationFinalized.load(std::memory_order_acquire) &&
-                IsRetainedCurrentMenuCallsiteOwned(g_menuVisibilityCallHook);
+                IsRetainedCurrentMenuCallsiteOwned(g_menuVisibilityCallHook) && sampledAtLoad &&
+                menuSample.admission != MenuAdmission::rejected;
             g_initialMenuVisibilityPending = !menuGuardsMatched;
         }
         else
         {
-            MenuOwnershipSample menuSample{};
-            menuGuardsMatched = SampleCurrentMenuOwnership(menuSample, false, PublicCreativeCompat::ProofOrigin::AdmissionUpdate) &&
+            menuGuardsMatched = sampledAtLoad &&
                 menuSample.admission != MenuAdmission::rejected;
             g_initialMenuVisibilityPending = !menuGuardsMatched;
             if (menuGuardsMatched)
@@ -13027,6 +13719,7 @@ namespace
             (IsCurrentClientBuild() ? g_vulkanStartup.hook!=nullptr : g_vulkanDeviceTableInitHook!=nullptr);
     }
 
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
     constexpr std::size_t kAggregateTimingChunkPayloadBytes = 300;
     constexpr std::size_t kAggregateTimingChunkMessageLimit = 400;
     constexpr std::size_t kAggregateTimingChunkHeaderBudget = 96;
@@ -13180,6 +13873,7 @@ namespace
                 modContext->Log(chunks[i].data());
         }
     }
+#endif
     class MinimapMod : public Mod
     {
         // Shroudtopia owns and overwrites Mod::loaded, even after a rejected Load.
@@ -13187,7 +13881,9 @@ namespace
     public:
         void Load(ModContext* modContext) override
         {
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
             const bool diagnosticClockReady = InitializeDiagnosticCollector();
+#endif
             g_runtimeCallbacksActive.store(false);
             g_menuVisibilityHookActive.store(false, std::memory_order_release);
             g_initialMenuVisibilityPending = false;
@@ -13200,7 +13896,9 @@ namespace
             }
 
             g_modContext = modContext;
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
             modContext->Log(diagnosticClockReady ? "[ESM Minimap] aggregate timing diagnostic schema=1 build=MM-PERF-88-20261021 qpc=ready" : "[ESM Minimap] aggregate timing diagnostic schema=1 build=MM-PERF-88-20261021 qpc=unavailable");
+#endif
             g_shroudtopiaConfigPath = ResolveShroudtopiaConfigPath(modContext);
             RefreshMinimapConfig(modContext, true);
             g_exeBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
@@ -13419,6 +14117,7 @@ namespace
         void Unload(ModContext* modContext) override
         {
             g_runtimeCallbacksActive.store(false);
+            PublicCreativeCompat::ForgetIdentity();
             DisableVulkanStartupCapture();
             g_menuVisibilityCallHook = DisableMenuCaptureAndRetainCallsite(
                 g_menuVisibilityCallHook, g_menuVisibilityHookActive,
@@ -13575,9 +14274,8 @@ namespace
             const bool uiOk = ActivateHook(g_localPlayerUiRenderSetupHook);
             const bool waypointOk = ActivateHook(g_playerWaypointsUiHook);
             const bool markerVisibilityOk = ActivateHook(g_mapMarkerVisibilityHook);
-            const bool menuUiOk = g_client10
-                ? ActivateMenuVisibilityAtBoundary(modContext, g_initialMenuVisibilityPending)
-                : false;
+            const bool menuUiOk = g_client10 &&
+                ContinueMenuOwnershipAdmissionAtActivation(modContext, g_initialMenuVisibilityPending);
             const bool renderOk = ActivateHook(g_renderPresentFrameHook);
             const bool vulkanOk = IsCurrentClientBuild()
                 ? (cameraOk && renderOk && ActivateVulkanStartupCallsite())
@@ -13695,7 +14393,9 @@ namespace
                 PollGameSessionLog();
                 ProbeVulkanTable();
             }
+#if ESM_AGGREGATE_TIMING_DIAGNOSTICS
             EmitAggregateTimingReport(modContext);
+#endif
         }
 
         ModMetaData GetMetaData() override

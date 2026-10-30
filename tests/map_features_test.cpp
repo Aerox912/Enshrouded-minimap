@@ -1,12 +1,20 @@
 // Production readers and drawing commands, without hooking or modifying a game.
+#ifndef ESM_NATIVE_FILTER_PROBE
+#define ESM_NATIVE_FILTER_PROBE 0
+#endif
 unsigned long long g_testMinimapConfigFileReadCount = 0;
 unsigned long long g_testMinimapConfigBlockLookupCount = 0;
 unsigned long long g_testMapMarkerCacheLockCount = 0;
 unsigned long long g_testMapMarkerIdentitySearchCount = 0;
 unsigned long long g_testMapMarkerResolverCallCount = 0;
+unsigned long long g_testMapMarkerIconResolutionCount = 0;
 void (*g_testBeforeMapMarkerResolver)() = nullptr;
+#define MINIMAP_TEST_ICON_ATLAS_MUTATION 1
 #define MINIMAP_TEST_PERF_FILTERS 1
+#define MINIMAP_TEST_NATIVE_FILTER_PROBE 1
 #include "../src/dllmain.cpp"
+#undef MINIMAP_TEST_ICON_ATLAS_MUTATION
+#undef MINIMAP_TEST_NATIVE_FILTER_PROBE
 #include <atomic>
 #include <cstdlib>
 #include <iostream>
@@ -177,6 +185,7 @@ namespace
 
     void ResetMapMarkerFastPathTestCounters()
     {
+        ::g_testMapMarkerIconResolutionCount = 0;
         ::g_testMapMarkerCacheLockCount = 0;
         ::g_testMapMarkerIdentitySearchCount = 0;
         ::g_testMapMarkerResolverCallCount = 0;
@@ -250,6 +259,8 @@ namespace
         CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record) &&
             g_visibleMapMarkers.size() == 1 && !g_visibleMapMarkers[0].hasWorldPosition &&
             ::g_testMapMarkerResolverCallCount == 1, "first unresolved visible marker attempts resolution");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1,
+            "unresolved visible marker resolves its kind from the current atlas");
         for (bool visible : { true, false })
         {
             g_minimapVisible = visible;
@@ -260,18 +271,26 @@ namespace
         CheckPerfFilter(g_visibleMapMarkers[0].visibility == 1 &&
             GetTickCount() - g_visibleMapMarkers[0].lastUpdateTick < 200,
             "deferred callbacks retain fresh native visibility and cache age");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 17,
+            "unresolved retries keep resolving kind instead of reusing a positioned-only result");
         Sleep(220);
         TryPublishMapMarkerVisibilityRecord(record);
         CheckPerfFilter(::g_testMapMarkerResolverCallCount == 2,
             "failed resolution retries after bounded interval without starvation");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 18,
+            "deadline retry resolves kind again from the current atlas");
         raw[0] = 1234;
         TryPublishMapMarkerVisibilityRecord(record);
         CheckPerfFilter(::g_testMapMarkerResolverCallCount == 3,
             "raw identity change invalidates failed retry state immediately");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 19,
+            "raw identity change remains on the existing icon resolver path");
         record.unknown0 = otherUnknown.data();
         TryPublishMapMarkerVisibilityRecord(record);
         CheckPerfFilter(::g_testMapMarkerResolverCallCount == 4,
             "resolver root change invalidates failed retry state immediately");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 20,
+            "resolver root change remains on the existing icon resolver path");
         state[0] = 0;
         TryPublishMapMarkerVisibilityRecord(record);
         CheckPerfFilter(g_visibleMapMarkers[0].visibility == 0 &&
@@ -382,6 +401,8 @@ namespace
             CheckPerfFilter(::g_testMapMarkerCacheLockCount == 8 &&
                 ::g_testMapMarkerIdentitySearchCount == 8 && ::g_testMapMarkerResolverCallCount == 0,
                 "repeated hidden misses use one lock/search and no position resolver, including debug mode");
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 0,
+                "uncached hidden markers never resolve an icon or acquire the icon-atlas mutex");
             CheckPerfFilter(g_visibleMapMarkers.size() == 1 &&
                 g_visibleMapMarkers[0].stateAddress == unrelated.stateAddress &&
                 g_visibleMapMarkers[0].visibility == 1 && g_visibleMapMarkers[0].x == 444 &&
@@ -416,6 +437,8 @@ namespace
             g_visibleMapMarkers[0].visibility == 1 && ::g_testMapMarkerResolverCallCount == 1 &&
             ::g_testMapMarkerCacheLockCount == 2 && ::g_testMapMarkerIdentitySearchCount == 2,
             "previous hidden miss is not negatively cached and immediately enters normal visible publication");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1,
+            "a newly visible marker resolves its current icon immediately");
         g_visibleMapMarkers[0].hasWorldPosition = true;
         g_visibleMapMarkers[0].x = 111;
         state[0] = 0;
@@ -431,8 +454,10 @@ namespace
         return g_perfFilterTestFailures == 0 ? 0 : 1;
     }
 
-    int CheckVisibleMapMarkerFastPath()
+    int CheckVisibleMapMarkerFastPath(const char* atlasAssetDirectory = nullptr)
     {
+        constexpr std::uint32_t kFixtureKnownMarkerIcon = 0x000F0001u;
+        constexpr std::uint32_t kFixtureUnknownMarkerIcon = 0x000F0002u;
         g_perfFilterTestFailures = 0;
         const DWORD now = GetTickCount();
         const bool savedDebugLogging = g_debugLoggingEnabled.load();
@@ -445,8 +470,18 @@ namespace
                 logLines.emplace_back(message);
         };
         g_modContext = &markerLogContext;
+        MinimapIconAtlas savedIconAtlas{};
+        {
+            std::lock_guard<std::mutex> lock(g_minimapIconMutex);
+            savedIconAtlas = g_minimapIcons;
+        }
+        MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) {
+            atlas = {};
+            atlas.attempted = true;
+        });
         std::array<std::uint64_t, 32> markerRaw{};
         markerRaw[0] = 0x1234;
+        markerRaw[1] = kFixtureKnownMarkerIcon;
         std::array<std::uint8_t, 0x60> markerState{};
         std::array<std::uint8_t, 0x180> markerEntity{};
         std::array<std::uint8_t, 0x100> markerUnknown{};
@@ -459,34 +494,42 @@ namespace
 
         ClearMapMarkerFastPathTestCache(now, now);
         g_debugLoggingEnabled = false;
+        const auto expectedIcon = ResolveIconKeyFromRawWordsIfAtlasLoadedWithGeneration(
+            markerRaw.data(), 5, 0x1234);
         const auto positioned = MakeMapMarkerFastPathTestMarker(
             reinterpret_cast<uintptr_t>(record.marker), reinterpret_cast<uintptr_t>(record.visibilityState),
-            0x1111, true, 111, 222, 333, now - 100);
+            expectedIcon.kind, true, 111, 222, 333, now - 100);
+        auto positionedWithSnapshot = positioned;
+        std::memcpy(positionedWithSnapshot.raw, markerRaw.data(), sizeof(positionedWithSnapshot.raw));
+        positionedWithSnapshot.markerId = 0x1234;
+        positionedWithSnapshot.iconAtlasGeneration = expectedIcon.atlasGeneration;
         auto unrelated = MakeMapMarkerFastPathTestMarker(0x500000, 0x600000,
             0x2222, true, 444, 555, 666, now - 50);
         {
             std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
-            g_visibleMapMarkers.push_back(positioned);
+            g_visibleMapMarkers.push_back(positionedWithSnapshot);
             g_visibleMapMarkers.push_back(unrelated);
         }
         ResetMapMarkerFastPathTestCounters();
-        const auto expectedKind = ResolveIconKeyFromRawWordsIfAtlasLoaded(
-            markerRaw.data(), 5, 0x1234);
         const bool positionedHitPublished = TryPublishMapMarkerVisibilityRecord(record);
         std::cout << "POSITIONED_HIT_LOCKS=" << ::g_testMapMarkerCacheLockCount
             << " IDENTITY_SEARCHES=" << ::g_testMapMarkerIdentitySearchCount
-            << " RESOLVER_CALLS=" << ::g_testMapMarkerResolverCallCount << '\n';
+            << " RESOLVER_CALLS=" << ::g_testMapMarkerResolverCallCount
+            << " ICON_RESOLVER_CALLS=" << ::g_testMapMarkerIconResolutionCount << '\n';
         CheckPerfFilter(positionedHitPublished, "positioned cached hit accepts the visibility record");
         CheckPerfFilter(::g_testMapMarkerCacheLockCount == 1 &&
             ::g_testMapMarkerIdentitySearchCount == 1 && ::g_testMapMarkerResolverCallCount == 0,
             "positioned cache hit completes under one identity search and mutex acquisition");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 0,
+            "identical positioned raw/type snapshot reuses kind without resolving the icon again");
         {
             std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
             CheckPerfFilter(g_visibleMapMarkers.size() == 2 &&
                 g_visibleMapMarkers[0].stateAddress == reinterpret_cast<uintptr_t>(record.visibilityState) &&
                 g_visibleMapMarkers[1].stateAddress == unrelated.stateAddress,
                 "positioned cache hit preserves vector order and unrelated entries");
-            CheckPerfFilter(g_visibleMapMarkers[0].visibility == 0 && g_visibleMapMarkers[0].kind == expectedKind &&
+            CheckPerfFilter(g_visibleMapMarkers[0].visibility == 0 && g_visibleMapMarkers[0].kind == expectedIcon.kind &&
+                g_visibleMapMarkers[0].iconAtlasGeneration == expectedIcon.atlasGeneration &&
                 g_visibleMapMarkers[0].hasWorldPosition && g_visibleMapMarkers[0].x == 111 &&
                 g_visibleMapMarkers[0].y == 222 && g_visibleMapMarkers[0].z == 333 &&
                 static_cast<DWORD>(g_visibleMapMarkers[0].lastUpdateTick - (now - 100)) < 1000,
@@ -498,6 +541,180 @@ namespace
         }
 
         markerState[0] = 1;
+        ResetMapMarkerFastPathTestCounters();
+        CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record),
+            "positioned cache refresh accepts visible transition");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 0,
+            "visible transition reuses kind while visibility remains fresh");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers[0].visibility == 1 &&
+                g_visibleMapMarkers[0].x == 111 && g_visibleMapMarkers[0].y == 222 && g_visibleMapMarkers[0].z == 333,
+                "visible transition updates visibility and retains cached coordinates");
+        }
+        markerState[0] = 0;
+        ResetMapMarkerFastPathTestCounters();
+        CheckPerfFilter(TryPublishMapMarkerVisibilityRecord(record),
+            "positioned cache refresh accepts hidden transition");
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 0,
+            "hidden transition reuses kind without reusing visibility");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers[0].visibility == 0 &&
+                g_visibleMapMarkers[0].x == 111 && g_visibleMapMarkers[0].y == 222 && g_visibleMapMarkers[0].z == 333,
+                "hidden transition is immediate and retains cached coordinates");
+        }
+
+        markerState[0] = 1;
+        markerRaw[1] = kFixtureUnknownMarkerIcon;
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1,
+            "changed raw words invalidate positioned icon reuse");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers[0].kind == 0x1234 &&
+                std::memcmp(g_visibleMapMarkers[0].raw, markerRaw.data(), sizeof(g_visibleMapMarkers[0].raw)) == 0,
+                "no-atlas unknown raw words preserve the marker-id fallback");
+        }
+        markerRaw[1] = kFixtureKnownMarkerIcon;
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1,
+            "restored raw words still invalidate the previous snapshot");
+        markerRaw[2] = MAP_MARKER_QUEST_KIND;
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1 &&
+                g_visibleMapMarkers[0].markerType == MAP_MARKER_QUEST_KIND &&
+                g_visibleMapMarkers[0].kind == MAP_MARKER_QUEST_KIND,
+                "changed marker type is resolved instead of reusing the positioned kind");
+        }
+        markerRaw[2] = 0;
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1 &&
+                g_visibleMapMarkers[0].kind == 0x1234,
+                "restored marker type resolves its no-atlas fallback");
+        }
+
+        auto installOneIconAtlas = [](std::uint32_t key) {
+            MutateMinimapIconAtlasForTest([key](MinimapIconAtlas& atlas) {
+                atlas = {};
+                atlas.attempted = true;
+                atlas.loaded = true;
+                atlas.path = "marker-kind-generation-fixture";
+                MinimapIcon icon{};
+                icon.key = key;
+                atlas.icons.push_back(std::move(icon));
+            });
+        };
+        const auto generationBeforeLoad = g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+        installOneIconAtlas(kFixtureKnownMarkerIcon);
+        const auto loadedAtlasGeneration = g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+        CheckPerfFilter(loadedAtlasGeneration > generationBeforeLoad,
+            "loading a fixture atlas advances its generation monotonically");
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1,
+            "no-atlas cached result is invalidated after atlas loading");
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(g_visibleMapMarkers[0].kind == kFixtureKnownMarkerIcon &&
+                g_visibleMapMarkers[0].iconAtlasGeneration == loadedAtlasGeneration,
+                "loaded atlas resolves the known raw icon with its matching generation");
+        }
+        markerRaw[1] = kFixtureUnknownMarkerIcon;
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1 &&
+                g_visibleMapMarkers[0].kind == 0x1234,
+                "unknown loaded-atlas icon retains the existing marker-id fallback");
+        }
+        markerRaw[1] = kFixtureKnownMarkerIcon;
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1 &&
+                g_visibleMapMarkers[0].kind == kFixtureKnownMarkerIcon,
+                "changed raw words resolve a known icon again");
+        }
+
+        MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) {
+            atlas = {};
+            atlas.attempted = true;
+        });
+        const auto resetAtlasGeneration = g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+        CheckPerfFilter(resetAtlasGeneration > loadedAtlasGeneration,
+            "atlas reset advances rather than reusing an earlier generation");
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1 &&
+                g_visibleMapMarkers[0].kind == 0x1234 &&
+                g_visibleMapMarkers[0].iconAtlasGeneration == resetAtlasGeneration,
+                "atlas reset invalidates the old icon result without an ABA generation match");
+        }
+        installOneIconAtlas(kFixtureKnownMarkerIcon);
+        const auto reloadedAtlasGeneration = g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+        CheckPerfFilter(reloadedAtlasGeneration > resetAtlasGeneration,
+            "reloading after reset keeps atlas generations monotonic");
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1 &&
+                g_visibleMapMarkers[0].kind == kFixtureKnownMarkerIcon &&
+                g_visibleMapMarkers[0].iconAtlasGeneration == reloadedAtlasGeneration,
+                "reloaded atlas replaces the fallback with the current icon result");
+        }
+
+        MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) { atlas = {}; });
+        const auto generationBeforeLazyLoad = g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+        std::array<char, MAX_PATH> previousDirectory{};
+        const DWORD previousDirectoryLength = GetCurrentDirectoryA(
+            static_cast<DWORD>(previousDirectory.size()), previousDirectory.data());
+        const bool hasRestorableDirectory = previousDirectoryLength > 0 &&
+            previousDirectoryLength < static_cast<DWORD>(previousDirectory.size());
+        const char* requestedAssetDirectory = atlasAssetDirectory != nullptr && atlasAssetDirectory[0] != '\0' ?
+            atlasAssetDirectory : "assets";
+        const bool changedToAssetDirectory = hasRestorableDirectory &&
+            SetCurrentDirectoryA(requestedAssetDirectory) != FALSE;
+        const auto savedLoadContext = g_modContext;
+        g_modContext = nullptr;
+        if (changedToAssetDirectory)
+            EnsureMinimapIconsLoaded();
+        const bool restoredDirectory = !changedToAssetDirectory ||
+            SetCurrentDirectoryA(previousDirectory.data()) != FALSE;
+        g_modContext = savedLoadContext;
+        CheckPerfFilter(restoredDirectory, "lazy atlas fixture restores the original working directory");
+        bool actualAtlasLoaded = false;
+        {
+            std::lock_guard<std::mutex> lock(g_minimapIconMutex);
+            actualAtlasLoaded = g_minimapIcons.attempted && g_minimapIcons.loaded;
+        }
+        const auto generationAfterLazyLoad = g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+        CheckPerfFilter(changedToAssetDirectory && actualAtlasLoaded &&
+            generationAfterLazyLoad == generationBeforeLazyLoad + 1,
+            "successful lazy atlas load publishes exactly one generation after the fixture is complete");
+        ResetMapMarkerFastPathTestCounters();
+        TryPublishMapMarkerVisibilityRecord(record);
+        {
+            std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
+            CheckPerfFilter(::g_testMapMarkerIconResolutionCount == 1 &&
+                g_visibleMapMarkers[0].kind == 0x1234 &&
+                g_visibleMapMarkers[0].iconAtlasGeneration == generationAfterLazyLoad,
+                "successful lazy load invalidates a cached unknown icon using the current generation");
+        }
+
         record.marker = reinterpret_cast<std::uint8_t*>(markerRaw.data());
         record.visibilityState = markerState.data();
         ClearMapMarkerFastPathTestCache(now, now - 5000);
@@ -639,6 +856,9 @@ namespace
             std::lock_guard<std::mutex> lock(g_visibleMapMarkerMutex);
             CheckPerfFilter(g_visibleMapMarkers.empty(), "session reset clears visible map markers");
         }
+        MutateMinimapIconAtlasForTest([&](MinimapIconAtlas& atlas) {
+            atlas = std::move(savedIconAtlas);
+        });
 
         g_debugLoggingEnabled = savedDebugLogging;
         g_modContext = savedModContext;
@@ -737,6 +957,242 @@ namespace
         Put(state.data(), offset, reinterpret_cast<uintptr_t>(entries));
         Put(state.data(), offset + 8, count);
     }
+
+    bool SameCapturedWorldMapMarkers(const std::vector<CapturedWorldMapMarker>& left,
+        const std::vector<CapturedWorldMapMarker>& right)
+    {
+        if (left.size() != right.size())
+            return false;
+        for (std::size_t index = 0; index < left.size(); ++index)
+        {
+            if (left[index].x != right[index].x || left[index].y != right[index].y ||
+                left[index].z != right[index].z || left[index].key != right[index].key ||
+                left[index].custom != right[index].custom)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+#if ESM_NATIVE_FILTER_PROBE
+    std::array<NativeFilterProbe::ArrayHeader, 4> g_testNativeFilterProbeHeaders{};
+    std::array<NativeFilterProbe::FilterEntryBytes, NativeFilterProbe::kMaxFilterEntries>
+        g_testNativeFilterProbeEntries{};
+    std::uint8_t g_testNativeFilterProbeEntryCount = 2;
+    bool g_testNativeFilterProbeChangeCountAfter = false;
+    bool g_testNativeFilterProbeMismatchPrimaryPointer = false;
+
+    void SetNativeFilterProbeTestEntry(std::size_t index, std::uint32_t id, std::uint8_t enabled)
+    {
+        auto& entry = g_testNativeFilterProbeEntries[index];
+        entry.bytes.fill(0);
+        entry.bytes[0] = static_cast<std::uint8_t>(id & 0xffu);
+        entry.bytes[1] = static_cast<std::uint8_t>((id >> 8) & 0xffu);
+        entry.bytes[2] = static_cast<std::uint8_t>((id >> 16) & 0xffu);
+        entry.bytes[3] = static_cast<std::uint8_t>((id >> 24) & 0xffu);
+        entry.bytes[5] = enabled;
+    }
+
+    bool ReadNativeFilterProbeTestSnapshot(std::uintptr_t queryState, bool after,
+        NativeFilterProbe::ReadSnapshot& snapshot)
+    {
+        snapshot.root.readable = true;
+        snapshot.root.links = { 0x1000, 0x2000, 0x3000, queryState };
+        snapshot.revisionsReadable = true;
+        snapshot.revision36E9F8 = 13;
+        snapshot.revision36E9FC = 17;
+        snapshot.arrayHeadersReadable = true;
+        snapshot.arrays = g_testNativeFilterProbeHeaders;
+        if (g_testNativeFilterProbeMismatchPrimaryPointer)
+            snapshot.arrays[static_cast<std::size_t>(NativeFilterProbe::ArrayKind::Primary)].pointer ^= 0x1000;
+        snapshot.filterCountReadable = true;
+        snapshot.filterCount = g_testNativeFilterProbeEntryCount;
+        if (after && g_testNativeFilterProbeChangeCountAfter && snapshot.filterCount > 0)
+            --snapshot.filterCount;
+        snapshot.filterEntriesReadable = true;
+        snapshot.filterTable = g_testNativeFilterProbeEntries;
+        return true;
+    }
+
+#endif
+
+    std::uintptr_t g_testNativeFilterProbeWorldState = 0;
+    void __fastcall InitNativeFilterProbeMap(void*, void* record, std::uint32_t size)
+    {
+        if (size != 16)
+            std::exit(2);
+        static_cast<std::uintptr_t*>(record)[1] = g_testNativeFilterProbeWorldState;
+    }
+
+    int CheckNativeFilterProbeCallbackFocused()
+    {
+        const bool savedClient10 = g_client10;
+        const auto savedProfile = g_clientProfile;
+        const bool savedWorldLayout = g_worldMapLayoutSupported.load();
+        const bool savedDeathLayout = g_deathMarkerLayoutSupported.load();
+        const bool savedDeathVisibility = g_showDeathMarkers.load();
+        const auto savedIterator = g_iterInit;
+        const DWORD savedLastCaptureTick = g_lastWorldMapCaptureTick;
+        std::vector<CapturedWorldMapMarker> savedWorld, savedDeaths;
+        bool savedValid = false;
+        DWORD savedWorldTick = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_worldMapMutex);
+            savedWorld = g_worldMapMarkers;
+            savedDeaths = g_deathMarkers;
+            savedValid = g_worldMapValid;
+            savedWorldTick = g_worldMapTick;
+        }
+
+        constexpr std::size_t stateSize = 0x3E6A78 + 16;
+        std::vector<std::uint8_t> probeState(stateSize);
+        std::array<std::uint8_t, 0xA0 * 2> primary{};
+        std::array<std::uint8_t, 0xA0> custom{};
+        std::array<std::uint8_t, 0xA0> secondary{};
+        std::array<std::uint8_t, 0xA0> deaths{};
+        CurrentEntry(primary.data(), 900, 1000, 101);
+        Put(primary.data(), 0x34, std::uint8_t{ 0 });
+        CurrentEntry(primary.data() + 0xA0, -10000, 1000, 202);
+        Put(primary.data(), 0xA0 + 0x34, std::uint8_t{ 1 });
+        CurrentEntry(custom.data(), 1000, 1000, 404);
+        CurrentEntry(secondary.data(), 1100, 1000, 303);
+        Put(secondary.data(), 0x08, std::uint32_t{ 0x44556677 });
+        CurrentEntry(deaths.data(), 1200, 1000, 505);
+
+        PutCurrentList(probeState, 0x36EA00, primary.data(), 2);
+        PutCurrentList(probeState, 0x396A28, custom.data(), 1);
+        PutCurrentList(probeState, 0x3BEA50, secondary.data(), 1);
+        PutCurrentList(probeState, 0x3E6A78, deaths.data(), 1);
+
+        g_client10 = true;
+        g_clientProfile = MinimapClient10::Profile::Build26082781;
+        g_worldMapLayoutSupported = true;
+        g_deathMarkerLayoutSupported = true;
+        g_showDeathMarkers = true;
+        g_iterInit = InitNativeFilterProbeMap;
+        g_testNativeFilterProbeWorldState = reinterpret_cast<std::uintptr_t>(probeState.data());
+        g_testNativeFilterProbeCaptureCount = 0;
+        g_testNativeFilterProbeSnapshotReadCount = 0;
+#if ESM_NATIVE_FILTER_PROBE
+        const auto savedSnapshotReader = g_testNativeFilterProbeSnapshotReader;
+        const bool savedGuardOverrideSet = g_testNativeFilterProbeGuardOverrideSet;
+        const bool savedGuardOverride = g_testNativeFilterProbeGuardOverride;
+        const auto savedTestStatus = g_testNativeFilterProbeLastStatus;
+        const auto savedTestSummary = g_testNativeFilterProbeLastSummary;
+        g_testNativeFilterProbeHeaders = {
+            NativeFilterProbe::ArrayHeader{ reinterpret_cast<std::uintptr_t>(primary.data()), 2 },
+            NativeFilterProbe::ArrayHeader{ reinterpret_cast<std::uintptr_t>(custom.data()), 1 },
+            NativeFilterProbe::ArrayHeader{ reinterpret_cast<std::uintptr_t>(secondary.data()), 1 },
+            NativeFilterProbe::ArrayHeader{ reinterpret_cast<std::uintptr_t>(deaths.data()), 1 }
+        };
+        g_testNativeFilterProbeEntries = {};
+        SetNativeFilterProbeTestEntry(0, 101, 0);
+        SetNativeFilterProbeTestEntry(1, 303, 1);
+        g_testNativeFilterProbeEntryCount = 2;
+        g_testNativeFilterProbeChangeCountAfter = false;
+        g_testNativeFilterProbeSnapshotReader = ReadNativeFilterProbeTestSnapshot;
+        SetNativeFilterProbeTestGuard(false);
+#endif
+
+        const auto runHook = [&]() {
+            g_lastWorldMapCaptureTick = GetTickCount() - 100;
+            std::uintptr_t context[2] = { 0x1234, 0x5678 };
+            CaptureWorldMapHook(context, nullptr, nullptr, nullptr);
+        };
+        runHook();
+        const DWORD firstTick = GetTickCount();
+        const auto baselineMarkers = CopyWorldMapMarkers(firstTick);
+        const auto baselineDeaths = CopyDeathMarkers(firstTick);
+        Check(g_worldMapValid && baselineMarkers.size() == 3 && baselineDeaths.size() == 1,
+            "callback fixture produces fresh baseline POI and death snapshots");
+        Check(baselineMarkers.size() == 3 &&
+            std::count_if(baselineMarkers.begin(), baselineMarkers.end(), [](const auto& marker) {
+                return marker.key == 202;
+            }) == 0,
+            "out-of-bounds primary row stays absent from the normal marker vector");
+
+#if ESM_NATIVE_FILTER_PROBE
+        Check(g_testNativeFilterProbeCaptureCount == 0 && g_testNativeFilterProbeSnapshotReadCount == 0,
+            "failed optional code guard performs no probe capture or snapshot reads");
+        SetNativeFilterProbeTestGuard(true);
+        g_testNativeFilterProbeChangeCountAfter = true;
+        runHook();
+        const DWORD rejectedTick = GetTickCount();
+        const auto rejectedMarkers = CopyWorldMapMarkers(rejectedTick);
+        const auto rejectedDeaths = CopyDeathMarkers(rejectedTick);
+        Check(g_testNativeFilterProbeLastStatus == NativeFilterProbe::ValidationStatus::Unstable,
+            "callback probe rejects a changed inline table snapshot");
+        Check(g_testNativeFilterProbeLastSummary.sequence > 0 &&
+            g_testNativeFilterProbeLastSummary.sessionGeneration == g_worldSessionGeneration.load() &&
+            g_testNativeFilterProbeLastSummary.context == NativeFilterProbe::ContextState::Unknown,
+            "rejected callback sample retains sequence, session and unknown context for diagnostics");
+        Check(g_testNativeFilterProbeCaptureCount == 1 &&
+            g_testNativeFilterProbeSnapshotReadCount == 2,
+            "opt-in callback reads only the bounded before and after snapshots");
+        Check(SameCapturedWorldMapMarkers(baselineMarkers, rejectedMarkers) &&
+            SameCapturedWorldMapMarkers(baselineDeaths, rejectedDeaths) && g_worldMapValid &&
+            rejectedTick - g_worldMapTick <= MinimapLive::PlayerStaleMs,
+            "rejected probe preserves normal marker vectors and publishes a fresh snapshot");
+
+        g_testNativeFilterProbeChangeCountAfter = false;
+        g_testNativeFilterProbeMismatchPrimaryPointer = true;
+        runHook();
+        const DWORD headerRejectedTick = GetTickCount();
+        const auto headerRejectedMarkers = CopyWorldMapMarkers(headerRejectedTick);
+        const auto headerRejectedDeaths = CopyDeathMarkers(headerRejectedTick);
+        Check(g_testNativeFilterProbeLastStatus == NativeFilterProbe::ValidationStatus::Unstable &&
+            g_testNativeFilterProbeLastSummary.filterEntryCount == 0,
+            "callback probe rejects a stable snapshot header that differs from the actual row reader");
+        Check(SameCapturedWorldMapMarkers(baselineMarkers, headerRejectedMarkers) &&
+            SameCapturedWorldMapMarkers(baselineDeaths, headerRejectedDeaths) && g_worldMapValid &&
+            headerRejectedTick - g_worldMapTick <= MinimapLive::PlayerStaleMs,
+            "header mismatch rejection leaves fresh normal marker and death snapshots unchanged");
+
+        g_testNativeFilterProbeMismatchPrimaryPointer = false;
+        runHook();
+        Check(g_testNativeFilterProbeLastStatus == NativeFilterProbe::ValidationStatus::StableTable &&
+            g_testNativeFilterProbeLastSummary.filters[0].id == 101 &&
+            !g_testNativeFilterProbeLastSummary.filters[0].enabled &&
+            g_testNativeFilterProbeLastSummary.filters[0].primaryMatches == 1 &&
+            g_testNativeFilterProbeLastSummary.filters[1].id == 303 &&
+            g_testNativeFilterProbeLastSummary.filters[1].enabled &&
+            g_testNativeFilterProbeLastSummary.filters[1].secondaryMatches == 1 &&
+            g_testNativeFilterProbeLastSummary.unresolvedSpecialPrimary == 1 &&
+            g_testNativeFilterProbeLastSummary.context == NativeFilterProbe::ContextState::Unknown,
+            "stable callback summary reports bounded category layers and special rows as unresolved");
+        Check(g_testNativeFilterProbeLastSummary.sequence > 0 &&
+            g_testNativeFilterProbeLastSummary.sessionGeneration == g_worldSessionGeneration.load(),
+            "callback summary retains sample sequence and current session identity");
+
+        g_testNativeFilterProbeSnapshotReader = savedSnapshotReader;
+        g_testNativeFilterProbeGuardOverrideSet = savedGuardOverrideSet;
+        g_testNativeFilterProbeGuardOverride = savedGuardOverride;
+        g_testNativeFilterProbeLastStatus = savedTestStatus;
+        g_testNativeFilterProbeLastSummary = savedTestSummary;
+#else
+        Check(g_testNativeFilterProbeCaptureCount == 0 &&
+            g_testNativeFilterProbeSnapshotReadCount == 0,
+            "default-off callback performs no filter probe capture or metadata reads");
+#endif
+
+        {
+            std::lock_guard<std::mutex> lock(g_worldMapMutex);
+            g_worldMapMarkers = std::move(savedWorld);
+            g_deathMarkers = std::move(savedDeaths);
+            g_worldMapValid = savedValid;
+            g_worldMapTick = savedWorldTick;
+        }
+        g_client10 = savedClient10;
+        g_clientProfile = savedProfile;
+        g_worldMapLayoutSupported = savedWorldLayout;
+        g_deathMarkerLayoutSupported = savedDeathLayout;
+        g_showDeathMarkers = savedDeathVisibility;
+        g_iterInit = savedIterator;
+        g_lastWorldMapCaptureTick = savedLastCaptureTick;
+        return 0;
+    }
+
     void CheckLatestProfileMarkerRouting()
     {
         const bool savedClient10 = g_client10;
@@ -1208,13 +1664,116 @@ namespace
     }
     SHORT sizeKeys[256]{};
     float framePush[8]{};
-    SHORT WINAPI ReadSizeKey(int key) { return sizeKeys[key]; }
+    SHORT WINAPI ReadSizeKey(int key) {
+        if (key <= 0 || key >= 255) {
+            CheckPerfFilter(false, "resize polls only a valid virtual key");
+            return 0;
+        }
+        return sizeKeys[key];
+    }
+    int CheckBraceResizeKeys()
+    {
+        const auto savedPath = g_shroudtopiaConfigPath;
+        g_shroudtopiaConfigPath.clear();
+        RefreshMinimapConfig(nullptr, true);
+        auto release = [] {
+            std::memset(sizeKeys, 0, sizeof(sizeKeys));
+            UpdateMinimapSizeHotkeys(true, ReadSizeKey);
+        };
+        auto key = [&](int vk, bool gameplay = true) {
+            release(); sizeKeys[vk] = SHORT(0x8000);
+            UpdateMinimapSizeHotkeys(gameplay, ReadSizeKey);
+        };
+        key(VK_F9);
+        CheckPerfFilter(g_minimapScalePercent == 100, "default resize leaves F9 free");
+        RefreshMinimapConfig(nullptr, true); key(VK_F11);
+        CheckPerfFilter(g_minimapScalePercent == 100, "default resize leaves F11 free");
+        const HKL layout = GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), nullptr));
+        for (const char brace : {'{', '}'})
+        {
+            const SHORT mapping = VkKeyScanExA(brace, layout);
+            CheckPerfFilter(mapping != -1, "test keyboard layout can produce a literal brace");
+            if (mapping == -1) continue;
+            const int vk = mapping & 0xff, mods = (mapping >> 8) & 7;
+            RefreshMinimapConfig(nullptr, true);
+            release(); sizeKeys[vk] = SHORT(0x8000);
+            UpdateMinimapSizeHotkeys(true, ReadSizeKey);
+            if (mods != 0) CheckPerfFilter(g_minimapScalePercent == 100,
+                "unmodified bracket does not trigger a modified brace binding");
+            release(); g_minimapScalePercent = 100;
+            sizeKeys[vk] = SHORT(0x8000);
+            sizeKeys[VK_SHIFT] = mods & 1 ? SHORT(0x8000) : 0;
+            sizeKeys[VK_CONTROL] = mods & 2 ? SHORT(0x8000) : 0;
+            sizeKeys[VK_MENU] = mods & 4 ? SHORT(0x8000) : 0;
+            UpdateMinimapSizeHotkeys(true, ReadSizeKey);
+            const int expected = brace == '{' ? 75 : 125;
+            CheckPerfFilter(g_minimapScalePercent == expected, "literal brace resizes in the correct direction");
+            UpdateMinimapSizeHotkeys(true, ReadSizeKey);
+            CheckPerfFilter(g_minimapScalePercent == expected, "holding brace chord does not repeat");
+            release(); g_minimapScalePercent = 100;
+            sizeKeys[vk] = SHORT(0x8000);
+            sizeKeys[VK_SHIFT] = mods & 1 ? SHORT(0x8000) : 0;
+            sizeKeys[VK_CONTROL] = mods & 2 ? SHORT(0x8000) : 0;
+            sizeKeys[VK_MENU] = mods & 4 ? SHORT(0x8000) : 0;
+            UpdateMinimapSizeHotkeys(false, ReadSizeKey);
+            UpdateMinimapSizeHotkeys(true, ReadSizeKey);
+            CheckPerfFilter(g_minimapScalePercent == 100, "background brace press is not replayed in gameplay");
+        }
+        // Synthetic keyboard mappings exercise Shift and AltGr independently of
+        // the build machine's layout. The live layout case above tests config wiring.
+        for (const int modifiers : {0, 1, 6}) {
+            const int binding = EncodeMinimapLiteralKey(static_cast<SHORT>((modifiers << 8) | VK_OEM_4));
+            for (int actual = 0; actual < 8; ++actual) {
+                std::memset(sizeKeys, 0, sizeof(sizeKeys));
+                sizeKeys[VK_OEM_4] = SHORT(0x8000);
+                sizeKeys[VK_SHIFT] = actual & 1 ? SHORT(0x8000) : 0;
+                sizeKeys[VK_CONTROL] = actual & 2 ? SHORT(0x8000) : 0;
+                sizeKeys[VK_MENU] = actual & 4 ? SHORT(0x8000) : 0;
+                CheckPerfFilter(IsMinimapSizeKeyDown(binding, ReadSizeKey) == (actual == modifiers),
+                    "literal resize requires exactly its mapped modifiers");
+            }
+        }
+        CheckPerfFilter(EncodeMinimapLiteralKey(-1) == 0 && EncodeMinimapLiteralKey(0) == 0 &&
+            EncodeMinimapLiteralKey(static_cast<SHORT>(0x8db)) == 0,
+            "unmappable or unsupported literal keys stay disabled");
+        const int fallback = EncodeMinimapLiteralKey(VkKeyScanExA('{', layout));
+        CheckPerfFilter(ParseMinimapSizeKey(" { ", 0, layout) == fallback &&
+            ParseMinimapSizeKey("invalid", fallback, layout) == fallback &&
+            ParseMinimapSizeKey("0x78", fallback, layout) == VK_F9,
+            "resize parser trims braces and preserves fallback and legacy hex");
+        ModContext custom{};
+        custom.config.GetString = [](const char*, const char* name, std::string fallback) {
+            if (!std::strcmp(name, "size_decrease_key")) return std::string("F9");
+            if (!std::strcmp(name, "size_increase_key")) return std::string("F11");
+            return fallback;
+        };
+        RefreshMinimapConfig(&custom, true);
+        key(VK_F9);
+        CheckPerfFilter(g_minimapScalePercent == 75, "explicit custom F9 remains supported");
+        key(VK_F11);
+        CheckPerfFilter(g_minimapScalePercent == 100, "explicit custom F11 remains supported");
+        custom.config.GetString = [](const char*, const char* name, std::string fallback) {
+            if (!std::strcmp(name, "size_decrease_key") || !std::strcmp(name, "size_increase_key")) return std::string("none");
+            return fallback;
+        };
+        RefreshMinimapConfig(&custom, true); key(VK_F9); key(VK_F11);
+        CheckPerfFilter(g_minimapScalePercent == 100, "disabled resize bindings remain disabled");
+        release(); g_shroudtopiaConfigPath = savedPath;
+        return g_perfFilterTestFailures == 0 ? 0 : 1;
+    }
+
     void CheckMinimapSizing()
     {
-        RefreshMinimapConfig(nullptr, true);
+        ModContext legacy{};
+        legacy.config.GetString = [](const char*, const char* key, std::string fallback) {
+            if (!std::strcmp(key, "size_decrease_key")) return std::string("F9");
+            if (!std::strcmp(key, "size_increase_key")) return std::string("F11");
+            return fallback;
+        };
+        RefreshMinimapConfig(&legacy, true);
         const int zoom = g_minimapZoomStep.load();
         Check(g_minimapScalePercent == 100 && g_minimapSizeDecreaseKey == VK_F9 && g_minimapSizeIncreaseKey == VK_F11,
-            "default size is 100 percent with independent F9 and F11 shortcuts");
+            "custom F9 and F11 shortcuts preserve default 100 percent size");
         auto press = [](int key, bool gameplay = true) {
             std::memset(sizeKeys, 0, sizeof(sizeKeys)); UpdateMinimapSizeHotkeys(gameplay, ReadSizeKey);
             sizeKeys[key] = SHORT(0x8000); UpdateMinimapSizeHotkeys(gameplay, ReadSizeKey);
@@ -1222,7 +1781,7 @@ namespace
         press(VK_F9); Check(g_minimapScalePercent == 75, "smaller key selects 75 percent");
         UpdateMinimapSizeHotkeys(true, ReadSizeKey);
         Check(g_minimapScalePercent == 75, "holding the resize key does not repeat");
-        RefreshMinimapConfig(nullptr);
+        RefreshMinimapConfig(&legacy);
         Check(g_minimapScalePercent == 75, "unchanged config poll preserves session size");
         press(VK_F9); press(VK_F9);
         Check(g_minimapScalePercent == 50, "smaller key stops at 50 percent");
@@ -2172,6 +2731,18 @@ namespace
 
 int main(int argc, char** argv)
 {
+    if (argc == 2 && std::strcmp(argv[1], "--native-filter-probe-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        return CheckNativeFilterProbeCallbackFocused();
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--brace-keys-focused") == 0)
+    {
+        std::cout << std::unitbuf;
+        const int result = CheckBraceResizeKeys();
+        CheckMinimapSizing();
+        return result;
+    }
     if (argc == 2 && std::strcmp(argv[1], "--marker-retry-focused") == 0)
     {
         std::cout << std::unitbuf;
@@ -2187,10 +2758,10 @@ int main(int argc, char** argv)
         std::cout << std::unitbuf;
         return CheckMinimapConfigRefreshSnapshot(argv[2]);
     }
-    if (argc == 2 && std::strcmp(argv[1], "--marker-fast-path-focused") == 0)
+    if ((argc == 2 || argc == 3) && std::strcmp(argv[1], "--marker-fast-path-focused") == 0)
     {
         std::cout << std::unitbuf;
-        return CheckVisibleMapMarkerFastPath();
+        return CheckVisibleMapMarkerFastPath(argc == 3 ? argv[2] : nullptr);
     }
     if (argc == 2 && std::strcmp(argv[1], "--halo-passivity-allocation-focused") == 0)
     {
@@ -2275,8 +2846,16 @@ int main(int argc, char** argv)
     CheckMinimapSizing();
     CheckMinimapPlacements();
     CheckMinimapOffset();
-    Check(TryLoadMinimapIconsFromPath("assets/embervale_minimap_icons.bin", g_minimapIcons), "load actual icon atlas");
-    g_minimapIcons.attempted = true;
+    const auto generationBeforeAtlasFixture = g_minimapIconAtlasGeneration.load(std::memory_order_acquire);
+    bool actualAtlasLoaded = false;
+    MutateMinimapIconAtlasForTest([&](MinimapIconAtlas& atlas) {
+        atlas = {};
+        actualAtlasLoaded = TryLoadMinimapIconsFromPath("assets/embervale_minimap_icons.bin", atlas);
+        if (actualAtlasLoaded) atlas.attempted = true;
+    });
+    Check(actualAtlasLoaded, "load actual icon atlas");
+    Check(g_minimapIconAtlasGeneration.load(std::memory_order_acquire) > generationBeforeAtlasFixture,
+        "successful atlas fixture publishes a new monotonic generation after loading");
     const auto nativeIcon = std::find_if(g_minimapIcons.icons.begin(), g_minimapIcons.icons.end(), [](const auto& icon) { return icon.key > 0xFFFFu; });
     Check(nativeIcon != g_minimapIcons.icons.end(), "atlas contains native world-map keys");
     const auto iconKey = nativeIcon->key;

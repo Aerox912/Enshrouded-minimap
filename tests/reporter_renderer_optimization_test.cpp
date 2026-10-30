@@ -1,9 +1,11 @@
+#define MINIMAP_TEST_ICON_ATLAS_MUTATION 1
 #pragma warning(push)
 #pragma warning(disable: 4715)
 #define main FrameFailureSetupMain
 #include "frame_failure_test.cpp"
 #undef main
 #pragma warning(pop)
+#undef MINIMAP_TEST_ICON_ATLAS_MUTATION
 
 #include <cstdlib>
 #include <fstream>
@@ -399,15 +401,16 @@ namespace
 
     void SetFixtureIcons()
     {
-        std::lock_guard<std::mutex> lock(g_minimapIconMutex);
-        g_minimapIcons = {};
-        g_minimapIcons.attempted = true;
-        g_minimapIcons.loaded = true;
-        g_minimapIcons.path = "reporter-renderer-offline-fixture";
-        g_minimapIcons.icons.push_back(MakeIcon(0xF001u, 8, 64, 0));
-        g_minimapIcons.icons.push_back(MakeIcon(0xF002u, 64, 8, 1));
-        g_minimapIcons.icons.push_back(MakeIcon(0xF003u, 63, 31, 2));
-        g_minimapIcons.icons.push_back(MakeIcon(0xF004u, 17, 16, 3));
+        MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) {
+            atlas = {};
+            atlas.attempted = true;
+            atlas.loaded = true;
+            atlas.path = "reporter-renderer-offline-fixture";
+            atlas.icons.push_back(MakeIcon(0xF001u, 8, 64, 0));
+            atlas.icons.push_back(MakeIcon(0xF002u, 64, 8, 1));
+            atlas.icons.push_back(MakeIcon(0xF003u, 63, 31, 2));
+            atlas.icons.push_back(MakeIcon(0xF004u, 17, 16, 3));
+        });
     }
 
     void CheckUploadedAtlasBytes()
@@ -677,10 +680,7 @@ namespace
         g_worldMapIconStyle.store(false);
         DestroyVulkanMinimapRendererLocked();
         ReporterCheck(live.empty() && bindings.empty(), "per-generation icon-atlas resources teardown after device idle");
-        {
-            std::lock_guard<std::mutex> lock(g_minimapIconMutex);
-            g_minimapIcons = {};
-        }
+        MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) { atlas = {}; });
     }
 
     void CheckSpriteNegativeCellMapping(const std::string& fixtureRoot)
@@ -713,11 +713,10 @@ namespace
         }
         const std::size_t boundaryTexel = (9u * icon.width + 13u) * 4u;
         icon.rgba[boundaryTexel + 3] = 25;
-        {
-            std::lock_guard<std::mutex> lock(g_minimapIconMutex);
-            g_minimapIcons.icons.clear();
-            g_minimapIcons.icons.push_back(icon);
-        }
+        MutateMinimapIconAtlasForTest([&](MinimapIconAtlas& atlas) {
+            atlas.icons.clear();
+            atlas.icons.push_back(icon);
+        });
 
         g_testContext.shroudtopia.mod_folder = fixtureRoot;
         g_modContext = &g_testContext;
@@ -848,10 +847,7 @@ namespace
             "unavailable icon-atlas resources are not recreated on every raster icon");
 
         DestroyVulkanMinimapRendererLocked();
-        {
-            std::lock_guard<std::mutex> lock(g_minimapIconMutex);
-            g_minimapIcons = {};
-        }
+        MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) { atlas = {}; });
     }
     void LegacyWeatherLabel(VulkanMinimapRenderer& renderer, void* commandBuffer, int x, int cy, WeatherKind kind)
     {

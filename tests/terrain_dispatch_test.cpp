@@ -1,6 +1,8 @@
+#define MINIMAP_TEST_ICON_ATLAS_MUTATION 1
 #define main FrameResourceChecks
 #include "frame_failure_test.cpp"
 #undef main
+#undef MINIMAP_TEST_ICON_ATLAS_MUTATION
 
 int terrainGpuDraws = 0;
 int terrainUploadCopies = 0;
@@ -138,11 +140,10 @@ static void RunFogFrameSnapshotChecks()
         marker.lastUpdateTick = now;
         g_visibleMapMarkers.push_back(marker);
     }
-    {
-        std::lock_guard<std::mutex> lock(g_minimapIconMutex);
-        g_minimapIcons.attempted = true;
-        g_minimapIcons.loaded = false;
-    }
+    MutateMinimapIconAtlasForTest([](MinimapIconAtlas& atlas) {
+        atlas = {};
+        atlas.attempted = true;
+    });
 
     terrainVisibleMapIconClears = 0;
     const auto fixtureMarkers = CopyVisibleMapMarkers();

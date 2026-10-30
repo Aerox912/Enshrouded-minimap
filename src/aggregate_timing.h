@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef ESM_AGGREGATE_TIMING_DIAGNOSTICS
+#define ESM_AGGREGATE_TIMING_DIAGNOSTICS 0
+#endif
+
 #include <array>
 #include <atomic>
 #include <cstddef>
